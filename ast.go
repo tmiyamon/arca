@@ -11,7 +11,12 @@ type NamedType struct {
 	Params []Type
 }
 
-func (NamedType) typeNode() {}
+type TupleType struct {
+	Elements []Type
+}
+
+func (NamedType) typeNode()  {}
+func (TupleType) typeNode() {}
 
 // --- Expressions ---
 
@@ -24,6 +29,10 @@ type FloatLit struct{ Value float64 }
 type StringLit struct{ Value string }
 type BoolLit struct{ Value bool }
 type Ident struct{ Name string }
+
+type StringInterp struct {
+	Parts []Expr // alternating StringLit and expressions
+}
 
 type FnCall struct {
 	Fn   Expr
@@ -60,9 +69,34 @@ type FieldValue struct {
 	Value Expr
 }
 
+type Lambda struct {
+	Params []LambdaParam
+	Body   Expr
+}
+
+type LambdaParam struct {
+	Name string
+}
+
+type TupleExpr struct {
+	Elements []Expr
+}
+
+type ForExpr struct {
+	Binding string
+	Iter    Expr
+	Body    Expr
+}
+
+type RangeExpr struct {
+	Start Expr
+	End   Expr
+}
+
 func (IntLit) exprNode()          {}
 func (FloatLit) exprNode()        {}
 func (StringLit) exprNode()       {}
+func (StringInterp) exprNode()    {}
 func (BoolLit) exprNode()         {}
 func (Ident) exprNode()           {}
 func (FnCall) exprNode()          {}
@@ -70,6 +104,10 @@ func (FieldAccess) exprNode()     {}
 func (MatchExpr) exprNode()       {}
 func (Block) exprNode()           {}
 func (ConstructorCall) exprNode() {}
+func (Lambda) exprNode()          {}
+func (TupleExpr) exprNode()       {}
+func (ForExpr) exprNode()         {}
+func (RangeExpr) exprNode()       {}
 
 // --- Patterns ---
 
@@ -108,12 +146,21 @@ type LetStmt struct {
 	Value Expr
 }
 
-func (LetStmt) stmtNode() {}
+type ExprStmt struct {
+	Expr Expr
+}
+
+func (LetStmt) stmtNode()  {}
+func (ExprStmt) stmtNode() {}
 
 // --- Top-level declarations ---
 
 type Decl interface {
 	declNode()
+}
+
+type ImportDecl struct {
+	Path string // e.g. "go/fmt", "user"
 }
 
 type TypeDecl struct {
@@ -134,8 +181,9 @@ type Field struct {
 
 type FnDecl struct {
 	Name       string
+	Public     bool
 	Params     []FnParam
-	ReturnType Type
+	ReturnType Type // nil = no return type (void)
 	Body       Expr
 }
 
@@ -144,8 +192,9 @@ type FnParam struct {
 	Type Type
 }
 
-func (TypeDecl) declNode() {}
-func (FnDecl) declNode()   {}
+func (ImportDecl) declNode() {}
+func (TypeDecl) declNode()   {}
+func (FnDecl) declNode()     {}
 
 // --- Program ---
 

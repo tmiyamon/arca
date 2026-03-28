@@ -6,16 +6,19 @@ import (
 )
 
 type CodeGen struct {
-	buf   strings.Builder
-	types map[string]TypeDecl // type name -> decl
+	buf     strings.Builder
+	types   map[string]TypeDecl
+	imports []string
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
 	cg := &CodeGen{types: make(map[string]TypeDecl)}
-	// Collect type declarations
 	for _, decl := range prog.Decls {
-		if td, ok := decl.(TypeDecl); ok {
-			cg.types[td.Name] = td
+		switch d := decl.(type) {
+		case TypeDecl:
+			cg.types[d.Name] = d
+		case ImportDecl:
+			cg.imports = append(cg.imports, d.Path)
 		}
 	}
 	return cg
@@ -25,14 +28,30 @@ func (cg *CodeGen) Generate(prog *Program) string {
 	cg.writeln("package main")
 	cg.writeln("")
 
+	// Generate imports
+	if len(cg.imports) > 0 {
+		cg.writeln("import (")
+		for _, imp := range cg.imports {
+			// Strip "go/" prefix for Go standard library
+			goImp := imp
+			if strings.HasPrefix(goImp, "go/") {
+				goImp = goImp[3:]
+			}
+			cg.writeln(fmt.Sprintf("\t%q", goImp))
+		}
+		cg.writeln(")")
+		cg.writeln("")
+	}
+
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
 			cg.genTypeDecl(d)
+			cg.writeln("")
 		case FnDecl:
 			cg.genFnDecl(d)
+			cg.writeln("")
 		}
-		cg.writeln("")
 	}
 	return cg.buf.String()
 }
@@ -79,14 +98,12 @@ func (cg *CodeGen) genEnumType(td TypeDecl) {
 		}
 	}
 	cg.writeln(")")
-
-	// String method
 	cg.writeln("")
 	cg.writeln(fmt.Sprintf("func (v %s) String() string {", td.Name))
 	cg.writeln("\tswitch v {")
 	for _, c := range td.Constructors {
 		cg.writeln(fmt.Sprintf("\tcase %s%s:", td.Name, c.Name))
-		cg.writeln(fmt.Sprintf("\t\treturn \"%s\"", c.Name))
+		cg.writeln(fmt.Sprintf("\t\treturn %q", c.Name))
 	}
 	cg.writeln("\tdefault:")
 	cg.writeln(fmt.Sprintf("\t\treturn \"Unknown%s\"", td.Name))
@@ -104,14 +121,10 @@ func (cg *CodeGen) genStructType(td TypeDecl) {
 }
 
 func (cg *CodeGen) genSumType(td TypeDecl) {
-	// Interface
-	ifaceName := td.Name
-	cg.writeln(fmt.Sprintf("type %s interface {", ifaceName))
-	cg.writeln(fmt.Sprintf("\tis%s()", ifaceName))
+	cg.writeln(fmt.Sprintf("type %s interface {", td.Name))
+	cg.writeln(fmt.Sprintf("\tis%s()", td.Name))
 	cg.writeln("}")
 	cg.writeln("")
-
-	// Variants
 	for _, c := range td.Constructors {
 		variantName := td.Name + c.Name
 		if len(c.Fields) == 0 {
@@ -123,51 +136,71 @@ func (cg *CodeGen) genSumType(td TypeDecl) {
 			}
 			cg.writeln("}")
 		}
-		cg.writeln(fmt.Sprintf("func (%s) is%s() {}", variantName, ifaceName))
+		cg.writeln(fmt.Sprintf("func (%s) is%s() {}", variantName, td.Name))
 		cg.writeln("")
 	}
 }
 
 func (cg *CodeGen) goType(t Type) string {
-	nt, ok := t.(NamedType)
-	if !ok {
-		return "interface{}"
-	}
-	switch nt.Name {
-	case "Int":
-		return "int64"
-	case "Float":
-		return "float64"
-	case "String":
-		return "string"
-	case "Bool":
-		return "bool"
-	case "List":
-		if len(nt.Params) > 0 {
-			return "[]" + cg.goType(nt.Params[0])
+	switch tt := t.(type) {
+	case NamedType:
+		switch tt.Name {
+		case "Int":
+			return "int64"
+		case "Float":
+			return "float64"
+		case "String":
+			return "string"
+		case "Bool":
+			return "bool"
+		case "List":
+			if len(tt.Params) > 0 {
+				return "[]" + cg.goType(tt.Params[0])
+			}
+			return "[]interface{}"
+		case "Option":
+			if len(tt.Params) > 0 {
+				return "*" + cg.goType(tt.Params[0])
+			}
+			return "interface{}"
+		default:
+			return tt.Name
 		}
-		return "[]interface{}"
-	case "Option":
-		if len(nt.Params) > 0 {
-			return "*" + cg.goType(nt.Params[0])
+	case TupleType:
+		// Generate a tuple struct or use a generic approach
+		// For now, use a simple struct
+		if len(tt.Elements) == 2 {
+			return fmt.Sprintf("struct{ First %s; Second %s }", cg.goType(tt.Elements[0]), cg.goType(tt.Elements[1]))
 		}
 		return "interface{}"
 	default:
-		return nt.Name
+		return "interface{}"
 	}
 }
 
 // --- Function Generation ---
 
 func (cg *CodeGen) genFnDecl(fd FnDecl) {
+	name := fd.Name
+	if fd.Public {
+		name = snakeToPascal(name)
+	}
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
 		params[i] = fmt.Sprintf("%s %s", p.Name, cg.goType(p.Type))
 	}
-	retType := cg.goType(fd.ReturnType)
 
-	cg.writeln(fmt.Sprintf("func %s(%s) %s {", fd.Name, strings.Join(params, ", "), retType))
-	cg.genReturnExpr(fd.Body, "\t")
+	retType := ""
+	if fd.ReturnType != nil {
+		retType = " " + cg.goType(fd.ReturnType)
+	}
+
+	cg.writeln(fmt.Sprintf("func %s(%s)%s {", name, strings.Join(params, ", "), retType))
+	if fd.ReturnType != nil {
+		cg.genReturnExpr(fd.Body, "\t")
+	} else {
+		cg.genVoidBody(fd.Body, "\t")
+	}
 	cg.writeln("}")
 }
 
@@ -187,10 +220,31 @@ func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
 	}
 }
 
+func (cg *CodeGen) genVoidBody(expr Expr, indent string) {
+	switch e := expr.(type) {
+	case Block:
+		for _, stmt := range e.Stmts {
+			cg.genStmt(stmt, indent)
+		}
+		if e.Expr != nil {
+			cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(e.Expr)))
+		}
+	default:
+		cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(expr)))
+	}
+}
+
 func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 	switch s := stmt.(type) {
 	case LetStmt:
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, s.Name, cg.genExprStr(s.Value)))
+	case ExprStmt:
+		switch e := s.Expr.(type) {
+		case ForExpr:
+			cg.genForExpr(e, indent)
+		default:
+			cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(s.Expr)))
+		}
 	}
 }
 
@@ -199,16 +253,17 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 	case IntLit:
 		return fmt.Sprintf("%d", e.Value)
 	case FloatLit:
-		return fmt.Sprintf("%f", e.Value)
+		return fmt.Sprintf("%g", e.Value)
 	case StringLit:
 		return fmt.Sprintf("%q", e.Value)
+	case StringInterp:
+		return cg.genStringInterp(e)
 	case BoolLit:
 		if e.Value {
 			return "true"
 		}
 		return "false"
 	case Ident:
-		// Check if this is an enum constructor
 		if typeName := cg.findTypeName(e.Name); typeName != "" {
 			if td, ok := cg.types[typeName]; ok && isEnum(td) {
 				return fmt.Sprintf("%s%s", typeName, e.Name)
@@ -225,33 +280,84 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		return fmt.Sprintf("%s.%s", cg.genExprStr(e.Expr), capitalize(e.Field))
 	case ConstructorCall:
 		return cg.genConstructorCall(e)
+	case Lambda:
+		return cg.genLambda(e)
+	case TupleExpr:
+		return cg.genTuple(e)
+	case RangeExpr:
+		return cg.genRange(e)
 	default:
 		return "/* unsupported expr */"
 	}
 }
 
+func (cg *CodeGen) genStringInterp(si StringInterp) string {
+	var fmtParts []string
+	var args []string
+	for _, part := range si.Parts {
+		if lit, ok := part.(StringLit); ok {
+			fmtParts = append(fmtParts, lit.Value)
+		} else {
+			fmtParts = append(fmtParts, "%v")
+			args = append(args, cg.genExprStr(part))
+		}
+	}
+	fmtStr := strings.Join(fmtParts, "")
+	if len(args) == 0 {
+		return fmt.Sprintf("%q", fmtStr)
+	}
+	return fmt.Sprintf("fmt.Sprintf(%q, %s)", fmtStr, strings.Join(args, ", "))
+}
+
+func (cg *CodeGen) genLambda(l Lambda) string {
+	params := make([]string, len(l.Params))
+	for i, p := range l.Params {
+		// Without type info, use interface{} — type checker will improve this
+		params[i] = p.Name
+	}
+	return fmt.Sprintf("func(%s) { return %s }", strings.Join(params, ", "), cg.genExprStr(l.Body))
+}
+
+func (cg *CodeGen) genTuple(t TupleExpr) string {
+	if len(t.Elements) == 2 {
+		return fmt.Sprintf("struct{ First interface{}; Second interface{} }{%s, %s}",
+			cg.genExprStr(t.Elements[0]), cg.genExprStr(t.Elements[1]))
+	}
+	elems := make([]string, len(t.Elements))
+	for i, e := range t.Elements {
+		elems[i] = cg.genExprStr(e)
+	}
+	return fmt.Sprintf("/* tuple(%s) */", strings.Join(elems, ", "))
+}
+
+func (cg *CodeGen) genRange(r RangeExpr) string {
+	return fmt.Sprintf("__range(%s, %s)", cg.genExprStr(r.Start), cg.genExprStr(r.End))
+}
+
+func (cg *CodeGen) genForExpr(fe ForExpr, indent string) {
+	switch iter := fe.Iter.(type) {
+	case RangeExpr:
+		cg.writeln(fmt.Sprintf("%sfor %s := %s; %s < %s; %s++ {",
+			indent, fe.Binding, cg.genExprStr(iter.Start),
+			fe.Binding, cg.genExprStr(iter.End), fe.Binding))
+	default:
+		cg.writeln(fmt.Sprintf("%sfor _, %s := range %s {", indent, fe.Binding, cg.genExprStr(fe.Iter)))
+	}
+	cg.genVoidBody(fe.Body, indent+"\t")
+	cg.writeln(fmt.Sprintf("%s}", indent))
+}
+
 func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
-	// Check if this is a constructor for a known type
 	for typeName, td := range cg.types {
 		for _, ctor := range td.Constructors {
 			if ctor.Name == cc.Name {
 				if isEnum(td) {
 					return fmt.Sprintf("%s%s", typeName, cc.Name)
 				}
-				if len(td.Constructors) == 1 {
-					// Single constructor struct
-					fields := make([]string, len(cc.Fields))
-					for i, f := range cc.Fields {
-						if f.Name != "" {
-							fields[i] = fmt.Sprintf("%s: %s", capitalize(f.Name), cg.genExprStr(f.Value))
-						} else {
-							fields[i] = cg.genExprStr(f.Value)
-						}
-					}
-					return fmt.Sprintf("%s{%s}", typeName, strings.Join(fields, ", "))
+				goName := typeName
+				if len(td.Constructors) > 1 {
+					goName = typeName + cc.Name
 				}
-				// Sum type variant
-				variantName := typeName + cc.Name
 				fields := make([]string, len(cc.Fields))
 				for i, f := range cc.Fields {
 					if f.Name != "" {
@@ -260,7 +366,7 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 						fields[i] = cg.genExprStr(f.Value)
 					}
 				}
-				return fmt.Sprintf("%s{%s}", variantName, strings.Join(fields, ", "))
+				return fmt.Sprintf("%s{%s}", goName, strings.Join(fields, ", "))
 			}
 		}
 	}
@@ -272,7 +378,6 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	subject := cg.genExprStr(me.Subject)
 
-	// Check if matching against an enum
 	if cg.isEnumMatch(me) {
 		cg.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
 		for _, arm := range me.Arms {
@@ -297,7 +402,6 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 		return
 	}
 
-	// Sum type match -> type switch
 	cg.writeln(fmt.Sprintf("%sswitch v := %s.(type) {", indent, subject))
 	for _, arm := range me.Arms {
 		switch pat := arm.Pattern.(type) {
@@ -305,7 +409,6 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 			typeName := cg.findTypeName(pat.Name)
 			variantName := typeName + pat.Name
 			cg.writeln(fmt.Sprintf("%scase %s:", indent, variantName))
-			// Bind fields
 			usedVars := collectUsedIdents(arm.Body)
 			for _, fp := range pat.Fields {
 				if _, used := usedVars[fp.Binding]; used {
@@ -329,7 +432,6 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 		}
 	}
 	cg.writeln(fmt.Sprintf("%s}", indent))
-	// unreachable return for compiler
 	if isReturn {
 		cg.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
 	}
@@ -367,6 +469,14 @@ func capitalize(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+func snakeToPascal(s string) string {
+	parts := strings.Split(s, "_")
+	for i, p := range parts {
+		parts[i] = capitalize(p)
+	}
+	return strings.Join(parts, "")
+}
+
 func collectUsedIdents(expr Expr) map[string]bool {
 	used := make(map[string]bool)
 	collectIdents(expr, used)
@@ -402,5 +512,11 @@ func collectIdents(expr Expr, used map[string]bool) {
 		for _, f := range e.Fields {
 			collectIdents(f.Value, used)
 		}
+	case StringInterp:
+		for _, p := range e.Parts {
+			collectIdents(p, used)
+		}
+	case Lambda:
+		collectIdents(e.Body, used)
 	}
 }

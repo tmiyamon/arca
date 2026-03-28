@@ -49,13 +49,48 @@ func (p *Parser) ParseProgram() (*Program, error) {
 
 func (p *Parser) parseDecl() (Decl, error) {
 	switch p.peek().Kind {
+	case TkImport:
+		return p.parseImportDecl()
 	case TkType:
 		return p.parseTypeDecl()
 	case TkFn:
-		return p.parseFnDecl()
+		return p.parseFnDecl(false)
+	case TkPub:
+		p.advance()
+		if p.peek().Kind == TkFn {
+			return p.parseFnDecl(true)
+		}
+		return nil, fmt.Errorf("%d:%d: expected fn after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
 	default:
-		return nil, fmt.Errorf("%d:%d: expected type or fn, got %s", p.peek().Line, p.peek().Col, p.peek())
+		return nil, fmt.Errorf("%d:%d: expected import, type, pub, or fn, got %s", p.peek().Line, p.peek().Col, p.peek())
 	}
+}
+
+func (p *Parser) parseImportDecl() (Decl, error) {
+	p.advance() // skip 'import'
+	var parts []string
+	tok := p.advance()
+	if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
+		return nil, fmt.Errorf("%d:%d: expected module path, got %s", tok.Line, tok.Col, tok)
+	}
+	parts = append(parts, tok.Lit)
+	for p.peek().Kind == TkDot {
+		p.advance()
+		tok = p.advance()
+		if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
+			return nil, fmt.Errorf("%d:%d: expected identifier in import path, got %s", tok.Line, tok.Col, tok)
+		}
+		parts = append(parts, tok.Lit)
+	}
+	path := parts[0]
+	for _, part := range parts[1:] {
+		if parts[0] == "go" {
+			path += "/" + part
+		} else {
+			path += "." + part
+		}
+	}
+	return ImportDecl{Path: path}, nil
 }
 
 func (p *Parser) parseTypeDecl() (Decl, error) {
@@ -67,7 +102,6 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
-
 	var constructors []Constructor
 	for p.peek().Kind != TkRBrace {
 		ctor, err := p.parseConstructor()
@@ -87,7 +121,7 @@ func (p *Parser) parseConstructor() (Constructor, error) {
 	}
 	var fields []Field
 	if p.peek().Kind == TkLParen {
-		p.advance() // skip '('
+		p.advance()
 		for p.peek().Kind != TkRParen {
 			field, err := p.parseField()
 			if err != nil {
@@ -98,7 +132,7 @@ func (p *Parser) parseConstructor() (Constructor, error) {
 				p.advance()
 			}
 		}
-		p.advance() // skip ')'
+		p.advance()
 	}
 	return Constructor{Name: name.Lit, Fields: fields}, nil
 }
@@ -119,15 +153,17 @@ func (p *Parser) parseField() (Field, error) {
 }
 
 func (p *Parser) parseType() (Type, error) {
+	if p.peek().Kind == TkLParen {
+		return p.parseTupleType()
+	}
 	tok := p.advance()
 	switch tok.Kind {
 	case TkUpperIdent:
 		name := tok.Lit
-		// Check for type parameters: Option(String)
-		if p.peek().Kind == TkLParen {
-			p.advance() // skip '('
+		if p.peek().Kind == TkLBracket {
+			p.advance() // skip '['
 			var params []Type
-			for p.peek().Kind != TkRParen {
+			for p.peek().Kind != TkRBracket {
 				param, err := p.parseType()
 				if err != nil {
 					return nil, err
@@ -137,7 +173,7 @@ func (p *Parser) parseType() (Type, error) {
 					p.advance()
 				}
 			}
-			p.advance() // skip ')'
+			p.advance() // skip ']'
 			return NamedType{Name: name, Params: params}, nil
 		}
 		return NamedType{Name: name}, nil
@@ -148,7 +184,24 @@ func (p *Parser) parseType() (Type, error) {
 	}
 }
 
-func (p *Parser) parseFnDecl() (Decl, error) {
+func (p *Parser) parseTupleType() (Type, error) {
+	p.advance() // skip '('
+	var elements []Type
+	for p.peek().Kind != TkRParen {
+		t, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, t)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ')'
+	return TupleType{Elements: elements}, nil
+}
+
+func (p *Parser) parseFnDecl(public bool) (Decl, error) {
 	p.advance() // skip 'fn'
 	name, err := p.expect(TkIdent)
 	if err != nil {
@@ -157,7 +210,6 @@ func (p *Parser) parseFnDecl() (Decl, error) {
 	if _, err := p.expect(TkLParen); err != nil {
 		return nil, err
 	}
-
 	var params []FnParam
 	for p.peek().Kind != TkRParen {
 		param, err := p.parseFnParam()
@@ -171,20 +223,20 @@ func (p *Parser) parseFnDecl() (Decl, error) {
 	}
 	p.advance() // skip ')'
 
-	if _, err := p.expect(TkArrow); err != nil {
-		return nil, err
-	}
-	retType, err := p.parseType()
-	if err != nil {
-		return nil, err
+	var retType Type
+	if p.peek().Kind == TkArrow {
+		p.advance()
+		retType, err = p.parseType()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	body, err := p.parseBlockExpr()
 	if err != nil {
 		return nil, err
 	}
-
-	return FnDecl{Name: name.Lit, Params: params, ReturnType: retType, Body: body}, nil
+	return FnDecl{Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
 }
 
 func (p *Parser) parseFnParam() (FnParam, error) {
@@ -206,7 +258,6 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
-
 	var stmts []Stmt
 	var lastExpr Expr
 
@@ -217,12 +268,22 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 				return nil, err
 			}
 			stmts = append(stmts, stmt)
+		} else if p.peek().Kind == TkFor {
+			expr, err := p.parseForExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, ExprStmt{Expr: expr})
 		} else {
 			expr, err := p.parseExpr()
 			if err != nil {
 				return nil, err
 			}
-			lastExpr = expr
+			if p.peek().Kind != TkRBrace {
+				stmts = append(stmts, ExprStmt{Expr: expr})
+			} else {
+				lastExpr = expr
+			}
 		}
 	}
 	p.advance() // skip '}'
@@ -249,20 +310,61 @@ func (p *Parser) parseLetStmt() (Stmt, error) {
 	return LetStmt{Name: name.Lit, Value: value}, nil
 }
 
+func (p *Parser) parseForExpr() (Expr, error) {
+	p.advance() // skip 'for'
+	binding, err := p.expect(TkIdent)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(TkIn); err != nil {
+		return nil, err
+	}
+	iter, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.parseBlockExpr()
+	if err != nil {
+		return nil, err
+	}
+	return ForExpr{Binding: binding.Lit, Iter: iter, Body: body}, nil
+}
+
 func (p *Parser) parseExpr() (Expr, error) {
 	expr, err := p.parsePrimaryExpr()
 	if err != nil {
 		return nil, err
 	}
 
-	// Handle pipe operator: expr |> fn
+	// ? operator
+	if p.peek().Kind == TkQuestion {
+		p.advance()
+		expr = FnCall{Fn: Ident{Name: "__try"}, Args: []Expr{expr}}
+	}
+
+	// Pipe operator
 	for p.peek().Kind == TkPipe {
-		p.advance() // skip |>
+		p.advance()
 		right, err := p.parsePrimaryExpr()
 		if err != nil {
 			return nil, err
 		}
-		expr = FnCall{Fn: right, Args: []Expr{expr}}
+		if call, ok := right.(FnCall); ok {
+			call.Args = append([]Expr{expr}, call.Args...)
+			expr = call
+		} else {
+			expr = FnCall{Fn: right, Args: []Expr{expr}}
+		}
+	}
+
+	// Range operator
+	if p.peek().Kind == TkDotDot {
+		p.advance()
+		end, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		expr = RangeExpr{Start: expr, End: end}
 	}
 
 	return expr, nil
@@ -286,6 +388,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		p.advance()
 		return StringLit{Value: tok.Lit}, nil
 
+	case TkStringInterpStart:
+		return p.parseStringInterp()
+
 	case TkTrue:
 		p.advance()
 		return BoolLit{Value: true}, nil
@@ -300,34 +405,38 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TkUpperIdent:
 		return p.parseConstructorOrIdent()
 
+	case TkLParen:
+		return p.parseTupleOrLambda()
+
 	case TkIdent:
 		p.advance()
 		expr := Expr(Ident{Name: tok.Lit})
-		// Handle function call: foo(args)
-		if p.peek().Kind == TkLParen {
-			p.advance() // skip '('
-			var args []Expr
-			for p.peek().Kind != TkRParen {
-				arg, err := p.parseExpr()
-				if err != nil {
-					return nil, err
+		for {
+			if p.peek().Kind == TkLParen {
+				p.advance()
+				var args []Expr
+				for p.peek().Kind != TkRParen {
+					arg, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, arg)
+					if p.peek().Kind == TkComma {
+						p.advance()
+					}
 				}
-				args = append(args, arg)
-				if p.peek().Kind == TkComma {
-					p.advance()
+				p.advance()
+				expr = FnCall{Fn: expr, Args: args}
+			} else if p.peek().Kind == TkDot {
+				p.advance()
+				field := p.advance()
+				if field.Kind != TkIdent && field.Kind != TkUpperIdent {
+					return nil, fmt.Errorf("%d:%d: expected field name, got %s", field.Line, field.Col, field)
 				}
+				expr = FieldAccess{Expr: expr, Field: field.Lit}
+			} else {
+				break
 			}
-			p.advance() // skip ')'
-			expr = FnCall{Fn: Ident{Name: tok.Lit}, Args: args}
-		}
-		// Handle field access: expr.field
-		for p.peek().Kind == TkDot {
-			p.advance()
-			field, err := p.expect(TkIdent)
-			if err != nil {
-				return nil, err
-			}
-			expr = FieldAccess{Expr: expr, Field: field.Lit}
 		}
 		return expr, nil
 
@@ -339,14 +448,124 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	}
 }
 
+func (p *Parser) parseStringInterp() (Expr, error) {
+	p.advance() // skip InterpStart
+	var parts []Expr
+	for p.peek().Kind != TkStringInterpEnd {
+		if p.peek().Kind == TkString {
+			tok := p.advance()
+			parts = append(parts, StringLit{Value: tok.Lit})
+		} else {
+			expr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, expr)
+		}
+	}
+	p.advance() // skip InterpEnd
+	return StringInterp{Parts: parts}, nil
+}
+
+func (p *Parser) parseTupleOrLambda() (Expr, error) {
+	saved := p.pos
+	p.advance() // skip '('
+
+	// () => ...
+	if p.peek().Kind == TkRParen {
+		p.advance()
+		if p.peek().Kind == TkFatArrow {
+			p.advance()
+			body, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			return Lambda{Params: nil, Body: body}, nil
+		}
+		return TupleExpr{Elements: nil}, nil
+	}
+
+	// Try lambda: (ident, ident, ...) =>
+	if p.peek().Kind == TkIdent {
+		var names []string
+		names = append(names, p.advance().Lit)
+		isLambda := true
+		for p.peek().Kind == TkComma {
+			p.advance()
+			if p.peek().Kind == TkIdent {
+				names = append(names, p.advance().Lit)
+			} else {
+				isLambda = false
+				break
+			}
+		}
+		if isLambda && p.peek().Kind == TkRParen {
+			p.advance()
+			if p.peek().Kind == TkFatArrow {
+				p.advance()
+				body, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				var params []LambdaParam
+				for _, n := range names {
+					params = append(params, LambdaParam{Name: n})
+				}
+				return Lambda{Params: params, Body: body}, nil
+			}
+		}
+		p.pos = saved
+	}
+
+	// Parse as tuple
+	p.pos = saved
+	p.advance() // skip '('
+	var elements []Expr
+	for p.peek().Kind != TkRParen {
+		elem, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, elem)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance()
+	return TupleExpr{Elements: elements}, nil
+}
+
 func (p *Parser) parseConstructorOrIdent() (Expr, error) {
-	name := p.advance() // UpperIdent
+	name := p.advance()
+
+	if p.peek().Kind == TkDot {
+		p.advance()
+		member := p.advance()
+		qualifiedName := name.Lit + "." + member.Lit
+		expr := Expr(Ident{Name: qualifiedName})
+		if p.peek().Kind == TkLParen {
+			p.advance()
+			var args []Expr
+			for p.peek().Kind != TkRParen {
+				arg, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+				if p.peek().Kind == TkComma {
+					p.advance()
+				}
+			}
+			p.advance()
+			return FnCall{Fn: expr, Args: args}, nil
+		}
+		return expr, nil
+	}
 
 	if p.peek().Kind == TkLParen {
-		p.advance() // skip '('
+		p.advance()
 		var fields []FieldValue
 		for p.peek().Kind != TkRParen {
-			// Check if it's name: value or positional
 			if p.peek().Kind == TkIdent && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkColon {
 				fieldName := p.advance()
 				p.advance() // skip ':'
@@ -366,7 +585,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 				p.advance()
 			}
 		}
-		p.advance() // skip ')'
+		p.advance()
 		return ConstructorCall{Name: name.Lit, Fields: fields}, nil
 	}
 
@@ -382,7 +601,6 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
-
 	var arms []MatchArm
 	for p.peek().Kind != TkRBrace {
 		arm, err := p.parseMatchArm()
@@ -391,7 +609,7 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 		}
 		arms = append(arms, arm)
 	}
-	p.advance() // skip '}'
+	p.advance()
 	return MatchExpr{Subject: subject, Arms: arms}, nil
 }
 
@@ -412,16 +630,14 @@ func (p *Parser) parseMatchArm() (MatchArm, error) {
 
 func (p *Parser) parsePattern() (Pattern, error) {
 	tok := p.peek()
-
 	switch tok.Kind {
 	case TkUnderscore:
 		p.advance()
 		return WildcardPattern{}, nil
-
 	case TkUpperIdent:
 		p.advance()
 		if p.peek().Kind == TkLParen {
-			p.advance() // skip '('
+			p.advance()
 			var fields []FieldPattern
 			for p.peek().Kind != TkRParen {
 				field, err := p.parseFieldPattern()
@@ -433,24 +649,20 @@ func (p *Parser) parsePattern() (Pattern, error) {
 					p.advance()
 				}
 			}
-			p.advance() // skip ')'
+			p.advance()
 			return ConstructorPattern{Name: tok.Lit, Fields: fields}, nil
 		}
 		return ConstructorPattern{Name: tok.Lit}, nil
-
 	case TkIdent:
 		p.advance()
 		return BindPattern{Name: tok.Lit}, nil
-
 	case TkString:
 		p.advance()
 		return LitPattern{Expr: StringLit{Value: tok.Lit}}, nil
-
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
 		return LitPattern{Expr: IntLit{Value: val}}, nil
-
 	default:
 		return nil, fmt.Errorf("%d:%d: expected pattern, got %s", tok.Line, tok.Col, tok)
 	}
@@ -461,6 +673,5 @@ func (p *Parser) parseFieldPattern() (FieldPattern, error) {
 	if err != nil {
 		return FieldPattern{}, err
 	}
-	// For now, field name is also the binding
 	return FieldPattern{Name: name.Lit, Binding: name.Lit}, nil
 }

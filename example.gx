@@ -1,3 +1,5 @@
+import go.fmt
+
 type OrderStatus {
   Pending
   Confirmed
@@ -14,7 +16,7 @@ type ApiResponse {
   ErrorResponse(message: String, code: Int)
 }
 
-fn status_label(status: OrderStatus) -> String {
+pub fn status_label(status: OrderStatus) -> String {
   match status {
     Pending -> "pending"
     Confirmed -> "confirmed"
@@ -23,13 +25,31 @@ fn status_label(status: OrderStatus) -> String {
   }
 }
 
-fn get_message(response: ApiResponse) -> String {
+pub fn get_message(response: ApiResponse) -> String {
   match response {
     Success(data) -> data.name
     ErrorResponse(message, code) -> message
   }
 }
 
-fn create_order(name: String) -> Order {
+pub fn create_order(name: String) -> Order {
   Order(id: 1, status: Pending, name: name, total: 100.0)
+}
+
+pub fn greet(name: String) -> String {
+  "Hello ${name}!"
+}
+
+pub fn get_names(orders: List[Order]) -> List[String] {
+  orders |> map((o) => o.name)
+}
+
+pub fn print_statuses(orders: List[Order]) {
+  for order in orders {
+    fmt.Println(status_label(order.status))
+  }
+}
+
+pub fn first_and_last(list: List[Int]) -> (Int, Int) {
+  (head(list), last(list))
 }

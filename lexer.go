@@ -13,6 +13,8 @@ const (
 	TkInt TokenKind = iota
 	TkFloat
 	TkString
+	TkStringInterpStart // "Hello ${
+	TkStringInterpEnd   // }...rest"
 	TkIdent
 	TkUpperIdent // starts with uppercase
 
@@ -23,32 +25,45 @@ const (
 	TkLet
 	TkTrue
 	TkFalse
+	TkPub
+	TkImport
+	TkFor
+	TkIn
 
 	// Symbols
 	TkLParen
 	TkRParen
+	TkLBracket // [
+	TkRBracket // ]
 	TkLBrace
 	TkRBrace
 	TkColon
 	TkComma
-	TkArrow // ->
+	TkArrow    // ->
 	TkFatArrow // =>
 	TkDot
+	TkDotDot // ..
 	TkEq
 	TkUnderscore
-	TkPipe // |>
+	TkPipe    // |>
+	TkQuestion // ?
 
 	TkEOF
 )
 
 var tokenNames = map[TokenKind]string{
 	TkInt: "Int", TkFloat: "Float", TkString: "String",
+	TkStringInterpStart: "InterpStart", TkStringInterpEnd: "InterpEnd",
 	TkIdent: "Ident", TkUpperIdent: "UpperIdent",
 	TkType: "type", TkFn: "fn", TkMatch: "match",
 	TkLet: "let", TkTrue: "True", TkFalse: "False",
-	TkLParen: "(", TkRParen: ")", TkLBrace: "{", TkRBrace: "}",
+	TkPub: "pub", TkImport: "import", TkFor: "for", TkIn: "in",
+	TkLParen: "(", TkRParen: ")",
+	TkLBracket: "[", TkRBracket: "]",
+	TkLBrace: "{", TkRBrace: "}",
 	TkColon: ":", TkComma: ",", TkArrow: "->", TkFatArrow: "=>",
-	TkDot: ".", TkEq: "=", TkUnderscore: "_", TkPipe: "|>",
+	TkDot: ".", TkDotDot: "..", TkEq: "=", TkUnderscore: "_",
+	TkPipe: "|>", TkQuestion: "?",
 	TkEOF: "EOF",
 }
 
@@ -70,12 +85,16 @@ func (t Token) String() string {
 }
 
 var keywords = map[string]TokenKind{
-	"type":  TkType,
-	"fn":    TkFn,
-	"match": TkMatch,
-	"let":   TkLet,
-	"True":  TkTrue,
-	"False": TkFalse,
+	"type":   TkType,
+	"fn":     TkFn,
+	"match":  TkMatch,
+	"let":    TkLet,
+	"True":   TkTrue,
+	"False":  TkFalse,
+	"pub":    TkPub,
+	"import": TkImport,
+	"for":    TkFor,
+	"in":     TkIn,
 }
 
 type Lexer struct {
@@ -143,6 +162,12 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		case ch == ')':
 			l.advance()
 			tokens = append(tokens, Token{TkRParen, ")", line, col})
+		case ch == '[':
+			l.advance()
+			tokens = append(tokens, Token{TkLBracket, "[", line, col})
+		case ch == ']':
+			l.advance()
+			tokens = append(tokens, Token{TkRBracket, "]", line, col})
 		case ch == '{':
 			l.advance()
 			tokens = append(tokens, Token{TkLBrace, "{", line, col})
@@ -155,9 +180,17 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		case ch == ',':
 			l.advance()
 			tokens = append(tokens, Token{TkComma, ",", line, col})
+		case ch == '?':
+			l.advance()
+			tokens = append(tokens, Token{TkQuestion, "?", line, col})
 		case ch == '.':
 			l.advance()
-			tokens = append(tokens, Token{TkDot, ".", line, col})
+			if l.pos < len(l.input) && l.peek() == '.' {
+				l.advance()
+				tokens = append(tokens, Token{TkDotDot, "..", line, col})
+			} else {
+				tokens = append(tokens, Token{TkDot, ".", line, col})
+			}
 		case ch == '=':
 			l.advance()
 			if l.pos < len(l.input) && l.peek() == '>' {
@@ -186,13 +219,15 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			l.advance()
 			tokens = append(tokens, Token{TkUnderscore, "_", line, col})
 		case ch == '"':
-			tok, err := l.readString()
+			toks, err := l.readStringOrInterp()
 			if err != nil {
 				return nil, err
 			}
-			tok.Line = line
-			tok.Col = col
-			tokens = append(tokens, tok)
+			for i := range toks {
+				toks[i].Line = line
+				toks[i].Col = col
+			}
+			tokens = append(tokens, toks...)
 		case unicode.IsDigit(ch):
 			tok := l.readNumber()
 			tok.Line = line
@@ -209,12 +244,55 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 	}
 }
 
-func (l *Lexer) readString() (Token, error) {
-	l.advance() // skip "
+func (l *Lexer) readStringOrInterp() ([]Token, error) {
+	l.advance() // skip opening "
+	var tokens []Token
 	var buf strings.Builder
+	hasInterp := false
+
 	for l.pos < len(l.input) && l.peek() != '"' {
-		ch := l.advance()
-		if ch == '\\' && l.pos < len(l.input) {
+		ch := l.peek()
+		if ch == '$' && l.pos+1 < len(l.input) && l.input[l.pos+1] == '{' {
+			// String interpolation
+			hasInterp = true
+			if buf.Len() > 0 {
+				tokens = append(tokens, Token{Kind: TkString, Lit: buf.String()})
+				buf.Reset()
+			}
+			l.advance() // skip $
+			l.advance() // skip {
+			// Read tokens until matching }
+			depth := 1
+			for l.pos < len(l.input) && depth > 0 {
+				l.skipWhitespaceAndComments()
+				if l.peek() == '}' {
+					depth--
+					if depth == 0 {
+						l.advance()
+						break
+					}
+				}
+				if l.peek() == '{' {
+					depth++
+				}
+				// Read a single token for the interpolated expression
+				// For simplicity, we support only identifiers and field access in interpolation
+				if unicode.IsLetter(l.peek()) || l.peek() == '_' {
+					tok := l.readIdent()
+					tokens = append(tokens, tok)
+					// Handle field access chain
+					for l.pos < len(l.input) && l.peek() == '.' {
+						l.advance()
+						tokens = append(tokens, Token{Kind: TkDot, Lit: "."})
+						tok = l.readIdent()
+						tokens = append(tokens, tok)
+					}
+				} else {
+					return nil, fmt.Errorf("unsupported expression in string interpolation")
+				}
+			}
+		} else if ch == '\\' && l.pos+1 < len(l.input) {
+			l.advance()
 			next := l.advance()
 			switch next {
 			case 'n':
@@ -230,14 +308,26 @@ func (l *Lexer) readString() (Token, error) {
 				buf.WriteRune(next)
 			}
 		} else {
-			buf.WriteRune(ch)
+			buf.WriteRune(l.advance())
 		}
 	}
 	if l.pos >= len(l.input) {
-		return Token{}, fmt.Errorf("unterminated string")
+		return nil, fmt.Errorf("unterminated string")
 	}
 	l.advance() // skip closing "
-	return Token{Kind: TkString, Lit: buf.String()}, nil
+
+	if !hasInterp {
+		return []Token{{Kind: TkString, Lit: buf.String()}}, nil
+	}
+	// Trailing string part
+	if buf.Len() > 0 {
+		tokens = append(tokens, Token{Kind: TkString, Lit: buf.String()})
+	}
+	// Wrap in interp markers
+	result := []Token{{Kind: TkStringInterpStart, Lit: ""}}
+	result = append(result, tokens...)
+	result = append(result, Token{Kind: TkStringInterpEnd, Lit: ""})
+	return result, nil
 }
 
 func (l *Lexer) readNumber() Token {
@@ -245,6 +335,10 @@ func (l *Lexer) readNumber() Token {
 	isFloat := false
 	for l.pos < len(l.input) && (unicode.IsDigit(l.peek()) || l.peek() == '.') {
 		if l.peek() == '.' {
+			// Check for .. (range operator)
+			if l.pos+1 < len(l.input) && l.input[l.pos+1] == '.' {
+				break
+			}
 			if isFloat {
 				break
 			}
