@@ -1,4 +1,4 @@
-# Goux Language Specification v0.1
+# Goux Language Specification v0.2
 
 A statically typed language with ML-level type safety that compiles to Go.
 
@@ -8,6 +8,7 @@ A statically typed language with ML-level type safety that compiles to Go.
 - Familiar syntax (Rust-influenced, common conventions)
 - Go ecosystem and runtime (single binary, fast startup, goroutines)
 - Immutable by default
+- Go types are opaque — Goux guarantees its own types, not Go's
 
 ## Syntax Summary
 
@@ -73,6 +74,16 @@ let name = "hello"
 let count = 42
 ```
 
+### Tuples
+
+```
+let pair = (1, "hello")
+let (x, y) = pair
+
+// Type annotation
+let pair: (Int, String) = (1, "hello")
+```
+
 ### Lambdas
 
 ```
@@ -87,12 +98,26 @@ let count = 42
 users
 |> filter((u) => u.age > 20)
 |> map((u) => u.name)
+|> fold(0, (acc, x) => acc + x)
 ```
 
 ### String Interpolation
 
 ```
 let greeting = "Hello ${name}, you are ${age} years old!"
+```
+
+### For Loop (collection traversal)
+
+```
+for x in list {
+  process(x)
+}
+
+// Range
+for i in 0..10 {
+  process(i)
+}
 ```
 
 ### Error Propagation (provisional)
@@ -126,6 +151,19 @@ import user
 let u = user.find(1)
 ```
 
+### Imports
+
+```
+// Goux modules
+import user
+import order.item
+
+// Go packages (prefixed with go/)
+import go/fmt
+import go/database/sql
+import go/net/http
+```
+
 ### Built-in Types
 
 | Type | Description |
@@ -137,11 +175,56 @@ let u = user.find(1)
 | List[T] | Immutable list |
 | Option[T] | Some(T) / None |
 | Result[T, E] | Ok(T) / Error(E) |
+| (A, B, ...) | Tuple |
 
 ### FFI (Go interop)
 
-Mutable Go values are wrapped in opaque types at the FFI boundary.
-Goux code remains fully immutable.
+Go packages are imported with the `go/` prefix and called directly.
+
+```
+import go/fmt
+import go/os
+
+fmt.Println("hello")
+let file = os.Open("data.txt")?
+```
+
+**Return type conversion (automatic):**
+
+| Go return type | Goux type |
+|----------------|-----------|
+| (T, error) | Result[T, Error] |
+| (T, bool) | Option[T] |
+| Other multi-return | Tuple |
+
+**Mutability boundary:**
+- Goux-defined types are fully immutable (language-guaranteed)
+- Go types are opaque — Goux does not guarantee their immutability
+- Go developers are expected to understand Go's mutation semantics
+
+### Side Effects
+
+No special syntax. Side effects (I/O, logging, etc.) are called directly.
+
+```
+fn main() {
+  fmt.Println("hello")
+}
+```
+
+### Testing
+
+Uses Go's testing package directly.
+
+```
+import go/testing
+
+fn test_status_label(t: testing.T) {
+  assert status_label(Pending) == "pending"
+}
+```
+
+Run with `go test` on the generated Go code.
 
 ### Comments
 
