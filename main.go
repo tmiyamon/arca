@@ -3,35 +3,170 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: mlgo <file.ml>")
+		printUsage()
 		os.Exit(1)
 	}
 
-	data, err := os.ReadFile(os.Args[1])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+	cmd := os.Args[1]
+	switch cmd {
+	case "run":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: goux run <file.gx>")
+			os.Exit(1)
+		}
+		os.Exit(runCmd(os.Args[2]))
+	case "build":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: goux build <file.gx> [-o output]")
+			os.Exit(1)
+		}
+		output := ""
+		if len(os.Args) >= 5 && os.Args[3] == "-o" {
+			output = os.Args[4]
+		}
+		os.Exit(buildCmd(os.Args[2], output))
+	case "emit":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: goux emit <file.gx>")
+			os.Exit(1)
+		}
+		os.Exit(emitCmd(os.Args[2]))
+	default:
+		// Backwards compat: if arg looks like a file, treat as emit
+		if strings.HasSuffix(cmd, ".gx") {
+			os.Exit(emitCmd(cmd))
+		}
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
+		printUsage()
 		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "Usage: goux <command> [arguments]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Commands:")
+	fmt.Fprintln(os.Stderr, "  run   <file.gx>           Transpile and run")
+	fmt.Fprintln(os.Stderr, "  build <file.gx> [-o out]   Transpile and compile to binary")
+	fmt.Fprintln(os.Stderr, "  emit  <file.gx>            Output generated Go code")
+}
+
+func transpile(inputPath string) (string, error) {
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return "", fmt.Errorf("error reading file: %w", err)
 	}
 
 	lexer := NewLexer(string(data))
 	tokens, err := lexer.Tokenize()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Lexer error: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("lexer error: %w", err)
 	}
 
 	parser := NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Parse error: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("parse error: %w", err)
 	}
 
 	codegen := NewCodeGen(prog)
-	output := codegen.Generate(prog)
-	fmt.Print(output)
+	return codegen.Generate(prog), nil
+}
+
+func writeTempGo(goCode string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "goux-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return goFile, cleanup, nil
+}
+
+func emitCmd(inputPath string) int {
+	goCode, err := transpile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Print(goCode)
+	return 0
+}
+
+func runCmd(inputPath string) int {
+	goCode, err := transpile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	goFile, cleanup, err := writeTempGo(goCode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating temp file: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	cmd := exec.Command("go", "run", goFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "error running: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func buildCmd(inputPath string, outputPath string) int {
+	goCode, err := transpile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	goFile, cleanup, err := writeTempGo(goCode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating temp file: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	if outputPath == "" {
+		base := strings.TrimSuffix(filepath.Base(inputPath), ".gx")
+		outputPath = base
+	}
+
+	absOutput, err := filepath.Abs(outputPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving output path: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command("go", "build", "-o", absOutput, goFile)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "error building: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "Built: %s\n", outputPath)
+	return 0
 }
