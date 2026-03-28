@@ -1,0 +1,35 @@
+type OrderStatus {
+  Pending
+  Confirmed
+  Shipped
+  Cancelled
+}
+
+type Order {
+  Order(id: Int, status: OrderStatus, name: String, total: Float)
+}
+
+type ApiResponse {
+  Success(data: Order)
+  ErrorResponse(message: String, code: Int)
+}
+
+fn status_label(status: OrderStatus) -> String {
+  match status {
+    Pending -> "pending"
+    Confirmed -> "confirmed"
+    Shipped -> "shipped"
+    Cancelled -> "cancelled"
+  }
+}
+
+fn get_message(response: ApiResponse) -> String {
+  match response {
+    Success(data) -> data.name
+    ErrorResponse(message, code) -> message
+  }
+}
+
+fn create_order(name: String) -> Order {
+  Order(id: 1, status: Pending, name: name, total: 100.0)
+}
