@@ -38,6 +38,12 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(emitCmd(os.Args[2]))
+	case "fmt":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: arca fmt <file.arca>")
+			os.Exit(1)
+		}
+		os.Exit(fmtCmd(os.Args[2]))
 	default:
 		// Backwards compat: if arg looks like a file, treat as emit
 		if strings.HasSuffix(cmd, ".arca") {
@@ -56,6 +62,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  run   <file.arca>           Transpile and run")
 	fmt.Fprintln(os.Stderr, "  build <file.arca> [-o out]   Transpile and compile to binary")
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
+	fmt.Fprintln(os.Stderr, "  fmt   <file.arca>            Format source code in place")
 }
 
 func parseFile(path string) (*Program, error) {
@@ -170,6 +177,21 @@ func writeBuildGo(inputPath string, goCode string) (string, error) {
 		return "", err
 	}
 	return goFile, nil
+}
+
+func fmtCmd(inputPath string) int {
+	prog, err := parseFile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	formatter := NewFormatter()
+	output := formatter.Format(prog)
+	if err := os.WriteFile(inputPath, []byte(output), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "error writing file: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func emitCmd(inputPath string) int {
