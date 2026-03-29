@@ -359,6 +359,11 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			return
 		}
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
+	case AssertStmt:
+		exprStr := cg.genExprStr(s.Expr)
+		cg.writeln(fmt.Sprintf("%sif !(%s) {", indent, exprStr))
+		cg.writeln(fmt.Sprintf("%s\tpanic(%q)", indent, "assertion failed: "+exprStr))
+		cg.writeln(fmt.Sprintf("%s}", indent))
 	case ExprStmt:
 		switch e := s.Expr.(type) {
 		case ForExpr:

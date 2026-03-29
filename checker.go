@@ -473,6 +473,8 @@ func (c *Checker) checkStmt(stmt Stmt) {
 				c.scope.Define(s.Name, t)
 			}
 		}
+	case AssertStmt:
+		c.checkExpr(s.Expr)
 	case ExprStmt:
 		c.checkExpr(s.Expr)
 	}

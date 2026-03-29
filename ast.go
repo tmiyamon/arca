@@ -187,8 +187,13 @@ type ExprStmt struct {
 	Expr Expr
 }
 
-func (LetStmt) stmtNode()  {}
-func (ExprStmt) stmtNode() {}
+type AssertStmt struct {
+	Expr Expr
+}
+
+func (LetStmt) stmtNode()   {}
+func (ExprStmt) stmtNode()  {}
+func (AssertStmt) stmtNode() {}
 
 // --- Top-level declarations ---
 
