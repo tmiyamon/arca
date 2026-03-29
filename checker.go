@@ -138,6 +138,10 @@ func typesEqual(a, b Type) bool {
 		if isTypeParam(na.Name) || isTypeParam(nb.Name) {
 			return true
 		}
+		// Qualified types (Go FFI) match loosely
+		if strings.Contains(na.Name, ".") || strings.Contains(nb.Name, ".") {
+			return na.Name == nb.Name
+		}
 		if na.Name != nb.Name {
 			return false
 		}
@@ -154,6 +158,14 @@ func typesEqual(a, b Type) bool {
 			}
 		}
 		return true
+	}
+	pa, aOk := a.(PointerType)
+	pb, bOk := b.(PointerType)
+	if aOk && bOk {
+		return typesEqual(pa.Inner, pb.Inner)
+	}
+	if aOk || bOk {
+		return false
 	}
 	ta, aOk := a.(TupleType)
 	tb, bOk := b.(TupleType)
@@ -185,6 +197,8 @@ func typeName(t Type) string {
 			return tt.Name + "[" + strings.Join(params, ", ") + "]"
 		}
 		return tt.Name
+	case PointerType:
+		return "*" + typeName(tt.Inner)
 	case TupleType:
 		elems := make([]string, len(tt.Elements))
 		for i, e := range tt.Elements {
@@ -654,6 +668,34 @@ func (c *Checker) checkMatchExpr(me MatchExpr) {
 func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 	switch p := pat.(type) {
 	case ConstructorPattern:
+		// Built-in Result/Option constructors
+		if p.Name == "Ok" && len(p.Fields) > 0 {
+			if subjectType != nil {
+				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Result" && len(nt.Params) > 0 {
+					c.scope.Define(p.Fields[0].Binding, nt.Params[0])
+				}
+			}
+			return
+		}
+		if p.Name == "Error" && len(p.Fields) > 0 {
+			if subjectType != nil {
+				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Result" && len(nt.Params) > 1 {
+					c.scope.Define(p.Fields[0].Binding, nt.Params[1])
+				}
+			}
+			return
+		}
+		if p.Name == "Some" && len(p.Fields) > 0 {
+			if subjectType != nil {
+				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Option" && len(nt.Params) > 0 {
+					c.scope.Define(p.Fields[0].Binding, nt.Params[0])
+				}
+			}
+			return
+		}
+		if p.Name == "None" {
+			return
+		}
 		typeName, ok := c.ctorTypes[p.Name]
 		if !ok {
 			return

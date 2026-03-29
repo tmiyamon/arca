@@ -340,8 +340,10 @@ func (cg *CodeGen) genVoidBody(expr Expr, indent string) {
 			cg.genStmt(stmt, indent)
 		}
 		if e.Expr != nil {
-			cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(e.Expr)))
+			cg.genVoidBody(e.Expr, indent)
 		}
+	case MatchExpr:
+		cg.genMatchExpr(e, indent, false)
 	default:
 		cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(expr)))
 	}
@@ -370,6 +372,8 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 		switch e := s.Expr.(type) {
 		case ForExpr:
 			cg.genForExpr(e, indent)
+		case MatchExpr:
+			cg.genMatchExpr(e, indent, false)
 		default:
 			cg.writeln(fmt.Sprintf("%s%s", indent, cg.genExprStr(s.Expr)))
 		}
@@ -773,6 +777,14 @@ func (cg *CodeGen) genListMatch(me MatchExpr, indent string, isReturn bool) {
 	}
 }
 
+func (cg *CodeGen) genArmBody(body Expr, indent string, isReturn bool) {
+	if isReturn {
+		cg.genReturnExpr(body, indent)
+	} else {
+		cg.genVoidBody(body, indent)
+	}
+}
+
 func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	subject := cg.genExprStr(me.Subject)
 
@@ -796,11 +808,7 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 			} else {
 				cg.writeln(fmt.Sprintf("%sdefault:", indent))
 			}
-			if isReturn {
-				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
-			} else {
-				cg.writeln(fmt.Sprintf("%s\t%s", indent, cg.genExprStr(arm.Body)))
-			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		}
 		if isReturn {
 			cg.writeln(fmt.Sprintf("%sdefault:", indent))
@@ -823,20 +831,14 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 					cg.writeln(fmt.Sprintf("%s\t%s := v.%s", indent, snakeToCamel(fp.Binding), capitalize(fp.Name)))
 				}
 			}
-			if isReturn {
-				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
-			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		case WildcardPattern:
 			cg.writeln(fmt.Sprintf("%sdefault:", indent))
-			if isReturn {
-				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
-			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		case BindPattern:
 			cg.writeln(fmt.Sprintf("%sdefault:", indent))
 			cg.writeln(fmt.Sprintf("%s\t%s := v", indent, snakeToCamel(pat.Name)))
-			if isReturn {
-				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
-			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		}
 	}
 	cg.writeln(fmt.Sprintf("%s}", indent))
