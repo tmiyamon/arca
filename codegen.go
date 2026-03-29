@@ -440,6 +440,17 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 }
 
 func (cg *CodeGen) genExprWithContext(expr Expr, call FnCall, argIndex int) string {
+	// Resolve empty list type from function parameter
+	if ll, ok := expr.(ListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
+		if fnIdent, ok := call.Fn.(Ident); ok {
+			if fn, ok := cg.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
+				paramType := fn.Params[argIndex].Type
+				if nt, ok := paramType.(NamedType); ok && nt.Name == "List" && len(nt.Params) > 0 {
+					return fmt.Sprintf("[]%s{}", cg.goType(nt.Params[0]))
+				}
+			}
+		}
+	}
 	// Resolve None type from function parameter
 	if ident, ok := expr.(Ident); ok && ident.Name == "None" {
 		if fnIdent, ok := call.Fn.(Ident); ok {
@@ -503,26 +514,42 @@ func (cg *CodeGen) genTuple(t TupleExpr) string {
 }
 
 func (cg *CodeGen) genListLit(l ListLit) string {
-	if len(l.Elements) == 0 {
+	if len(l.Elements) == 0 && l.Spread == nil {
 		return "[]interface{}{}"
+	}
+	// Spread: [a, b, ..rest] → append([]T{a, b}, rest...)
+	if l.Spread != nil {
+		if len(l.Elements) == 0 {
+			return cg.genExprStr(l.Spread)
+		}
+		elems := make([]string, len(l.Elements))
+		for i, e := range l.Elements {
+			elems[i] = cg.genExprStr(e)
+		}
+		elemType := cg.inferGoElemType(l.Elements[0])
+		return fmt.Sprintf("append([]%s{%s}, %s...)", elemType, strings.Join(elems, ", "), cg.genExprStr(l.Spread))
 	}
 	elems := make([]string, len(l.Elements))
 	for i, e := range l.Elements {
 		elems[i] = cg.genExprStr(e)
 	}
-	// Infer element type from first element
-	elemType := "interface{}"
-	switch l.Elements[0].(type) {
-	case IntLit:
-		elemType = "int"
-	case FloatLit:
-		elemType = "float64"
-	case StringLit, StringInterp:
-		elemType = "string"
-	case BoolLit:
-		elemType = "bool"
-	}
+	elemType := cg.inferGoElemType(l.Elements[0])
 	return fmt.Sprintf("[]%s{%s}", elemType, strings.Join(elems, ", "))
+}
+
+func (cg *CodeGen) inferGoElemType(expr Expr) string {
+	switch expr.(type) {
+	case IntLit:
+		return "int"
+	case FloatLit:
+		return "float64"
+	case StringLit, StringInterp:
+		return "string"
+	case BoolLit:
+		return "bool"
+	default:
+		return "interface{}"
+	}
 }
 
 func (cg *CodeGen) genRange(r RangeExpr) string {
@@ -612,8 +639,89 @@ func (cg *CodeGen) genOptionMatch(me MatchExpr, indent string, isReturn bool) {
 	cg.writeln(fmt.Sprintf("%s}", indent))
 }
 
+func (cg *CodeGen) isListMatch(me MatchExpr) bool {
+	for _, arm := range me.Arms {
+		if _, ok := arm.Pattern.(ListPattern); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (cg *CodeGen) genListMatch(me MatchExpr, indent string, isReturn bool) {
+	subject := cg.genExprStr(me.Subject)
+	first := true
+	for _, arm := range me.Arms {
+		lp, ok := arm.Pattern.(ListPattern)
+		if !ok {
+			// Wildcard or bind as else
+			if first {
+				cg.writeln(fmt.Sprintf("%s{", indent))
+			} else {
+				cg.writeln(fmt.Sprintf("%s} else {", indent))
+			}
+			if isReturn {
+				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
+			} else {
+				cg.writeln(fmt.Sprintf("%s\t%s", indent, cg.genExprStr(arm.Body)))
+			}
+			first = false
+			continue
+		}
+
+		if len(lp.Elements) == 0 && lp.Rest == "" {
+			// [] pattern
+			keyword := "if"
+			if !first {
+				keyword = "} else if"
+			}
+			cg.writeln(fmt.Sprintf("%s%s len(%s) == 0 {", indent, keyword, subject))
+		} else {
+			keyword := "if"
+			if !first {
+				keyword = "} else if"
+			}
+			minLen := len(lp.Elements)
+			if lp.Rest != "" {
+				cg.writeln(fmt.Sprintf("%s%s len(%s) >= %d {", indent, keyword, subject, minLen))
+			} else {
+				cg.writeln(fmt.Sprintf("%s%s len(%s) == %d {", indent, keyword, subject, minLen))
+			}
+			// Bind elements
+			usedVars := collectUsedIdents(arm.Body)
+			for i, elemPat := range lp.Elements {
+				if bp, ok := elemPat.(BindPattern); ok {
+					if _, used := usedVars[bp.Name]; used {
+						cg.writeln(fmt.Sprintf("%s\t%s := %s[%d]", indent, snakeToCamel(bp.Name), subject, i))
+					}
+				}
+			}
+			if lp.Rest != "" {
+				if _, used := usedVars[lp.Rest]; used {
+					cg.writeln(fmt.Sprintf("%s\t%s := %s[%d:]", indent, snakeToCamel(lp.Rest), subject, minLen))
+				}
+			}
+		}
+		if isReturn {
+			cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
+		} else {
+			cg.writeln(fmt.Sprintf("%s\t%s", indent, cg.genExprStr(arm.Body)))
+		}
+		first = false
+	}
+	cg.writeln(fmt.Sprintf("%s}", indent))
+	if isReturn {
+		cg.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
+	}
+}
+
 func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	subject := cg.genExprStr(me.Subject)
+
+	if cg.isListMatch(me) {
+		cg.genListMatch(me, indent, isReturn)
+		return
+	}
 
 	if cg.isOptionMatch(me) {
 		cg.genOptionMatch(me, indent, isReturn)

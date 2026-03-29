@@ -476,7 +476,18 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 func (p *Parser) parseListLit() (Expr, error) {
 	p.advance() // skip '['
 	var elements []Expr
+	var spread Expr
 	for p.peek().Kind != TkRBracket {
+		// Check for ..spread
+		if p.peek().Kind == TkDotDot {
+			p.advance()
+			var err error
+			spread, err = p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
 		elem, err := p.parseExpr()
 		if err != nil {
 			return nil, err
@@ -487,7 +498,7 @@ func (p *Parser) parseListLit() (Expr, error) {
 		}
 	}
 	p.advance() // skip ']'
-	return ListLit{Elements: elements}, nil
+	return ListLit{Elements: elements, Spread: spread}, nil
 }
 
 func (p *Parser) parseStringInterp() (Expr, error) {
@@ -740,6 +751,8 @@ func (p *Parser) parsePattern() (Pattern, error) {
 			return ConstructorPattern{Name: tok.Lit, Fields: fields}, nil
 		}
 		return ConstructorPattern{Name: tok.Lit}, nil
+	case TkLBracket:
+		return p.parseListPattern()
 	case TkIdent:
 		p.advance()
 		return BindPattern{Name: tok.Lit}, nil
@@ -753,6 +766,40 @@ func (p *Parser) parsePattern() (Pattern, error) {
 	default:
 		return nil, fmt.Errorf("%d:%d: expected pattern, got %s", tok.Line, tok.Col, tok)
 	}
+}
+
+func (p *Parser) parseListPattern() (Pattern, error) {
+	p.advance() // skip '['
+	if p.peek().Kind == TkRBracket {
+		p.advance()
+		return ListPattern{}, nil // empty list pattern []
+	}
+	var elements []Pattern
+	rest := ""
+	for p.peek().Kind != TkRBracket {
+		// Check for ..rest
+		if p.peek().Kind == TkDotDot {
+			p.advance()
+			tok, err := p.expect(TkIdent)
+			if err != nil {
+				return nil, err
+			}
+			rest = tok.Lit
+			break
+		}
+		pat, err := p.parsePattern()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, pat)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	if _, err := p.expect(TkRBracket); err != nil {
+		return nil, err
+	}
+	return ListPattern{Elements: elements, Rest: rest}, nil
 }
 
 func (p *Parser) parseFieldPattern() (FieldPattern, error) {

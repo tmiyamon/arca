@@ -102,6 +102,7 @@ type ForExpr struct {
 
 type ListLit struct {
 	Elements []Expr
+	Spread   Expr // non-nil if [a, b, ..existing]
 }
 
 type RangeExpr struct {
@@ -153,10 +154,16 @@ type WildcardPattern struct{}
 type LitPattern struct{ Expr Expr }
 type BindPattern struct{ Name string }
 
+type ListPattern struct {
+	Elements []Pattern
+	Rest     string // "" if no rest, e.g. [a, b, ..rest] → Rest = "rest"
+}
+
 func (ConstructorPattern) patternNode() {}
 func (WildcardPattern) patternNode()    {}
 func (LitPattern) patternNode()         {}
 func (BindPattern) patternNode()        {}
+func (ListPattern) patternNode()        {}
 
 // --- Statements ---
 

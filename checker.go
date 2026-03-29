@@ -114,6 +114,10 @@ func typesEqual(a, b Type) bool {
 		if na.Name != nb.Name {
 			return false
 		}
+		// Empty list (List with no params) matches any List[T]
+		if na.Name == "List" && (len(na.Params) == 0 || len(nb.Params) == 0) {
+			return true
+		}
 		if len(na.Params) != len(nb.Params) {
 			return false
 		}
@@ -619,6 +623,21 @@ func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 	case BindPattern:
 		if subjectType != nil {
 			c.scope.Define(p.Name, subjectType)
+		}
+	case ListPattern:
+		// Infer element type from subject
+		if subjectType != nil {
+			if nt, ok := subjectType.(NamedType); ok && nt.Name == "List" && len(nt.Params) > 0 {
+				elemType := nt.Params[0]
+				for _, ep := range p.Elements {
+					if bp, ok := ep.(BindPattern); ok {
+						c.scope.Define(bp.Name, elemType)
+					}
+				}
+				if p.Rest != "" {
+					c.scope.Define(p.Rest, subjectType)
+				}
+			}
 		}
 	}
 }
