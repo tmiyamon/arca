@@ -1,5 +1,12 @@
 package main
 
+// --- Position ---
+
+type Pos struct {
+	Line int
+	Col  int
+}
+
 // --- Types ---
 
 type Type interface {
@@ -7,6 +14,7 @@ type Type interface {
 }
 
 type NamedType struct {
+	Pos    Pos
 	Name   string
 	Params []Type
 }
@@ -45,6 +53,7 @@ type FieldAccess struct {
 }
 
 type MatchExpr struct {
+	Pos     Pos
 	Subject Expr
 	Arms    []MatchArm
 }
@@ -60,6 +69,7 @@ type Block struct {
 }
 
 type ConstructorCall struct {
+	Pos    Pos
 	Name   string
 	Fields []FieldValue
 }
@@ -187,6 +197,7 @@ type Field struct {
 }
 
 type FnDecl struct {
+	Pos        Pos
 	Name       string
 	Public     bool
 	Params     []FnParam

@@ -157,6 +157,7 @@ func (p *Parser) parseType() (Type, error) {
 		return p.parseTupleType()
 	}
 	tok := p.advance()
+	pos := Pos{tok.Line, tok.Col}
 	switch tok.Kind {
 	case TkUpperIdent:
 		name := tok.Lit
@@ -174,11 +175,11 @@ func (p *Parser) parseType() (Type, error) {
 				}
 			}
 			p.advance() // skip ']'
-			return NamedType{Name: name, Params: params}, nil
+			return NamedType{Pos: pos, Name: name, Params: params}, nil
 		}
-		return NamedType{Name: name}, nil
+		return NamedType{Pos: pos, Name: name}, nil
 	case TkIdent:
-		return NamedType{Name: tok.Lit}, nil
+		return NamedType{Pos: pos, Name: tok.Lit}, nil
 	default:
 		return nil, fmt.Errorf("%d:%d: expected type, got %s", tok.Line, tok.Col, tok)
 	}
@@ -202,6 +203,7 @@ func (p *Parser) parseTupleType() (Type, error) {
 }
 
 func (p *Parser) parseFnDecl(public bool) (Decl, error) {
+	pos := Pos{p.peek().Line, p.peek().Col}
 	p.advance() // skip 'fn'
 	name, err := p.expect(TkIdent)
 	if err != nil {
@@ -236,7 +238,7 @@ func (p *Parser) parseFnDecl(public bool) (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
-	return FnDecl{Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
+	return FnDecl{Pos: pos, Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
 }
 
 func (p *Parser) parseFnParam() (FnParam, error) {
@@ -606,13 +608,14 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 			}
 		}
 		p.advance()
-		return ConstructorCall{Name: name.Lit, Fields: fields}, nil
+		return ConstructorCall{Pos: Pos{name.Line, name.Col}, Name: name.Lit, Fields: fields}, nil
 	}
 
 	return Ident{Name: name.Lit}, nil
 }
 
 func (p *Parser) parseMatchExpr() (Expr, error) {
+	pos := Pos{p.peek().Line, p.peek().Col}
 	p.advance() // skip 'match'
 	subject, err := p.parseExpr()
 	if err != nil {
@@ -630,7 +633,7 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 		arms = append(arms, arm)
 	}
 	p.advance()
-	return MatchExpr{Subject: subject, Arms: arms}, nil
+	return MatchExpr{Pos: pos, Subject: subject, Arms: arms}, nil
 }
 
 func (p *Parser) parseMatchArm() (MatchArm, error) {

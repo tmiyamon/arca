@@ -59,6 +59,11 @@ func (c *Checker) addError(format string, args ...interface{}) {
 	c.errors = append(c.errors, CheckError{Message: fmt.Sprintf(format, args...)})
 }
 
+func (c *Checker) addErrorAt(pos Pos, format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	c.errors = append(c.errors, CheckError{Message: fmt.Sprintf("%d:%d: %s", pos.Line, pos.Col, msg)})
+}
+
 // --- Type Declaration Checks ---
 
 func (c *Checker) checkTypeDecl(td TypeDecl) {
@@ -73,7 +78,7 @@ func (c *Checker) checkTypeExists(t Type) {
 	switch tt := t.(type) {
 	case NamedType:
 		if !c.isKnownType(tt.Name) {
-			c.addError("unknown type: %s", tt.Name)
+			c.addErrorAt(tt.Pos, "unknown type: %s", tt.Name)
 		}
 		for _, param := range tt.Params {
 			c.checkTypeExists(param)
@@ -177,7 +182,7 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 
 	typeName, ok := c.ctorTypes[cc.Name]
 	if !ok {
-		c.addError("unknown constructor: %s", cc.Name)
+		c.addErrorAt(cc.Pos, "unknown constructor: %s", cc.Name)
 		return
 	}
 	td := c.types[typeName]
@@ -190,7 +195,7 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 	}
 
 	if len(cc.Fields) != len(ctor.Fields) {
-		c.addError("constructor %s expects %d fields, got %d", cc.Name, len(ctor.Fields), len(cc.Fields))
+		c.addErrorAt(cc.Pos, "constructor %s expects %d fields, got %d", cc.Name, len(ctor.Fields), len(cc.Fields))
 		return
 	}
 
@@ -205,7 +210,7 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 				}
 			}
 			if !found {
-				c.addError("constructor %s has no field named '%s'", cc.Name, fv.Name)
+				c.addErrorAt(cc.Pos, "constructor %s has no field named '%s'", cc.Name, fv.Name)
 			}
 		}
 		c.checkExpr(fv.Value)
@@ -263,6 +268,6 @@ func (c *Checker) checkMatchExpr(me MatchExpr) {
 	}
 
 	if len(missing) > 0 {
-		c.addError("non-exhaustive match on %s: missing %s", matchedType, strings.Join(missing, ", "))
+		c.addErrorAt(me.Pos, "non-exhaustive match on %s: missing %s", matchedType, strings.Join(missing, ", "))
 	}
 }
