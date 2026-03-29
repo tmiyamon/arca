@@ -158,10 +158,10 @@ let u = user.find(1)
 import user
 import order.item
 
-// Go packages (prefixed with go/)
-import go/fmt
-import go/database/sql
-import go/net/http
+// Go packages (prefixed with go.)
+import go.fmt
+import go.database.sql
+import go.net.http
 ```
 
 ### Built-in Types
@@ -182,8 +182,8 @@ import go/net/http
 Go packages are imported with the `go/` prefix and called directly.
 
 ```
-import go/fmt
-import go/os
+import go.fmt
+import go.os
 
 fmt.Println("hello")
 let file = os.Open("data.txt")?
