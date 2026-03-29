@@ -80,12 +80,14 @@ type FieldValue struct {
 }
 
 type Lambda struct {
-	Params []LambdaParam
-	Body   Expr
+	Params     []LambdaParam
+	ReturnType Type // optional
+	Body       Expr
 }
 
 type LambdaParam struct {
 	Name string
+	Type Type // optional, nil if not annotated
 }
 
 type TupleExpr struct {

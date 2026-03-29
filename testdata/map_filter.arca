@@ -1,0 +1,10 @@
+import go.fmt
+
+fn main() {
+  let doubled = map(nums(), (x: Int) -> Int => x * 2)
+  let positives = filter(nums(), (x: Int) -> Bool => x > 0)
+  let sum = fold(nums(), 0, (acc: Int, x: Int) -> Int => acc + x)
+  fmt.Println(doubled)
+  fmt.Println(positives)
+  fmt.Println(sum)
+}

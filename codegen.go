@@ -9,11 +9,12 @@ type CodeGen struct {
 	buf            strings.Builder
 	types          map[string]TypeDecl
 	imports        []string
-	currentRetType Type // return type of current function being generated
+	currentRetType Type
+	usedBuiltins   map[string]bool // track which builtins are used
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
-	cg := &CodeGen{types: make(map[string]TypeDecl)}
+	cg := &CodeGen{types: make(map[string]TypeDecl), usedBuiltins: make(map[string]bool)}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -54,7 +55,43 @@ func (cg *CodeGen) Generate(prog *Program) string {
 			cg.writeln("")
 		}
 	}
+	cg.genBuiltins()
 	return cg.buf.String()
+}
+
+func (cg *CodeGen) genBuiltins() {
+	if cg.usedBuiltins["map"] {
+		cg.writeln("func Map_[T any, U any](list []T, f func(T) U) []U {")
+		cg.writeln("\tresult := make([]U, len(list))")
+		cg.writeln("\tfor i, v := range list {")
+		cg.writeln("\t\tresult[i] = f(v)")
+		cg.writeln("\t}")
+		cg.writeln("\treturn result")
+		cg.writeln("}")
+		cg.writeln("")
+	}
+	if cg.usedBuiltins["filter"] {
+		cg.writeln("func Filter_[T any](list []T, f func(T) bool) []T {")
+		cg.writeln("\tvar result []T")
+		cg.writeln("\tfor _, v := range list {")
+		cg.writeln("\t\tif f(v) {")
+		cg.writeln("\t\t\tresult = append(result, v)")
+		cg.writeln("\t\t}")
+		cg.writeln("\t}")
+		cg.writeln("\treturn result")
+		cg.writeln("}")
+		cg.writeln("")
+	}
+	if cg.usedBuiltins["fold"] {
+		cg.writeln("func Fold_[T any, U any](list []T, init U, f func(U, T) U) U {")
+		cg.writeln("\tacc := init")
+		cg.writeln("\tfor _, v := range list {")
+		cg.writeln("\t\tacc = f(acc, v)")
+		cg.writeln("\t}")
+		cg.writeln("\treturn acc")
+		cg.writeln("}")
+		cg.writeln("")
+	}
 }
 
 func (cg *CodeGen) write(s string) {
@@ -297,6 +334,32 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		}
 		return e.Name
 	case FnCall:
+		// Track builtin usage
+		if ident, ok := e.Fn.(Ident); ok {
+			switch ident.Name {
+			case "map":
+				cg.usedBuiltins["map"] = true
+				args := make([]string, len(e.Args))
+				for i, a := range e.Args {
+					args[i] = cg.genExprStr(a)
+				}
+				return fmt.Sprintf("Map_(%s)", strings.Join(args, ", "))
+			case "filter":
+				cg.usedBuiltins["filter"] = true
+				args := make([]string, len(e.Args))
+				for i, a := range e.Args {
+					args[i] = cg.genExprStr(a)
+				}
+				return fmt.Sprintf("Filter_(%s)", strings.Join(args, ", "))
+			case "fold":
+				cg.usedBuiltins["fold"] = true
+				args := make([]string, len(e.Args))
+				for i, a := range e.Args {
+					args[i] = cg.genExprStr(a)
+				}
+				return fmt.Sprintf("Fold_(%s)", strings.Join(args, ", "))
+			}
+		}
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {
 			args[i] = cg.genExprStr(a)
@@ -340,10 +403,18 @@ func (cg *CodeGen) genStringInterp(si StringInterp) string {
 func (cg *CodeGen) genLambda(l Lambda) string {
 	params := make([]string, len(l.Params))
 	for i, p := range l.Params {
-		// Without type info, use interface{} — type checker will improve this
-		params[i] = p.Name
+		if p.Type != nil {
+			params[i] = fmt.Sprintf("%s %s", p.Name, cg.goType(p.Type))
+		} else {
+			params[i] = p.Name
+		}
 	}
-	return fmt.Sprintf("func(%s) { return %s }", strings.Join(params, ", "), cg.genExprStr(l.Body))
+	body := cg.genExprStr(l.Body)
+	retType := ""
+	if l.ReturnType != nil {
+		retType = " " + cg.goType(l.ReturnType)
+	}
+	return fmt.Sprintf("func(%s)%s { return %s }", strings.Join(params, ", "), retType, body)
 }
 
 func (cg *CodeGen) genTuple(t TupleExpr) string {

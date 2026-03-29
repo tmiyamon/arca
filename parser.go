@@ -493,29 +493,62 @@ func (p *Parser) parseTupleOrLambda() (Expr, error) {
 	saved := p.pos
 	p.advance() // skip '('
 
-	// () => ...
+	// () -> Type => ... or () => ...
 	if p.peek().Kind == TkRParen {
 		p.advance()
+		var retType Type
+		if p.peek().Kind == TkArrow {
+			p.advance()
+			var err error
+			retType, err = p.parseType()
+			if err != nil {
+				return nil, err
+			}
+		}
 		if p.peek().Kind == TkFatArrow {
 			p.advance()
 			body, err := p.parseExpr()
 			if err != nil {
 				return nil, err
 			}
-			return Lambda{Params: nil, Body: body}, nil
+			return Lambda{Params: nil, ReturnType: retType, Body: body}, nil
 		}
 		return TupleExpr{Elements: nil}, nil
 	}
 
-	// Try lambda: (ident, ident, ...) =>
+	// Try lambda: (ident[: Type], ...) =>
 	if p.peek().Kind == TkIdent {
-		var names []string
-		names = append(names, p.advance().Lit)
+		type lambdaParam struct {
+			name string
+			typ  Type
+		}
+		var lparams []lambdaParam
+		lp := lambdaParam{name: p.advance().Lit}
+		if p.peek().Kind == TkColon {
+			p.advance()
+			t, err := p.parseType()
+			if err != nil {
+				p.pos = saved
+				goto parseTuple
+			}
+			lp.typ = t
+		}
+		lparams = append(lparams, lp)
 		isLambda := true
 		for p.peek().Kind == TkComma {
 			p.advance()
 			if p.peek().Kind == TkIdent {
-				names = append(names, p.advance().Lit)
+				lp2 := lambdaParam{name: p.advance().Lit}
+				if p.peek().Kind == TkColon {
+					p.advance()
+					t, err := p.parseType()
+					if err != nil {
+						isLambda = false
+						break
+					}
+					lp2.typ = t
+				}
+				lparams = append(lparams, lp2)
 			} else {
 				isLambda = false
 				break
@@ -523,6 +556,16 @@ func (p *Parser) parseTupleOrLambda() (Expr, error) {
 		}
 		if isLambda && p.peek().Kind == TkRParen {
 			p.advance()
+			var retType Type
+			if p.peek().Kind == TkArrow {
+				p.advance()
+				t, err := p.parseType()
+				if err != nil {
+					p.pos = saved
+					goto parseTuple
+				}
+				retType = t
+			}
 			if p.peek().Kind == TkFatArrow {
 				p.advance()
 				body, err := p.parseExpr()
@@ -530,14 +573,15 @@ func (p *Parser) parseTupleOrLambda() (Expr, error) {
 					return nil, err
 				}
 				var params []LambdaParam
-				for _, n := range names {
-					params = append(params, LambdaParam{Name: n})
+				for _, lp := range lparams {
+					params = append(params, LambdaParam{Name: lp.name, Type: lp.typ})
 				}
-				return Lambda{Params: params, Body: body}, nil
+				return Lambda{Params: params, ReturnType: retType, Body: body}, nil
 			}
 		}
 		p.pos = saved
 	}
+parseTuple:
 
 	// Parse as tuple
 	p.pos = saved
