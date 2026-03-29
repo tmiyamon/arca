@@ -13,6 +13,7 @@ type CodeGen struct {
 	usedBuiltins   map[string]bool   // track which builtins are used
 	fnNames        map[string]string  // arca name -> go name (for pub functions)
 	functions      map[string]FnDecl // arca name -> fn decl
+	tmpCounter     int
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -506,10 +507,27 @@ func (cg *CodeGen) genLambda(l Lambda) string {
 	return fmt.Sprintf("func(%s)%s { return %s }", strings.Join(params, ", "), retType, body)
 }
 
+func (cg *CodeGen) inferGoType(expr Expr) string {
+	switch expr.(type) {
+	case IntLit:
+		return "int"
+	case FloatLit:
+		return "float64"
+	case StringLit, StringInterp:
+		return "string"
+	case BoolLit:
+		return "bool"
+	default:
+		return "interface{}"
+	}
+}
+
 func (cg *CodeGen) genTuple(t TupleExpr) string {
 	if len(t.Elements) == 2 {
-		return fmt.Sprintf("struct{ First interface{}; Second interface{} }{%s, %s}",
-			cg.genExprStr(t.Elements[0]), cg.genExprStr(t.Elements[1]))
+		t1 := cg.inferGoType(t.Elements[0])
+		t2 := cg.inferGoType(t.Elements[1])
+		return fmt.Sprintf("struct{ First %s; Second %s }{%s, %s}",
+			t1, t2, cg.genExprStr(t.Elements[0]), cg.genExprStr(t.Elements[1]))
 	}
 	elems := make([]string, len(t.Elements))
 	for i, e := range t.Elements {
@@ -817,14 +835,26 @@ func (cg *CodeGen) findTypeName(ctorName string) string {
 
 // --- Helpers ---
 
-var destructureCounter int
 
 func (cg *CodeGen) genLetDestructure(pat Pattern, value Expr, indent string) {
 	valStr := cg.genExprStr(value)
 	switch p := pat.(type) {
+	case TuplePattern:
+		cg.tmpCounter++
+		tmp := fmt.Sprintf("__tuple%d", cg.tmpCounter)
+		cg.writeln(fmt.Sprintf("%s%s := %s", indent, tmp, valStr))
+		for i, elemPat := range p.Elements {
+			if bp, ok := elemPat.(BindPattern); ok {
+				field := fmt.Sprintf("First")
+				if i == 1 {
+					field = "Second"
+				}
+				cg.writeln(fmt.Sprintf("%s%s := %s.%s", indent, snakeToCamel(bp.Name), tmp, field))
+			}
+		}
 	case ListPattern:
-		destructureCounter++
-		tmp := fmt.Sprintf("__list%d", destructureCounter)
+		cg.tmpCounter++
+		tmp := fmt.Sprintf("__list%d", cg.tmpCounter)
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, tmp, valStr))
 		for i, elemPat := range p.Elements {
 			if bp, ok := elemPat.(BindPattern); ok {

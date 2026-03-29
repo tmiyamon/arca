@@ -316,6 +316,12 @@ func (f *Formatter) formatPattern(pat Pattern) string {
 			elems = append(elems, ".."+p.Rest)
 		}
 		return "[" + strings.Join(elems, ", ") + "]"
+	case TuplePattern:
+		elems := make([]string, len(p.Elements))
+		for i, ep := range p.Elements {
+			elems[i] = f.formatPattern(ep)
+		}
+		return "(" + strings.Join(elems, ", ") + ")"
 	default:
 		return "?"
 	}

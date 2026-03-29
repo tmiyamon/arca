@@ -159,11 +159,16 @@ type ListPattern struct {
 	Rest     string // "" if no rest, e.g. [a, b, ..rest] → Rest = "rest"
 }
 
+type TuplePattern struct {
+	Elements []Pattern
+}
+
 func (ConstructorPattern) patternNode() {}
 func (WildcardPattern) patternNode()    {}
 func (LitPattern) patternNode()         {}
 func (BindPattern) patternNode()        {}
 func (ListPattern) patternNode()        {}
+func (TuplePattern) patternNode()       {}
 
 // --- Statements ---
 

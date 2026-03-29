@@ -630,6 +630,16 @@ func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 		if subjectType != nil {
 			c.scope.Define(p.Name, subjectType)
 		}
+	case TuplePattern:
+		if subjectType != nil {
+			if tt, ok := subjectType.(TupleType); ok {
+				for i, ep := range p.Elements {
+					if bp, ok := ep.(BindPattern); ok && i < len(tt.Elements) {
+						c.scope.Define(bp.Name, tt.Elements[i])
+					}
+				}
+			}
+		}
 	case ListPattern:
 		// Infer element type from subject
 		if subjectType != nil {

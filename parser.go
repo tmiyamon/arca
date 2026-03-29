@@ -299,7 +299,42 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 func (p *Parser) parseLetStmt() (Stmt, error) {
 	p.advance() // skip 'let'
 
-	// Check for destructuring: let [first, ..rest] = expr
+	// Check for tuple destructuring: let (x, y) = expr
+	if p.peek().Kind == TkLParen {
+		saved := p.pos
+		p.advance() // skip '('
+		var names []string
+		isTuplePat := true
+		for p.peek().Kind != TkRParen {
+			if p.peek().Kind == TkIdent {
+				names = append(names, p.advance().Lit)
+				if p.peek().Kind == TkComma {
+					p.advance()
+				}
+			} else {
+				isTuplePat = false
+				break
+			}
+		}
+		if isTuplePat && p.peek().Kind == TkRParen {
+			p.advance() // skip ')'
+			if p.peek().Kind == TkEq {
+				p.advance() // skip '='
+				value, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				var pats []Pattern
+				for _, n := range names {
+					pats = append(pats, BindPattern{Name: n})
+				}
+				return LetStmt{Pattern: TuplePattern{Elements: pats}, Value: value}, nil
+			}
+		}
+		p.pos = saved
+	}
+
+	// Check for list destructuring: let [first, ..rest] = expr
 	if p.peek().Kind == TkLBracket {
 		pat, err := p.parseListPattern()
 		if err != nil {
