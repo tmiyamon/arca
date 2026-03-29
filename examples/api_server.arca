@@ -1,7 +1,6 @@
 import go.fmt
 import go.net.http
-import go.database.sql
-import go.encoding.json
+import go.strconv
 
 // --- Domain Types ---
 
@@ -12,65 +11,68 @@ type User {
 type ApiError {
   NotFound(message: String)
   BadRequest(message: String)
-  Internal(message: String)
-}
-
-type ApiResponse {
-  Success(data: String)
-  Failure(error: ApiError)
 }
 
 // --- Response Handling ---
 
-fn send_response(w: http.ResponseWriter, response: ApiResponse) {
-  match response {
-    Success(data) -> {
-      w.WriteHeader(200)
-      w.Write(to_bytes(data))
-    }
-    Failure(error) -> {
-      match error {
-        NotFound(msg) -> {
-          w.WriteHeader(404)
-          w.Write(to_bytes(msg))
-        }
-        BadRequest(msg) -> {
-          w.WriteHeader(400)
-          w.Write(to_bytes(msg))
-        }
-        Internal(msg) -> {
-          w.WriteHeader(500)
-          w.Write(to_bytes(msg))
-        }
-      }
-    }
+fn send_json(w: http.ResponseWriter, status: Int, body: String) {
+  w.Header().Set("Content-Type", "application/json")
+  w.WriteHeader(status)
+  w.Write(to_bytes(body))
+}
+
+fn send_error(w: http.ResponseWriter, err: ApiError) {
+  match err {
+    NotFound(msg) -> send_json(w, 404, "{\"error\": \"${msg}\"}")
+    BadRequest(msg) -> send_json(w, 400, "{\"error\": \"${msg}\"}")
   }
 }
 
-// --- Handlers ---
+// --- Data ---
 
-fn handle_get_user(db: *sql.DB, w: http.ResponseWriter, r: *http.Request) {
-  let result = find_user(db, 1)
-  match result {
-    Ok(user) -> send_response(w, Success(data: user_to_json(user)))
-    Error(err) -> send_response(w, Failure(error: err))
+fn find_user_by_id(id: Int) -> Result[User, ApiError] {
+  match id {
+    1 -> Ok(User(id: 1, name: "Alice", email: "alice@example.com"))
+    2 -> Ok(User(id: 2, name: "Bob", email: "bob@example.com"))
+    _ -> Error(NotFound(message: "user not found"))
   }
-}
-
-// --- DB ---
-
-fn find_user(db: *sql.DB, id: Int) -> Result[User, ApiError] {
-  let row = db.QueryRow("SELECT id, name, email FROM users WHERE id = ?", id)
-  let user = scan_user(row)?
-  Ok(user)
 }
 
 fn user_to_json(user: User) -> String {
   "{\"id\": ${user.id}, \"name\": \"${user.name}\", \"email\": \"${user.email}\"}"
 }
 
+// --- Handlers ---
+
+fn handle_user(w: http.ResponseWriter, r: *http.Request) {
+  let id_str = r.URL.Query().Get("id")
+  let id = parse_id(id_str)
+  match id {
+    Ok(n) -> {
+      let user_result = find_user_by_id(n)
+      match user_result {
+        Ok(user) -> send_json(w, 200, user_to_json(user))
+        Error(err) -> send_error(w, err)
+      }
+    }
+    Error(err) -> send_error(w, BadRequest(message: "invalid id"))
+  }
+}
+
+fn parse_id(s: String) -> Result[Int, error] {
+  let n = strconv.Atoi(s)?
+  Ok(n)
+}
+
+fn handle_health(w: http.ResponseWriter, r: *http.Request) {
+  send_json(w, 200, "{\"status\": \"ok\"}")
+}
+
 // --- Main ---
 
 fn main() {
-  fmt.Println("API Server starting on :8080")
+  http.HandleFunc("/user", handle_user)
+  http.HandleFunc("/health", handle_health)
+  fmt.Println("Listening on :8080")
+  http.ListenAndServe(":8080", nil)
 }

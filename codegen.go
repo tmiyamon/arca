@@ -432,6 +432,10 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		// Track builtin usage
 		if ident, ok := e.Fn.(Ident); ok {
 			switch ident.Name {
+			case "to_bytes":
+				if len(e.Args) == 1 {
+					return fmt.Sprintf("[]byte(%s)", cg.genExprStr(e.Args[0]))
+				}
 			case "map":
 				cg.usedBuiltins["map"] = true
 				args := make([]string, len(e.Args))
@@ -708,17 +712,22 @@ func (cg *CodeGen) genResultMatch(me MatchExpr, indent string, isReturn bool) {
 		if !ok {
 			continue
 		}
+		usedVars := collectUsedIdents(arm.Body)
 		if cp.Name == "Ok" {
 			cg.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
 			if len(cp.Fields) > 0 {
-				cg.writeln(fmt.Sprintf("%s\t%s := %s.Value", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+				if _, used := usedVars[cp.Fields[0].Binding]; used {
+					cg.writeln(fmt.Sprintf("%s\t%s := %s.Value", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+				}
 			}
 			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		}
 		if cp.Name == "Error" {
 			cg.writeln(fmt.Sprintf("%s} else {", indent))
 			if len(cp.Fields) > 0 {
-				cg.writeln(fmt.Sprintf("%s\t%s := %s.Err", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+				if _, used := usedVars[cp.Fields[0].Binding]; used {
+					cg.writeln(fmt.Sprintf("%s\t%s := %s.Err", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+				}
 			}
 			cg.genArmBody(arm.Body, indent+"\t", isReturn)
 		}
@@ -869,6 +878,11 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 		return
 	}
 
+	if cg.isLiteralMatch(me) {
+		cg.genLiteralMatch(me, indent, isReturn)
+		return
+	}
+
 	if cg.isEnumMatch(me) {
 		cg.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
 		for _, arm := range me.Arms {
@@ -897,9 +911,23 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 			variantName := typeName + pat.Name
 			cg.writeln(fmt.Sprintf("%scase %s:", indent, variantName))
 			usedVars := collectUsedIdents(arm.Body)
-			for _, fp := range pat.Fields {
+			// Look up actual field names from type definition
+			var ctorFields []Field
+			if td, ok := cg.types[typeName]; ok {
+				for _, c := range td.Constructors {
+					if c.Name == pat.Name {
+						ctorFields = c.Fields
+						break
+					}
+				}
+			}
+			for i, fp := range pat.Fields {
 				if _, used := usedVars[fp.Binding]; used {
-					cg.writeln(fmt.Sprintf("%s\t%s := v.%s", indent, snakeToCamel(fp.Binding), capitalize(fp.Name)))
+					goFieldName := capitalize(fp.Name)
+					if i < len(ctorFields) {
+						goFieldName = capitalize(ctorFields[i].Name)
+					}
+					cg.writeln(fmt.Sprintf("%s\t%s := v.%s", indent, snakeToCamel(fp.Binding), goFieldName))
 				}
 			}
 			cg.genArmBody(arm.Body, indent+"\t", isReturn)
@@ -916,6 +944,34 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	if isReturn {
 		cg.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
 	}
+}
+
+func (cg *CodeGen) isLiteralMatch(me MatchExpr) bool {
+	for _, arm := range me.Arms {
+		if _, ok := arm.Pattern.(LitPattern); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (cg *CodeGen) genLiteralMatch(me MatchExpr, indent string, isReturn bool) {
+	subject := cg.genExprStr(me.Subject)
+	cg.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
+	for _, arm := range me.Arms {
+		switch p := arm.Pattern.(type) {
+		case LitPattern:
+			cg.writeln(fmt.Sprintf("%scase %s:", indent, cg.genExprStr(p.Expr)))
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
+		case WildcardPattern:
+			cg.writeln(fmt.Sprintf("%sdefault:", indent))
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
+		case BindPattern:
+			cg.writeln(fmt.Sprintf("%sdefault:", indent))
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
+		}
+	}
+	cg.writeln(fmt.Sprintf("%s}", indent))
 }
 
 func (cg *CodeGen) isEnumMatch(me MatchExpr) bool {
