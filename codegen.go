@@ -12,6 +12,7 @@ type CodeGen struct {
 	currentRetType Type
 	usedBuiltins   map[string]bool   // track which builtins are used
 	fnNames        map[string]string  // arca name -> go name (for pub functions)
+	functions      map[string]FnDecl // arca name -> fn decl
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -19,6 +20,7 @@ func NewCodeGen(prog *Program) *CodeGen {
 		types:        make(map[string]TypeDecl),
 		usedBuiltins: make(map[string]bool),
 		fnNames:      make(map[string]string),
+		functions:    make(map[string]FnDecl),
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -27,6 +29,7 @@ func NewCodeGen(prog *Program) *CodeGen {
 		case ImportDecl:
 			cg.imports = append(cg.imports, d.Path)
 		case FnDecl:
+			cg.functions[d.Name] = d
 			if d.Public {
 				cg.fnNames[d.Name] = snakeToPascal(d.Name)
 			} else if strings.Contains(d.Name, "_") {
@@ -71,6 +74,21 @@ func (cg *CodeGen) Generate(prog *Program) string {
 }
 
 func (cg *CodeGen) genBuiltins() {
+	if cg.usedBuiltins["option"] {
+		cg.writeln("type Option_[T any] struct {")
+		cg.writeln("\tValue T")
+		cg.writeln("\tValid bool")
+		cg.writeln("}")
+		cg.writeln("")
+		cg.writeln("func Some_[T any](v T) Option_[T] {")
+		cg.writeln("\treturn Option_[T]{Value: v, Valid: true}")
+		cg.writeln("}")
+		cg.writeln("")
+		cg.writeln("func None_[T any]() Option_[T] {")
+		cg.writeln("\treturn Option_[T]{}")
+		cg.writeln("}")
+		cg.writeln("")
+	}
 	if cg.usedBuiltins["map"] {
 		cg.writeln("func Map_[T any, U any](list []T, f func(T) U) []U {")
 		cg.writeln("\tresult := make([]U, len(list))")
@@ -209,7 +227,8 @@ func (cg *CodeGen) goType(t Type) string {
 			return "[]interface{}"
 		case "Option":
 			if len(tt.Params) > 0 {
-				return "*" + cg.goType(tt.Params[0])
+				cg.usedBuiltins["option"] = true
+				return "Option_[" + cg.goType(tt.Params[0]) + "]"
 			}
 			return "interface{}"
 		case "Result":
@@ -285,6 +304,7 @@ func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
 				return
 			}
 		}
+		// Some/None handled by genExprStr
 		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
 	default:
 		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
@@ -340,6 +360,11 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		}
 		return "false"
 	case Ident:
+		// Built-in constants
+		if e.Name == "None" {
+			cg.usedBuiltins["option"] = true
+			return "None_[any]()"
+		}
 		if typeName := cg.findTypeName(e.Name); typeName != "" {
 			if td, ok := cg.types[typeName]; ok && isEnum(td) {
 				return fmt.Sprintf("%s%s", typeName, e.Name)
@@ -382,12 +407,22 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		}
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {
-			args[i] = cg.genExprStr(a)
+			args[i] = cg.genExprWithContext(a, e, i)
 		}
 		return fmt.Sprintf("%s(%s)", cg.genExprStr(e.Fn), strings.Join(args, ", "))
 	case FieldAccess:
 		return fmt.Sprintf("%s.%s", cg.genExprStr(e.Expr), capitalize(e.Field))
 	case ConstructorCall:
+		// Built-in Option constructors
+		if e.Name == "Some" && len(e.Fields) == 1 {
+			cg.usedBuiltins["option"] = true
+			val := cg.genExprStr(e.Fields[0].Value)
+			return fmt.Sprintf("Some_(%s)", val)
+		}
+		if e.Name == "None" {
+			cg.usedBuiltins["option"] = true
+			return "None_[any]()"
+		}
 		return cg.genConstructorCall(e)
 	case Lambda:
 		return cg.genLambda(e)
@@ -400,6 +435,22 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 	default:
 		return "/* unsupported expr */"
 	}
+}
+
+func (cg *CodeGen) genExprWithContext(expr Expr, call FnCall, argIndex int) string {
+	// Resolve None type from function parameter
+	if ident, ok := expr.(Ident); ok && ident.Name == "None" {
+		if fnIdent, ok := call.Fn.(Ident); ok {
+			if fn, ok := cg.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
+				paramType := fn.Params[argIndex].Type
+				if nt, ok := paramType.(NamedType); ok && nt.Name == "Option" && len(nt.Params) > 0 {
+					cg.usedBuiltins["option"] = true
+					return fmt.Sprintf("None_[%s]()", cg.goType(nt.Params[0]))
+				}
+			}
+		}
+	}
+	return cg.genExprStr(expr)
 }
 
 func (cg *CodeGen) genStringInterp(si StringInterp) string {
@@ -495,8 +546,54 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 
 // --- Match Expression ---
 
+func (cg *CodeGen) isOptionMatch(me MatchExpr) bool {
+	for _, arm := range me.Arms {
+		if cp, ok := arm.Pattern.(ConstructorPattern); ok {
+			if cp.Name == "Some" || cp.Name == "None" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (cg *CodeGen) genOptionMatch(me MatchExpr, indent string, isReturn bool) {
+	subject := cg.genExprStr(me.Subject)
+	for _, arm := range me.Arms {
+		cp, ok := arm.Pattern.(ConstructorPattern)
+		if !ok {
+			continue
+		}
+		if cp.Name == "Some" {
+			cg.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
+			if len(cp.Fields) > 0 {
+				cg.writeln(fmt.Sprintf("%s\t%s := %s.Value", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+			}
+			if isReturn {
+				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
+			} else {
+				cg.writeln(fmt.Sprintf("%s\t%s", indent, cg.genExprStr(arm.Body)))
+			}
+		}
+		if cp.Name == "None" {
+			cg.writeln(fmt.Sprintf("%s} else {", indent))
+			if isReturn {
+				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
+			} else {
+				cg.writeln(fmt.Sprintf("%s\t%s", indent, cg.genExprStr(arm.Body)))
+			}
+		}
+	}
+	cg.writeln(fmt.Sprintf("%s}", indent))
+}
+
 func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	subject := cg.genExprStr(me.Subject)
+
+	if cg.isOptionMatch(me) {
+		cg.genOptionMatch(me, indent, isReturn)
+		return
+	}
 
 	if cg.isEnumMatch(me) {
 		cg.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
