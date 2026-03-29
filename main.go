@@ -58,22 +58,91 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 }
 
-func transpile(inputPath string) (string, error) {
-	data, err := os.ReadFile(inputPath)
+func parseFile(path string) (*Program, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("error reading file: %w", err)
+		return nil, fmt.Errorf("error reading file %s: %w", path, err)
 	}
-
 	lexer := NewLexer(string(data))
 	tokens, err := lexer.Tokenize()
 	if err != nil {
-		return "", fmt.Errorf("lexer error: %w", err)
+		return nil, fmt.Errorf("%s: lexer error: %w", path, err)
 	}
-
 	parser := NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		return "", fmt.Errorf("parse error: %w", err)
+		return nil, fmt.Errorf("%s: parse error: %w", path, err)
+	}
+	return prog, nil
+}
+
+func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*Program, error) {
+	dir := filepath.Dir(inputPath)
+	merged := &Program{}
+
+	for _, decl := range prog.Decls {
+		imp, ok := decl.(ImportDecl)
+		if !ok {
+			merged.Decls = append(merged.Decls, decl)
+			continue
+		}
+
+		// Go imports pass through
+		if strings.HasPrefix(imp.Path, "go/") {
+			merged.Decls = append(merged.Decls, decl)
+			continue
+		}
+
+		// Arca module import
+		modulePath := filepath.Join(dir, strings.ReplaceAll(imp.Path, ".", "/") + ".arca")
+		if loaded[modulePath] {
+			continue
+		}
+		loaded[modulePath] = true
+
+		modProg, err := parseFile(modulePath)
+		if err != nil {
+			return nil, err
+		}
+
+		// Recursively resolve imports in the imported module
+		modProg, err = resolveImports(modulePath, modProg, loaded)
+		if err != nil {
+			return nil, err
+		}
+
+		// Only include pub declarations from imported modules
+		for _, d := range modProg.Decls {
+			switch dd := d.(type) {
+			case FnDecl:
+				if dd.Public {
+					merged.Decls = append(merged.Decls, d)
+				}
+			case TypeDecl:
+				// Types are always visible (needed for type checking)
+				merged.Decls = append(merged.Decls, d)
+			case ImportDecl:
+				// Pass through Go imports from imported modules
+				if strings.HasPrefix(dd.Path, "go/") {
+					merged.Decls = append(merged.Decls, d)
+				}
+			}
+		}
+	}
+
+	return merged, nil
+}
+
+func transpile(inputPath string) (string, error) {
+	prog, err := parseFile(inputPath)
+	if err != nil {
+		return "", err
+	}
+
+	loaded := map[string]bool{inputPath: true}
+	prog, err = resolveImports(inputPath, prog, loaded)
+	if err != nil {
+		return "", err
 	}
 
 	checker := NewChecker()

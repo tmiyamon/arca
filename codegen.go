@@ -10,17 +10,26 @@ type CodeGen struct {
 	types          map[string]TypeDecl
 	imports        []string
 	currentRetType Type
-	usedBuiltins   map[string]bool // track which builtins are used
+	usedBuiltins   map[string]bool   // track which builtins are used
+	fnNames        map[string]string  // arca name -> go name (for pub functions)
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
-	cg := &CodeGen{types: make(map[string]TypeDecl), usedBuiltins: make(map[string]bool)}
+	cg := &CodeGen{
+		types:        make(map[string]TypeDecl),
+		usedBuiltins: make(map[string]bool),
+		fnNames:      make(map[string]string),
+	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
 			cg.types[d.Name] = d
 		case ImportDecl:
 			cg.imports = append(cg.imports, d.Path)
+		case FnDecl:
+			if d.Public {
+				cg.fnNames[d.Name] = snakeToPascal(d.Name)
+			}
 		}
 	}
 	return cg
@@ -331,6 +340,9 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 			if td, ok := cg.types[typeName]; ok && isEnum(td) {
 				return fmt.Sprintf("%s%s", typeName, e.Name)
 			}
+		}
+		if goName, ok := cg.fnNames[e.Name]; ok {
+			return goName
 		}
 		return e.Name
 	case FnCall:
