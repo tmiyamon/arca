@@ -76,6 +76,15 @@ func transpile(inputPath string) (string, error) {
 		return "", fmt.Errorf("parse error: %w", err)
 	}
 
+	checker := NewChecker()
+	if errs := checker.Check(prog); len(errs) > 0 {
+		var msgs []string
+		for _, e := range errs {
+			msgs = append(msgs, e.Message)
+		}
+		return "", fmt.Errorf("type errors:\n  %s", strings.Join(msgs, "\n  "))
+	}
+
 	codegen := NewCodeGen(prog)
 	return codegen.Generate(prog), nil
 }
