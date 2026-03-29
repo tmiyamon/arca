@@ -1,0 +1,11 @@
+import go.fmt
+
+type Pair[A, B] {
+  Pair(first: A, second: B)
+}
+
+fn main() {
+  let p = Pair(first: 1, second: "hello")
+  fmt.Println(p.first)
+  fmt.Println(p.second)
+}

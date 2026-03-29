@@ -145,6 +145,24 @@ func (cg *CodeGen) genTypeDecl(td TypeDecl) {
 	}
 }
 
+func goTypeParams(td TypeDecl) string {
+	if len(td.Params) == 0 {
+		return ""
+	}
+	params := make([]string, len(td.Params))
+	for i, p := range td.Params {
+		params[i] = p + " any"
+	}
+	return "[" + strings.Join(params, ", ") + "]"
+}
+
+func goTypeParamsNames(td TypeDecl) string {
+	if len(td.Params) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(td.Params, ", ") + "]"
+}
+
 func isEnum(td TypeDecl) bool {
 	for _, c := range td.Constructors {
 		if len(c.Fields) > 0 {
@@ -181,7 +199,7 @@ func (cg *CodeGen) genEnumType(td TypeDecl) {
 
 func (cg *CodeGen) genStructType(td TypeDecl) {
 	ctor := td.Constructors[0]
-	cg.writeln(fmt.Sprintf("type %s struct {", td.Name))
+	cg.writeln(fmt.Sprintf("type %s%s struct {", td.Name, goTypeParams(td)))
 	for _, f := range ctor.Fields {
 		cg.writeln(fmt.Sprintf("\t%s %s", capitalize(f.Name), cg.goType(f.Type)))
 	}
@@ -189,16 +207,17 @@ func (cg *CodeGen) genStructType(td TypeDecl) {
 }
 
 func (cg *CodeGen) genSumType(td TypeDecl) {
-	cg.writeln(fmt.Sprintf("type %s interface {", td.Name))
+	tp := goTypeParams(td)
+	cg.writeln(fmt.Sprintf("type %s%s interface {", td.Name, tp))
 	cg.writeln(fmt.Sprintf("\tis%s()", td.Name))
 	cg.writeln("}")
 	cg.writeln("")
 	for _, c := range td.Constructors {
 		variantName := td.Name + c.Name
 		if len(c.Fields) == 0 {
-			cg.writeln(fmt.Sprintf("type %s struct{}", variantName))
+			cg.writeln(fmt.Sprintf("type %s%s struct{}", variantName, tp))
 		} else {
-			cg.writeln(fmt.Sprintf("type %s struct {", variantName))
+			cg.writeln(fmt.Sprintf("type %s%s struct {", variantName, tp))
 			for _, f := range c.Fields {
 				cg.writeln(fmt.Sprintf("\t%s %s", capitalize(f.Name), cg.goType(f.Type)))
 			}
@@ -612,7 +631,16 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 						fields[i] = cg.genExprStr(f.Value)
 					}
 				}
-				return fmt.Sprintf("%s{%s}", goName, strings.Join(fields, ", "))
+				// Add type parameters if generic
+				typeArgs := ""
+				if len(td.Params) > 0 {
+					args := make([]string, len(cc.Fields))
+					for i, f := range cc.Fields {
+						args[i] = cg.inferGoType(f.Value)
+					}
+					typeArgs = "[" + strings.Join(args, ", ") + "]"
+				}
+				return fmt.Sprintf("%s%s{%s}", goName, typeArgs, strings.Join(fields, ", "))
 			}
 		}
 	}

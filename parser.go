@@ -99,6 +99,23 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Type parameters: type Pair[A, B] { ... }
+	var params []string
+	if p.peek().Kind == TkLBracket {
+		p.advance() // skip '['
+		for p.peek().Kind != TkRBracket {
+			tok := p.advance()
+			if tok.Kind != TkUpperIdent && tok.Kind != TkIdent {
+				return nil, fmt.Errorf("%d:%d: expected type parameter, got %s", tok.Line, tok.Col, tok)
+			}
+			params = append(params, tok.Lit)
+			if p.peek().Kind == TkComma {
+				p.advance()
+			}
+		}
+		p.advance() // skip ']'
+	}
+
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
@@ -111,7 +128,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		constructors = append(constructors, ctor)
 	}
 	p.advance() // skip '}'
-	return TypeDecl{Name: name.Lit, Constructors: constructors}, nil
+	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors}, nil
 }
 
 func (p *Parser) parseConstructor() (Constructor, error) {

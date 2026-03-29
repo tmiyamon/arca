@@ -41,12 +41,13 @@ func (s *Scope) Lookup(name string) (Type, bool) {
 // --- Checker ---
 
 type Checker struct {
-	types     map[string]TypeDecl
-	ctorTypes map[string]string // constructor name -> type name
-	functions map[string]FnDecl
-	errors    []CheckError
-	scope     *Scope
-	currentFn *FnDecl
+	types      map[string]TypeDecl
+	ctorTypes  map[string]string // constructor name -> type name
+	functions  map[string]FnDecl
+	errors     []CheckError
+	scope      *Scope
+	currentFn  *FnDecl
+	typeParams map[string]bool // currently in-scope type parameters
 }
 
 func NewChecker() *Checker {
@@ -71,6 +72,8 @@ func (c *Checker) Check(prog *Program) []CheckError {
 			c.functions[d.Name] = d
 		}
 	}
+
+	registerTypeParams(c.types)
 
 	// Pass 2: check everything
 	for _, decl := range prog.Decls {
@@ -104,6 +107,26 @@ func (c *Checker) popScope() {
 
 // --- Type Comparison ---
 
+// allTypeParams collects all type parameter names from all type declarations.
+// Used to check if a name is a type parameter in typesEqual.
+var allTypeParamNames map[string]bool
+
+func registerTypeParams(types map[string]TypeDecl) {
+	allTypeParamNames = make(map[string]bool)
+	for _, td := range types {
+		for _, p := range td.Params {
+			allTypeParamNames[p] = true
+		}
+	}
+}
+
+func isTypeParam(name string) bool {
+	if allTypeParamNames == nil {
+		return false
+	}
+	return allTypeParamNames[name]
+}
+
 func typesEqual(a, b Type) bool {
 	if a == nil || b == nil {
 		return false
@@ -111,6 +134,10 @@ func typesEqual(a, b Type) bool {
 	na, aOk := a.(NamedType)
 	nb, bOk := b.(NamedType)
 	if aOk && bOk {
+		// Type parameter matches anything
+		if isTypeParam(na.Name) || isTypeParam(nb.Name) {
+			return true
+		}
 		if na.Name != nb.Name {
 			return false
 		}
@@ -277,11 +304,18 @@ func (c *Checker) inferType(expr Expr) Type {
 // --- Type Declaration Checks ---
 
 func (c *Checker) checkTypeDecl(td TypeDecl) {
+	// Register type parameters during this check
+	prev := c.typeParams
+	c.typeParams = make(map[string]bool)
+	for _, p := range td.Params {
+		c.typeParams[p] = true
+	}
 	for _, ctor := range td.Constructors {
 		for _, field := range ctor.Fields {
 			c.checkTypeExists(field.Type)
 		}
 	}
+	c.typeParams = prev
 }
 
 func (c *Checker) checkTypeExists(t Type) {
@@ -306,6 +340,9 @@ func (c *Checker) isKnownType(name string) bool {
 		"List": true, "Option": true, "Result": true,
 	}
 	if builtins[name] {
+		return true
+	}
+	if c.typeParams != nil && c.typeParams[name] {
 		return true
 	}
 	_, ok := c.types[name]
