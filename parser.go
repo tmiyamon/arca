@@ -173,11 +173,26 @@ func (p *Parser) parseType() (Type, error) {
 	if p.peek().Kind == TkLParen {
 		return p.parseTupleType()
 	}
+	// Pointer type: *T
+	if p.peek().Kind == TkStar {
+		p.advance()
+		inner, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		return PointerType{Inner: inner}, nil
+	}
 	tok := p.advance()
 	pos := Pos{tok.Line, tok.Col}
 	switch tok.Kind {
-	case TkUpperIdent:
+	case TkUpperIdent, TkIdent:
 		name := tok.Lit
+		// Qualified type: module.Type
+		for p.peek().Kind == TkDot {
+			p.advance()
+			next := p.advance()
+			name += "." + next.Lit
+		}
 		if p.peek().Kind == TkLBracket {
 			p.advance() // skip '['
 			var params []Type
@@ -195,8 +210,6 @@ func (p *Parser) parseType() (Type, error) {
 			return NamedType{Pos: pos, Name: name, Params: params}, nil
 		}
 		return NamedType{Pos: pos, Name: name}, nil
-	case TkIdent:
-		return NamedType{Pos: pos, Name: tok.Lit}, nil
 	default:
 		return nil, fmt.Errorf("%d:%d: expected type, got %s", tok.Line, tok.Col, tok)
 	}

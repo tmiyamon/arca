@@ -91,6 +91,8 @@ func (f *Formatter) formatType(t Type) string {
 			return tt.Name + "[" + strings.Join(params, ", ") + "]"
 		}
 		return tt.Name
+	case PointerType:
+		return "*" + f.formatType(tt.Inner)
 	case TupleType:
 		elems := make([]string, len(tt.Elements))
 		for i, e := range tt.Elements {

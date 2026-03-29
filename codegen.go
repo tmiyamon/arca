@@ -259,6 +259,8 @@ func (cg *CodeGen) goType(t Type) string {
 		default:
 			return tt.Name
 		}
+	case PointerType:
+		return "*" + cg.goType(tt.Inner)
 	case TupleType:
 		// Generate a tuple struct or use a generic approach
 		// For now, use a simple struct

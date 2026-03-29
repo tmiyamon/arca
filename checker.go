@@ -327,6 +327,8 @@ func (c *Checker) checkTypeExists(t Type) {
 		for _, param := range tt.Params {
 			c.checkTypeExists(param)
 		}
+	case PointerType:
+		c.checkTypeExists(tt.Inner)
 	case TupleType:
 		for _, elem := range tt.Elements {
 			c.checkTypeExists(elem)
@@ -343,6 +345,10 @@ func (c *Checker) isKnownType(name string) bool {
 		return true
 	}
 	if c.typeParams != nil && c.typeParams[name] {
+		return true
+	}
+	// Qualified types (Go FFI like http.Request) are always allowed
+	if strings.Contains(name, ".") {
 		return true
 	}
 	_, ok := c.types[name]

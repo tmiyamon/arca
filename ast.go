@@ -19,12 +19,17 @@ type NamedType struct {
 	Params []Type
 }
 
+type PointerType struct {
+	Inner Type
+}
+
 type TupleType struct {
 	Elements []Type
 }
 
-func (NamedType) typeNode()  {}
-func (TupleType) typeNode() {}
+func (NamedType) typeNode()    {}
+func (PointerType) typeNode()  {}
+func (TupleType) typeNode()    {}
 
 // --- Expressions ---
 
