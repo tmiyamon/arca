@@ -15,7 +15,7 @@ fn color_name(c: Color) -> String {
 }
 
 fn main() {
-  fmt.Println("Hello from Goux!")
+  fmt.Println("Hello from Arca!")
   fmt.Println(color_name(Red))
   fmt.Println(color_name(Blue))
 }

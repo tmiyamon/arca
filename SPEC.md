@@ -1,4 +1,4 @@
-# Goux Language Specification v0.2
+# Arca Language Specification v0.2
 
 A statically typed language with ML-level type safety that compiles to Go.
 
@@ -8,7 +8,7 @@ A statically typed language with ML-level type safety that compiles to Go.
 - Familiar syntax (Rust-influenced, common conventions)
 - Go ecosystem and runtime (single binary, fast startup, goroutines)
 - Immutable by default
-- Go types are opaque — Goux guarantees its own types, not Go's
+- Go types are opaque — Arca guarantees its own types, not Go's
 
 ## Syntax Summary
 
@@ -143,10 +143,10 @@ pub fn find_user(id: Int) -> Result[User, Error] {
 - File name = module name
 
 ```
-// user.gx
+// user.arca
 pub fn find(id: Int) -> Result[User, Error] { ... }
 
-// main.gx
+// main.arca
 import user
 let u = user.find(1)
 ```
@@ -154,7 +154,7 @@ let u = user.find(1)
 ### Imports
 
 ```
-// Goux modules
+// Arca modules
 import user
 import order.item
 
@@ -191,15 +191,15 @@ let file = os.Open("data.txt")?
 
 **Return type conversion (automatic):**
 
-| Go return type | Goux type |
+| Go return type | Arca type |
 |----------------|-----------|
 | (T, error) | Result[T, Error] |
 | (T, bool) | Option[T] |
 | Other multi-return | Tuple |
 
 **Mutability boundary:**
-- Goux-defined types are fully immutable (language-guaranteed)
-- Go types are opaque — Goux does not guarantee their immutability
+- Arca-defined types are fully immutable (language-guaranteed)
+- Go types are opaque — Arca does not guarantee their immutability
 - Go developers are expected to understand Go's mutation semantics
 
 ### Side Effects
@@ -234,4 +234,4 @@ Run with `go test` on the generated Go code.
 
 ### File Extension
 
-`.gx`
+`.arca`

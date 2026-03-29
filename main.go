@@ -18,13 +18,13 @@ func main() {
 	switch cmd {
 	case "run":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: goux run <file.gx>")
+			fmt.Fprintln(os.Stderr, "Usage: arca run <file.arca>")
 			os.Exit(1)
 		}
 		os.Exit(runCmd(os.Args[2]))
 	case "build":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: goux build <file.gx> [-o output]")
+			fmt.Fprintln(os.Stderr, "Usage: arca build <file.arca> [-o output]")
 			os.Exit(1)
 		}
 		output := ""
@@ -34,13 +34,13 @@ func main() {
 		os.Exit(buildCmd(os.Args[2], output))
 	case "emit":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: goux emit <file.gx>")
+			fmt.Fprintln(os.Stderr, "Usage: arca emit <file.arca>")
 			os.Exit(1)
 		}
 		os.Exit(emitCmd(os.Args[2]))
 	default:
 		// Backwards compat: if arg looks like a file, treat as emit
-		if strings.HasSuffix(cmd, ".gx") {
+		if strings.HasSuffix(cmd, ".arca") {
 			os.Exit(emitCmd(cmd))
 		}
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", cmd)
@@ -50,12 +50,12 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: goux <command> [arguments]")
+	fmt.Fprintln(os.Stderr, "Usage: arca <command> [arguments]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  run   <file.gx>           Transpile and run")
-	fmt.Fprintln(os.Stderr, "  build <file.gx> [-o out]   Transpile and compile to binary")
-	fmt.Fprintln(os.Stderr, "  emit  <file.gx>            Output generated Go code")
+	fmt.Fprintln(os.Stderr, "  run   <file.arca>           Transpile and run")
+	fmt.Fprintln(os.Stderr, "  build <file.arca> [-o out]   Transpile and compile to binary")
+	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 }
 
 func transpile(inputPath string) (string, error) {
@@ -81,7 +81,7 @@ func transpile(inputPath string) (string, error) {
 }
 
 func writeTempGo(goCode string) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "goux-*")
+	dir, err := os.MkdirTemp("", "arca-*")
 	if err != nil {
 		return "", nil, err
 	}
@@ -147,7 +147,7 @@ func buildCmd(inputPath string, outputPath string) int {
 	defer cleanup()
 
 	if outputPath == "" {
-		base := strings.TrimSuffix(filepath.Base(inputPath), ".gx")
+		base := strings.TrimSuffix(filepath.Base(inputPath), ".arca")
 		outputPath = base
 	}
 
