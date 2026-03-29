@@ -80,19 +80,18 @@ func transpile(inputPath string) (string, error) {
 	return codegen.Generate(prog), nil
 }
 
-func writeTempGo(goCode string) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "arca-*")
-	if err != nil {
-		return "", nil, err
+func writeBuildGo(inputPath string, goCode string) (string, error) {
+	dir := filepath.Join(filepath.Dir(inputPath), "build")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
 	}
-	cleanup := func() { os.RemoveAll(dir) }
 
-	goFile := filepath.Join(dir, "main.go")
+	base := strings.TrimSuffix(filepath.Base(inputPath), ".arca")
+	goFile := filepath.Join(dir, base+".go")
 	if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
-		cleanup()
-		return "", nil, err
+		return "", err
 	}
-	return goFile, cleanup, nil
+	return goFile, nil
 }
 
 func emitCmd(inputPath string) int {
@@ -112,12 +111,11 @@ func runCmd(inputPath string) int {
 		return 1
 	}
 
-	goFile, cleanup, err := writeTempGo(goCode)
+	goFile, err := writeBuildGo(inputPath, goCode)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating temp file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error writing build file: %v\n", err)
 		return 1
 	}
-	defer cleanup()
 
 	cmd := exec.Command("go", "run", goFile)
 	cmd.Stdout = os.Stdout
@@ -139,12 +137,11 @@ func buildCmd(inputPath string, outputPath string) int {
 		return 1
 	}
 
-	goFile, cleanup, err := writeTempGo(goCode)
+	goFile, err := writeBuildGo(inputPath, goCode)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating temp file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error writing build file: %v\n", err)
 		return 1
 	}
-	defer cleanup()
 
 	if outputPath == "" {
 		base := strings.TrimSuffix(filepath.Base(inputPath), ".arca")
