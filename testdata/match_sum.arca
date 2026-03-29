@@ -1,9 +1,9 @@
-type Result {
+type Response {
   Ok(value: String)
   Err(message: String)
 }
 
-fn unwrap(r: Result) -> String {
+fn unwrap(r: Response) -> String {
   match r {
     Ok(value) -> value
     Err(message) -> message

@@ -45,8 +45,22 @@ const (
 	TkDotDot // ..
 	TkEq
 	TkUnderscore
-	TkPipe    // |>
+	TkPipe     // |>
 	TkQuestion // ?
+	TkPlus     // +
+	TkMinus    // - (also used in ->)
+	TkStar     // *
+	TkSlash    // /
+	TkPercent  // %
+	TkLt       // <
+	TkGt       // >
+	TkEqEq     // ==
+	TkNotEq    // !=
+	TkLtEq     // <=
+	TkGtEq     // >=
+	TkAnd      // &&
+	TkOr       // ||
+	TkBang     // !
 
 	TkEOF
 )
@@ -64,6 +78,9 @@ var tokenNames = map[TokenKind]string{
 	TkColon: ":", TkComma: ",", TkArrow: "->", TkFatArrow: "=>",
 	TkDot: ".", TkDotDot: "..", TkEq: "=", TkUnderscore: "_",
 	TkPipe: "|>", TkQuestion: "?",
+	TkPlus: "+", TkMinus: "-", TkStar: "*", TkSlash: "/", TkPercent: "%",
+	TkLt: "<", TkGt: ">", TkEqEq: "==", TkNotEq: "!=", TkLtEq: "<=", TkGtEq: ">=",
+	TkAnd: "&&", TkOr: "||", TkBang: "!",
 	TkEOF: "EOF",
 }
 
@@ -196,8 +213,55 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			if l.pos < len(l.input) && l.peek() == '>' {
 				l.advance()
 				tokens = append(tokens, Token{TkFatArrow, "=>", line, col})
+			} else if l.pos < len(l.input) && l.peek() == '=' {
+				l.advance()
+				tokens = append(tokens, Token{TkEqEq, "==", line, col})
 			} else {
 				tokens = append(tokens, Token{TkEq, "=", line, col})
+			}
+		case ch == '+':
+			l.advance()
+			tokens = append(tokens, Token{TkPlus, "+", line, col})
+		case ch == '*':
+			l.advance()
+			tokens = append(tokens, Token{TkStar, "*", line, col})
+		case ch == '%':
+			l.advance()
+			tokens = append(tokens, Token{TkPercent, "%", line, col})
+		case ch == '!':
+			l.advance()
+			if l.pos < len(l.input) && l.peek() == '=' {
+				l.advance()
+				tokens = append(tokens, Token{TkNotEq, "!=", line, col})
+			} else {
+				tokens = append(tokens, Token{TkBang, "!", line, col})
+			}
+		case ch == '<':
+			l.advance()
+			if l.pos < len(l.input) && l.peek() == '=' {
+				l.advance()
+				tokens = append(tokens, Token{TkLtEq, "<=", line, col})
+			} else {
+				tokens = append(tokens, Token{TkLt, "<", line, col})
+			}
+		case ch == '>':
+			l.advance()
+			if l.pos < len(l.input) && l.peek() == '=' {
+				l.advance()
+				tokens = append(tokens, Token{TkGtEq, ">=", line, col})
+			} else {
+				tokens = append(tokens, Token{TkGt, ">", line, col})
+			}
+		case ch == '/':
+			l.advance()
+			tokens = append(tokens, Token{TkSlash, "/", line, col})
+		case ch == '&':
+			l.advance()
+			if l.pos < len(l.input) && l.peek() == '&' {
+				l.advance()
+				tokens = append(tokens, Token{TkAnd, "&&", line, col})
+			} else {
+				return nil, fmt.Errorf("%d:%d: unexpected '&'", line, col)
 			}
 		case ch == '-':
 			l.advance()
@@ -205,7 +269,7 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 				l.advance()
 				tokens = append(tokens, Token{TkArrow, "->", line, col})
 			} else {
-				return nil, fmt.Errorf("%d:%d: unexpected '-'", line, col)
+				tokens = append(tokens, Token{TkMinus, "-", line, col})
 			}
 		case ch == '|':
 			l.advance()

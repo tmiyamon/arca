@@ -93,6 +93,12 @@ type RangeExpr struct {
 	End   Expr
 }
 
+type BinaryExpr struct {
+	Op    string
+	Left  Expr
+	Right Expr
+}
+
 func (IntLit) exprNode()          {}
 func (FloatLit) exprNode()        {}
 func (StringLit) exprNode()       {}
@@ -108,6 +114,7 @@ func (Lambda) exprNode()          {}
 func (TupleExpr) exprNode()       {}
 func (ForExpr) exprNode()         {}
 func (RangeExpr) exprNode()       {}
+func (BinaryExpr) exprNode()      {}
 
 // --- Patterns ---
 

@@ -330,10 +330,30 @@ func (p *Parser) parseForExpr() (Expr, error) {
 	return ForExpr{Binding: binding.Lit, Iter: iter, Body: body}, nil
 }
 
+func isBinaryOp(kind TokenKind) bool {
+	switch kind {
+	case TkPlus, TkMinus, TkStar, TkSlash, TkPercent,
+		TkEqEq, TkNotEq, TkLt, TkGt, TkLtEq, TkGtEq,
+		TkAnd, TkOr:
+		return true
+	}
+	return false
+}
+
 func (p *Parser) parseExpr() (Expr, error) {
 	expr, err := p.parsePrimaryExpr()
 	if err != nil {
 		return nil, err
+	}
+
+	// Binary operators
+	for isBinaryOp(p.peek().Kind) {
+		op := p.advance()
+		right, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		expr = BinaryExpr{Op: op.Lit, Left: expr, Right: right}
 	}
 
 	// ? operator

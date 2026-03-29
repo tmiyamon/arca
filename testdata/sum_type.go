@@ -11,7 +11,7 @@ func (ApiResponseSuccess) isApiResponse() {}
 
 type ApiResponseErrorResponse struct {
 	Message string
-	Code int64
+	Code int
 }
 func (ApiResponseErrorResponse) isApiResponse() {}
 

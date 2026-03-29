@@ -136,6 +136,9 @@ func (c *Checker) checkExpr(expr Expr) {
 			c.checkStmt(stmt)
 		}
 		c.checkExpr(e.Expr)
+	case BinaryExpr:
+		c.checkExpr(e.Left)
+		c.checkExpr(e.Right)
 	case Lambda:
 		c.checkExpr(e.Body)
 	case ForExpr:
@@ -164,6 +167,14 @@ func (c *Checker) checkStmt(stmt Stmt) {
 // --- Constructor Call Checks ---
 
 func (c *Checker) checkConstructorCall(cc ConstructorCall) {
+	// Built-in Result constructors
+	if cc.Name == "Ok" || cc.Name == "Error" || cc.Name == "Some" || cc.Name == "None" {
+		for _, fv := range cc.Fields {
+			c.checkExpr(fv.Value)
+		}
+		return
+	}
+
 	typeName, ok := c.ctorTypes[cc.Name]
 	if !ok {
 		c.addError("unknown constructor: %s", cc.Name)

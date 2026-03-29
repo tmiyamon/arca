@@ -6,9 +6,10 @@ import (
 )
 
 type CodeGen struct {
-	buf     strings.Builder
-	types   map[string]TypeDecl
-	imports []string
+	buf            strings.Builder
+	types          map[string]TypeDecl
+	imports        []string
+	currentRetType Type // return type of current function being generated
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -146,7 +147,7 @@ func (cg *CodeGen) goType(t Type) string {
 	case NamedType:
 		switch tt.Name {
 		case "Int":
-			return "int64"
+			return "int"
 		case "Float":
 			return "float64"
 		case "String":
@@ -163,6 +164,11 @@ func (cg *CodeGen) goType(t Type) string {
 				return "*" + cg.goType(tt.Params[0])
 			}
 			return "interface{}"
+		case "Result":
+			if len(tt.Params) > 0 {
+				return "(" + cg.goType(tt.Params[0]) + ", error)"
+			}
+			return "(interface{}, error)"
 		default:
 			return tt.Name
 		}
@@ -195,6 +201,7 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 		retType = " " + cg.goType(fd.ReturnType)
 	}
 
+	cg.currentRetType = fd.ReturnType
 	cg.writeln(fmt.Sprintf("func %s(%s)%s {", name, strings.Join(params, ", "), retType))
 	if fd.ReturnType != nil {
 		cg.genReturnExpr(fd.Body, "\t")
@@ -202,6 +209,7 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 		cg.genVoidBody(fd.Body, "\t")
 	}
 	cg.writeln("}")
+	cg.currentRetType = nil
 }
 
 func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
@@ -215,6 +223,19 @@ func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
 		if e.Expr != nil {
 			cg.genReturnExpr(e.Expr, indent)
 		}
+	case ConstructorCall:
+		if cg.currentRetType != nil && isResultType(cg.currentRetType) {
+			if e.Name == "Ok" && len(e.Fields) == 1 {
+				cg.writeln(fmt.Sprintf("%sreturn %s, nil", indent, cg.genExprStr(e.Fields[0].Value)))
+				return
+			}
+			if e.Name == "Error" && len(e.Fields) == 1 {
+				okType := resultOkType(cg.currentRetType)
+				cg.writeln(fmt.Sprintf("%sreturn %s, %s", indent, cg.goZeroValue(okType), cg.genExprStr(e.Fields[0].Value)))
+				return
+			}
+		}
+		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
 	default:
 		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
 	}
@@ -237,6 +258,11 @@ func (cg *CodeGen) genVoidBody(expr Expr, indent string) {
 func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 	switch s := stmt.(type) {
 	case LetStmt:
+		// Check for ? operator: let x = expr?
+		if call, ok := s.Value.(FnCall); ok && cg.isTriCall(call) {
+			cg.genTryLetStmt(s.Name, call.Args[0], indent)
+			return
+		}
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, s.Name, cg.genExprStr(s.Value)))
 	case ExprStmt:
 		switch e := s.Expr.(type) {
@@ -284,6 +310,8 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		return cg.genLambda(e)
 	case TupleExpr:
 		return cg.genTuple(e)
+	case BinaryExpr:
+		return fmt.Sprintf("%s %s %s", cg.genExprStr(e.Left), e.Op, cg.genExprStr(e.Right))
 	case RangeExpr:
 		return cg.genRange(e)
 	default:
@@ -462,6 +490,59 @@ func (cg *CodeGen) findTypeName(ctorName string) string {
 
 // --- Helpers ---
 
+func (cg *CodeGen) isTriCall(call FnCall) bool {
+	if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
+		return true
+	}
+	return false
+}
+
+func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
+	cg.writeln(fmt.Sprintf("%s%s, err := %s", indent, name, cg.genExprStr(expr)))
+	cg.writeln(fmt.Sprintf("%sif err != nil {", indent))
+	if cg.currentRetType != nil && isResultType(cg.currentRetType) {
+		okType := resultOkType(cg.currentRetType)
+		cg.writeln(fmt.Sprintf("%s\treturn %s, err", indent, cg.goZeroValue(okType)))
+	} else {
+		cg.writeln(fmt.Sprintf("%s\tpanic(err)", indent))
+	}
+	cg.writeln(fmt.Sprintf("%s}", indent))
+}
+
+func isResultType(t Type) bool {
+	if nt, ok := t.(NamedType); ok {
+		return nt.Name == "Result"
+	}
+	return false
+}
+
+func resultOkType(t Type) Type {
+	if nt, ok := t.(NamedType); ok && nt.Name == "Result" && len(nt.Params) > 0 {
+		return nt.Params[0]
+	}
+	return nil
+}
+
+func (cg *CodeGen) goZeroValue(t Type) string {
+	switch tt := t.(type) {
+	case NamedType:
+		switch tt.Name {
+		case "Int", "Float":
+			return "0"
+		case "String":
+			return `""`
+		case "Bool":
+			return "false"
+		case "List":
+			return "nil"
+		default:
+			return tt.Name + "{}"
+		}
+	default:
+		return "nil"
+	}
+}
+
 func capitalize(s string) string {
 	if len(s) == 0 {
 		return s
@@ -516,6 +597,9 @@ func collectIdents(expr Expr, used map[string]bool) {
 		for _, p := range e.Parts {
 			collectIdents(p, used)
 		}
+	case BinaryExpr:
+		collectIdents(e.Left, used)
+		collectIdents(e.Right, used)
 	case Lambda:
 		collectIdents(e.Body, used)
 	}

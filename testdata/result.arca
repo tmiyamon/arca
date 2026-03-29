@@ -1,0 +1,12 @@
+import go.fmt
+import go.strconv
+
+fn parse_and_double(s: String) -> Result[Int, String] {
+  let n = strconv.Atoi(s)?
+  Ok(n + n)
+}
+
+fn main() {
+  fmt.Println(parse_and_double("21"))
+  fmt.Println(parse_and_double("abc"))
+}

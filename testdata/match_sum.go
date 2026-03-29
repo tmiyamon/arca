@@ -1,26 +1,26 @@
 package main
 
-type Result interface {
-	isResult()
+type Response interface {
+	isResponse()
 }
 
-type ResultOk struct {
+type ResponseOk struct {
 	Value string
 }
-func (ResultOk) isResult() {}
+func (ResponseOk) isResponse() {}
 
-type ResultErr struct {
+type ResponseErr struct {
 	Message string
 }
-func (ResultErr) isResult() {}
+func (ResponseErr) isResponse() {}
 
 
-func unwrap(r Result) string {
+func unwrap(r Response) string {
 	switch v := r.(type) {
-	case ResultOk:
+	case ResponseOk:
 		value := v.Value
 		return value
-	case ResultErr:
+	case ResponseErr:
 		message := v.Message
 		return message
 	}
