@@ -1,0 +1,5 @@
+import go.fmt
+
+pub fn greet(name: String) -> String {
+  "Hello ${name}!"
+}

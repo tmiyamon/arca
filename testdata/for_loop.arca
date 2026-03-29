@@ -1,0 +1,7 @@
+import go.fmt
+
+fn print_numbers() {
+  for i in 0..5 {
+    fmt.Println(i)
+  }
+}

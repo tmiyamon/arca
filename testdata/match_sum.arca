@@ -1,0 +1,11 @@
+type Result {
+  Ok(value: String)
+  Err(message: String)
+}
+
+fn unwrap(r: Result) -> String {
+  match r {
+    Ok(value) -> value
+    Err(message) -> message
+  }
+}

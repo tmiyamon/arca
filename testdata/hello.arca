@@ -1,0 +1,21 @@
+import go.fmt
+
+type Color {
+  Red
+  Green
+  Blue
+}
+
+fn color_name(c: Color) -> String {
+  match c {
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
+  }
+}
+
+fn main() {
+  fmt.Println("Hello from Arca!")
+  fmt.Println(color_name(Red))
+  fmt.Println(color_name(Blue))
+}

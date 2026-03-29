@@ -1,0 +1,4 @@
+type ApiResponse {
+  Success(data: String)
+  ErrorResponse(message: String, code: Int)
+}
