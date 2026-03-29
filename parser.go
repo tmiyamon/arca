@@ -298,6 +298,23 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 
 func (p *Parser) parseLetStmt() (Stmt, error) {
 	p.advance() // skip 'let'
+
+	// Check for destructuring: let [first, ..rest] = expr
+	if p.peek().Kind == TkLBracket {
+		pat, err := p.parseListPattern()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(TkEq); err != nil {
+			return nil, err
+		}
+		value, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		return LetStmt{Pattern: pat, Value: value}, nil
+	}
+
 	name, err := p.expect(TkIdent)
 	if err != nil {
 		return nil, err

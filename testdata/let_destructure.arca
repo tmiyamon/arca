@@ -1,0 +1,13 @@
+import go.fmt
+
+fn main() {
+  let items = ["alice", "bob", "charlie"]
+  let [first, ..rest] = items
+  fmt.Println(first)
+  fmt.Println(rest)
+
+  let [a, b, c] = items
+  fmt.Println(a)
+  fmt.Println(b)
+  fmt.Println(c)
+}

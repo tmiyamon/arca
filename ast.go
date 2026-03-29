@@ -172,9 +172,10 @@ type Stmt interface {
 }
 
 type LetStmt struct {
-	Name  string
-	Type  Type // optional
-	Value Expr
+	Name    string  // simple binding
+	Pattern Pattern // nil for simple, non-nil for destructuring
+	Type    Type    // optional
+	Value   Expr
 }
 
 type ExprStmt struct {

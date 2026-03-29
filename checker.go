@@ -425,10 +425,16 @@ func (c *Checker) checkStmt(stmt Stmt) {
 	switch s := stmt.(type) {
 	case LetStmt:
 		c.checkExpr(s.Value)
-		// Infer and track variable type
-		t := c.inferType(s.Value)
-		if t != nil {
-			c.scope.Define(s.Name, t)
+		if s.Pattern != nil {
+			// Destructuring
+			valType := c.inferType(s.Value)
+			c.bindPatternVars(s.Pattern, valType)
+		} else {
+			// Simple binding
+			t := c.inferType(s.Value)
+			if t != nil {
+				c.scope.Define(s.Name, t)
+			}
 		}
 	case ExprStmt:
 		c.checkExpr(s.Expr)

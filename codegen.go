@@ -328,6 +328,11 @@ func (cg *CodeGen) genVoidBody(expr Expr, indent string) {
 func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 	switch s := stmt.(type) {
 	case LetStmt:
+		// Destructuring: let [first, ..rest] = expr
+		if s.Pattern != nil {
+			cg.genLetDestructure(s.Pattern, s.Value, indent)
+			return
+		}
 		// Check for ? operator: let x = expr?
 		if call, ok := s.Value.(FnCall); ok && cg.isTriCall(call) {
 			cg.genTryLetStmt(s.Name, call.Args[0], indent)
@@ -811,6 +816,26 @@ func (cg *CodeGen) findTypeName(ctorName string) string {
 }
 
 // --- Helpers ---
+
+var destructureCounter int
+
+func (cg *CodeGen) genLetDestructure(pat Pattern, value Expr, indent string) {
+	valStr := cg.genExprStr(value)
+	switch p := pat.(type) {
+	case ListPattern:
+		destructureCounter++
+		tmp := fmt.Sprintf("__list%d", destructureCounter)
+		cg.writeln(fmt.Sprintf("%s%s := %s", indent, tmp, valStr))
+		for i, elemPat := range p.Elements {
+			if bp, ok := elemPat.(BindPattern); ok {
+				cg.writeln(fmt.Sprintf("%s%s := %s[%d]", indent, snakeToCamel(bp.Name), tmp, i))
+			}
+		}
+		if p.Rest != "" {
+			cg.writeln(fmt.Sprintf("%s%s := %s[%d:]", indent, snakeToCamel(p.Rest), tmp, len(p.Elements)))
+		}
+	}
+}
 
 func (cg *CodeGen) isTriCall(call FnCall) bool {
 	if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
