@@ -25,7 +25,7 @@ func (v Color) String() string {
 	}
 }
 
-func color_name(c Color) string {
+func colorName(c Color) string {
 	switch c {
 	case ColorRed:
 		return "red"
@@ -40,7 +40,7 @@ func color_name(c Color) string {
 
 func main() {
 	fmt.Println("Hello from Arca!")
-	fmt.Println(color_name(ColorRed))
-	fmt.Println(color_name(ColorBlue))
+	fmt.Println(colorName(ColorRed))
+	fmt.Println(colorName(ColorBlue))
 }
 

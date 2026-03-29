@@ -5,7 +5,7 @@ import (
 	"strconv"
 )
 
-func parse_and_double(s string) (int, error) {
+func parseAndDouble(s string) (int, error) {
 	n, err := strconv.Atoi(s)
 	if err != nil {
 		return 0, err
@@ -14,7 +14,7 @@ func parse_and_double(s string) (int, error) {
 }
 
 func main() {
-	fmt.Println(parse_and_double("21"))
-	fmt.Println(parse_and_double("abc"))
+	fmt.Println(parseAndDouble("21"))
+	fmt.Println(parseAndDouble("abc"))
 }
 

@@ -29,6 +29,8 @@ func NewCodeGen(prog *Program) *CodeGen {
 		case FnDecl:
 			if d.Public {
 				cg.fnNames[d.Name] = snakeToPascal(d.Name)
+			} else if strings.Contains(d.Name, "_") {
+				cg.fnNames[d.Name] = snakeToCamel(d.Name)
 			}
 		}
 	}
@@ -236,10 +238,12 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 	name := fd.Name
 	if fd.Public {
 		name = snakeToPascal(name)
+	} else {
+		name = snakeToCamel(name)
 	}
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
-		params[i] = fmt.Sprintf("%s %s", p.Name, cg.goType(p.Type))
+		params[i] = fmt.Sprintf("%s %s", snakeToCamel(p.Name), cg.goType(p.Type))
 	}
 
 	retType := ""
@@ -309,7 +313,7 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			cg.genTryLetStmt(s.Name, call.Args[0], indent)
 			return
 		}
-		cg.writeln(fmt.Sprintf("%s%s := %s", indent, s.Name, cg.genExprStr(s.Value)))
+		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
 	case ExprStmt:
 		switch e := s.Expr.(type) {
 		case ForExpr:
@@ -344,7 +348,11 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		if goName, ok := cg.fnNames[e.Name]; ok {
 			return goName
 		}
-		return e.Name
+		// Don't transform qualified names (Go FFI like fmt.Println)
+		if strings.Contains(e.Name, ".") {
+			return e.Name
+		}
+		return snakeToCamel(e.Name)
 	case FnCall:
 		// Track builtin usage
 		if ident, ok := e.Fn.(Ident); ok {
@@ -448,11 +456,12 @@ func (cg *CodeGen) genRange(r RangeExpr) string {
 func (cg *CodeGen) genForExpr(fe ForExpr, indent string) {
 	switch iter := fe.Iter.(type) {
 	case RangeExpr:
+		b := snakeToCamel(fe.Binding)
 		cg.writeln(fmt.Sprintf("%sfor %s := %s; %s < %s; %s++ {",
-			indent, fe.Binding, cg.genExprStr(iter.Start),
-			fe.Binding, cg.genExprStr(iter.End), fe.Binding))
+			indent, b, cg.genExprStr(iter.Start),
+			b, cg.genExprStr(iter.End), b))
 	default:
-		cg.writeln(fmt.Sprintf("%sfor _, %s := range %s {", indent, fe.Binding, cg.genExprStr(fe.Iter)))
+		cg.writeln(fmt.Sprintf("%sfor _, %s := range %s {", indent, snakeToCamel(fe.Binding), cg.genExprStr(fe.Iter)))
 	}
 	cg.genVoidBody(fe.Body, indent+"\t")
 	cg.writeln(fmt.Sprintf("%s}", indent))
@@ -523,7 +532,7 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 			usedVars := collectUsedIdents(arm.Body)
 			for _, fp := range pat.Fields {
 				if _, used := usedVars[fp.Binding]; used {
-					cg.writeln(fmt.Sprintf("%s\t%s := v.%s", indent, fp.Binding, capitalize(fp.Name)))
+					cg.writeln(fmt.Sprintf("%s\t%s := v.%s", indent, snakeToCamel(fp.Binding), capitalize(fp.Name)))
 				}
 			}
 			if isReturn {
@@ -536,7 +545,7 @@ func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 			}
 		case BindPattern:
 			cg.writeln(fmt.Sprintf("%sdefault:", indent))
-			cg.writeln(fmt.Sprintf("%s\t%s := v", indent, pat.Name))
+			cg.writeln(fmt.Sprintf("%s\t%s := v", indent, snakeToCamel(pat.Name)))
 			if isReturn {
 				cg.writeln(fmt.Sprintf("%s\treturn %s", indent, cg.genExprStr(arm.Body)))
 			}
@@ -581,7 +590,7 @@ func (cg *CodeGen) isTriCall(call FnCall) bool {
 }
 
 func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
-	cg.writeln(fmt.Sprintf("%s%s, err := %s", indent, name, cg.genExprStr(expr)))
+	cg.writeln(fmt.Sprintf("%s%s, err := %s", indent, snakeToCamel(name), cg.genExprStr(expr)))
 	cg.writeln(fmt.Sprintf("%sif err != nil {", indent))
 	if cg.currentRetType != nil && isResultType(cg.currentRetType) {
 		okType := resultOkType(cg.currentRetType)
@@ -631,6 +640,16 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func snakeToCamel(s string) string {
+	parts := strings.Split(s, "_")
+	for i, p := range parts {
+		if i > 0 {
+			parts[i] = capitalize(p)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func snakeToPascal(s string) string {

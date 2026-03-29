@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-func print_numbers() {
+func printNumbers() {
 	for i := 0; i < 5; i++ {
 		fmt.Println(i)
 	}

@@ -21,7 +21,7 @@ func (v Color) String() string {
 	}
 }
 
-func color_name(c Color) string {
+func colorName(c Color) string {
 	switch c {
 	case ColorRed:
 		return "red"
