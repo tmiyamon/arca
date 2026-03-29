@@ -184,3 +184,114 @@ pub fn is_active(u: User) -> Bool {
 		t.Errorf("unexpected errors: %v", errs)
 	}
 }
+
+func TestCheckerWrongArgCount(t *testing.T) {
+	errs := checkSource(`
+fn add(a: Int, b: Int) -> Int {
+  a + b
+}
+
+fn main() {
+  add(1)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for wrong argument count")
+	}
+	if !strings.Contains(errs[0].Message, "expects 2 arguments, got 1") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
+
+func TestCheckerWrongArgType(t *testing.T) {
+	errs := checkSource(`
+fn greet(name: String) -> String {
+  name
+}
+
+fn main() {
+  greet(42)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for wrong argument type")
+	}
+	if !strings.Contains(errs[0].Message, "expects String, got Int") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
+
+func TestCheckerReturnTypeMismatch(t *testing.T) {
+	errs := checkSource(`
+fn get_name() -> String {
+  42
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for return type mismatch")
+	}
+	if !strings.Contains(errs[0].Message, "returns String but body has type Int") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
+
+func TestCheckerConstructorFieldTypeMismatch(t *testing.T) {
+	errs := checkSource(`
+type Point {
+  Point(x: Int, y: Int)
+}
+
+fn make() -> Point {
+  Point(x: "hello", y: 2)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for field type mismatch")
+	}
+	if !strings.Contains(errs[0].Message, "field 'x' of Point expects Int, got String") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
+
+func TestCheckerLetInference(t *testing.T) {
+	errs := checkSource(`
+fn greet(name: String) -> String {
+  name
+}
+
+fn main() {
+  let x = 42
+  greet(x)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for passing Int to String param")
+	}
+	if !strings.Contains(errs[0].Message, "expects String, got Int") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
+
+func TestCheckerMatchPatternBindingType(t *testing.T) {
+	errs := checkSource(`
+type Wrapper {
+  Wrap(value: Int)
+}
+
+fn greet(name: String) -> String {
+  name
+}
+
+fn use(w: Wrapper) -> String {
+  match w {
+    Wrap(value) -> greet(value)
+  }
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for passing Int to String param via pattern binding")
+	}
+	if !strings.Contains(errs[0].Message, "expects String, got Int") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}

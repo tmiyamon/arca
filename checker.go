@@ -13,11 +13,40 @@ func (e CheckError) Error() string {
 	return e.Message
 }
 
+// --- Scope ---
+
+type Scope struct {
+	parent *Scope
+	vars   map[string]Type
+}
+
+func NewScope(parent *Scope) *Scope {
+	return &Scope{parent: parent, vars: make(map[string]Type)}
+}
+
+func (s *Scope) Define(name string, t Type) {
+	s.vars[name] = t
+}
+
+func (s *Scope) Lookup(name string) (Type, bool) {
+	if t, ok := s.vars[name]; ok {
+		return t, true
+	}
+	if s.parent != nil {
+		return s.parent.Lookup(name)
+	}
+	return nil, false
+}
+
+// --- Checker ---
+
 type Checker struct {
 	types     map[string]TypeDecl
 	ctorTypes map[string]string // constructor name -> type name
 	functions map[string]FnDecl
 	errors    []CheckError
+	scope     *Scope
+	currentFn *FnDecl
 }
 
 func NewChecker() *Checker {
@@ -25,6 +54,7 @@ func NewChecker() *Checker {
 		types:     make(map[string]TypeDecl),
 		ctorTypes: make(map[string]string),
 		functions: make(map[string]FnDecl),
+		scope:     NewScope(nil),
 	}
 }
 
@@ -62,6 +92,174 @@ func (c *Checker) addError(format string, args ...interface{}) {
 func (c *Checker) addErrorAt(pos Pos, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	c.errors = append(c.errors, CheckError{Message: fmt.Sprintf("%d:%d: %s", pos.Line, pos.Col, msg)})
+}
+
+func (c *Checker) pushScope() {
+	c.scope = NewScope(c.scope)
+}
+
+func (c *Checker) popScope() {
+	c.scope = c.scope.parent
+}
+
+// --- Type Comparison ---
+
+func typesEqual(a, b Type) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	na, aOk := a.(NamedType)
+	nb, bOk := b.(NamedType)
+	if aOk && bOk {
+		if na.Name != nb.Name {
+			return false
+		}
+		if len(na.Params) != len(nb.Params) {
+			return false
+		}
+		for i := range na.Params {
+			if !typesEqual(na.Params[i], nb.Params[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	ta, aOk := a.(TupleType)
+	tb, bOk := b.(TupleType)
+	if aOk && bOk {
+		if len(ta.Elements) != len(tb.Elements) {
+			return false
+		}
+		for i := range ta.Elements {
+			if !typesEqual(ta.Elements[i], tb.Elements[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func typeName(t Type) string {
+	if t == nil {
+		return "unknown"
+	}
+	switch tt := t.(type) {
+	case NamedType:
+		if len(tt.Params) > 0 {
+			params := make([]string, len(tt.Params))
+			for i, p := range tt.Params {
+				params[i] = typeName(p)
+			}
+			return tt.Name + "[" + strings.Join(params, ", ") + "]"
+		}
+		return tt.Name
+	case TupleType:
+		elems := make([]string, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = typeName(e)
+		}
+		return "(" + strings.Join(elems, ", ") + ")"
+	default:
+		return "unknown"
+	}
+}
+
+// --- Type Inference ---
+
+func (c *Checker) inferType(expr Expr) Type {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case IntLit:
+		return NamedType{Name: "Int"}
+	case FloatLit:
+		return NamedType{Name: "Float"}
+	case StringLit:
+		return NamedType{Name: "String"}
+	case StringInterp:
+		return NamedType{Name: "String"}
+	case BoolLit:
+		return NamedType{Name: "Bool"}
+	case Ident:
+		if t, ok := c.scope.Lookup(e.Name); ok {
+			return t
+		}
+		// Check if it's an enum constructor
+		if typeName, ok := c.ctorTypes[e.Name]; ok {
+			return NamedType{Name: typeName}
+		}
+		return nil
+	case ConstructorCall:
+		if e.Name == "Ok" {
+			if c.currentFn != nil && c.currentFn.ReturnType != nil {
+				return c.currentFn.ReturnType
+			}
+		}
+		if e.Name == "Error" {
+			if c.currentFn != nil && c.currentFn.ReturnType != nil {
+				return c.currentFn.ReturnType
+			}
+		}
+		if typeName, ok := c.ctorTypes[e.Name]; ok {
+			return NamedType{Name: typeName}
+		}
+		return nil
+	case FieldAccess:
+		recvType := c.inferType(e.Expr)
+		if recvType == nil {
+			return nil
+		}
+		nt, ok := recvType.(NamedType)
+		if !ok {
+			return nil
+		}
+		td, ok := c.types[nt.Name]
+		if !ok {
+			return nil
+		}
+		if len(td.Constructors) == 1 {
+			for _, f := range td.Constructors[0].Fields {
+				if f.Name == e.Field {
+					return f.Type
+				}
+			}
+		}
+		return nil
+	case BinaryExpr:
+		switch e.Op {
+		case "==", "!=", "<", ">", "<=", ">=", "&&", "||":
+			return NamedType{Name: "Bool"}
+		default:
+			return c.inferType(e.Left)
+		}
+	case FnCall:
+		if ident, ok := e.Fn.(Ident); ok {
+			if fn, ok := c.functions[ident.Name]; ok {
+				return fn.ReturnType
+			}
+		}
+		return nil
+	case MatchExpr:
+		if len(e.Arms) > 0 {
+			return c.inferType(e.Arms[0].Body)
+		}
+		return nil
+	case Block:
+		if e.Expr != nil {
+			return c.inferType(e.Expr)
+		}
+		return nil
+	case TupleExpr:
+		elems := make([]Type, len(e.Elements))
+		for i, el := range e.Elements {
+			elems[i] = c.inferType(el)
+		}
+		return TupleType{Elements: elems}
+	default:
+		return nil
+	}
 }
 
 // --- Type Declaration Checks ---
@@ -113,8 +311,40 @@ func (c *Checker) checkFnDecl(fd FnDecl) {
 	if fd.ReturnType != nil {
 		c.checkTypeExists(fd.ReturnType)
 	}
-	// Check body
+
+	// Create scope with parameters
+	c.pushScope()
+	c.currentFn = &fd
+	for _, param := range fd.Params {
+		c.scope.Define(param.Name, param.Type)
+	}
+
+	// Check body and verify return type
 	c.checkExpr(fd.Body)
+	if fd.ReturnType != nil {
+		bodyType := c.inferType(fd.Body)
+		if bodyType != nil && !typesEqual(bodyType, fd.ReturnType) {
+			// Don't report for Result types (Ok/Error handle this)
+			if !isResultReturn(fd.ReturnType, bodyType) {
+				c.addErrorAt(fd.Pos, "function '%s' returns %s but body has type %s",
+					fd.Name, typeName(fd.ReturnType), typeName(bodyType))
+			}
+		}
+	}
+
+	c.currentFn = nil
+	c.popScope()
+}
+
+func isResultReturn(declared, actual Type) bool {
+	dn, ok := declared.(NamedType)
+	if !ok {
+		return false
+	}
+	if dn.Name == "Result" {
+		return true
+	}
+	return false
 }
 
 // --- Expression Checks ---
@@ -130,25 +360,40 @@ func (c *Checker) checkExpr(expr Expr) {
 		c.checkExpr(e.Subject)
 		c.checkMatchExpr(e)
 	case FnCall:
-		c.checkExpr(e.Fn)
-		for _, arg := range e.Args {
-			c.checkExpr(arg)
-		}
+		c.checkFnCall(e)
 	case FieldAccess:
 		c.checkExpr(e.Expr)
 	case Block:
+		c.pushScope()
 		for _, stmt := range e.Stmts {
 			c.checkStmt(stmt)
 		}
 		c.checkExpr(e.Expr)
+		c.popScope()
 	case BinaryExpr:
 		c.checkExpr(e.Left)
 		c.checkExpr(e.Right)
 	case Lambda:
+		c.pushScope()
+		for _, p := range e.Params {
+			if p.Type != nil {
+				c.scope.Define(p.Name, p.Type)
+			}
+		}
 		c.checkExpr(e.Body)
+		c.popScope()
 	case ForExpr:
 		c.checkExpr(e.Iter)
+		c.pushScope()
+		// Infer binding type from iterator
+		iterType := c.inferType(e.Iter)
+		if iterType != nil {
+			if nt, ok := iterType.(NamedType); ok && nt.Name == "List" && len(nt.Params) > 0 {
+				c.scope.Define(e.Binding, nt.Params[0])
+			}
+		}
 		c.checkExpr(e.Body)
+		c.popScope()
 	case StringInterp:
 		for _, part := range e.Parts {
 			c.checkExpr(part)
@@ -164,8 +409,55 @@ func (c *Checker) checkStmt(stmt Stmt) {
 	switch s := stmt.(type) {
 	case LetStmt:
 		c.checkExpr(s.Value)
+		// Infer and track variable type
+		t := c.inferType(s.Value)
+		if t != nil {
+			c.scope.Define(s.Name, t)
+		}
 	case ExprStmt:
 		c.checkExpr(s.Expr)
+	}
+}
+
+// --- Function Call Checks ---
+
+func (c *Checker) checkFnCall(e FnCall) {
+	c.checkExpr(e.Fn)
+	for _, arg := range e.Args {
+		c.checkExpr(arg)
+	}
+
+	// Check argument types against declared function parameters
+	ident, ok := e.Fn.(Ident)
+	if !ok {
+		return
+	}
+	// Skip builtins
+	if ident.Name == "__try" || ident.Name == "map" || ident.Name == "filter" || ident.Name == "fold" {
+		return
+	}
+	// Skip Go FFI calls (contains dot)
+	if strings.Contains(ident.Name, ".") {
+		return
+	}
+	fn, ok := c.functions[ident.Name]
+	if !ok {
+		return
+	}
+	if len(e.Args) != len(fn.Params) {
+		c.addError("function '%s' expects %d arguments, got %d", ident.Name, len(fn.Params), len(e.Args))
+		return
+	}
+	for i, arg := range e.Args {
+		argType := c.inferType(arg)
+		if argType == nil {
+			continue
+		}
+		paramType := fn.Params[i].Type
+		if !typesEqual(argType, paramType) {
+			c.addError("argument %d of '%s' expects %s, got %s",
+				i+1, ident.Name, typeName(paramType), typeName(argType))
+		}
 	}
 }
 
@@ -199,29 +491,49 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 		return
 	}
 
-	// Check named fields match
-	for _, fv := range cc.Fields {
+	// Check named fields match and types
+	for i, fv := range cc.Fields {
 		if fv.Name != "" {
 			found := false
 			for _, cf := range ctor.Fields {
 				if cf.Name == fv.Name {
 					found = true
+					// Check field type
+					argType := c.inferType(fv.Value)
+					if argType != nil && !typesEqual(argType, cf.Type) {
+						c.addErrorAt(cc.Pos, "field '%s' of %s expects %s, got %s",
+							fv.Name, cc.Name, typeNameStr(cf.Type), typeNameStr(argType))
+					}
 					break
 				}
 			}
 			if !found {
 				c.addErrorAt(cc.Pos, "constructor %s has no field named '%s'", cc.Name, fv.Name)
 			}
+		} else if i < len(ctor.Fields) {
+			argType := c.inferType(fv.Value)
+			if argType != nil && !typesEqual(argType, ctor.Fields[i].Type) {
+				c.addErrorAt(cc.Pos, "field %d of %s expects %s, got %s",
+					i+1, cc.Name, typeNameStr(ctor.Fields[i].Type), typeNameStr(argType))
+			}
 		}
 		c.checkExpr(fv.Value)
 	}
+}
+
+func typeNameStr(t Type) string {
+	return typeName(t)
 }
 
 // --- Match Exhaustiveness ---
 
 func (c *Checker) checkMatchExpr(me MatchExpr) {
 	for _, arm := range me.Arms {
+		// Bind pattern variables in arm scope
+		c.pushScope()
+		c.bindPatternVars(arm.Pattern, c.inferType(me.Subject))
 		c.checkExpr(arm.Body)
+		c.popScope()
 	}
 
 	// Find what type we're matching on by looking at patterns
@@ -236,7 +548,7 @@ func (c *Checker) checkMatchExpr(me MatchExpr) {
 	}
 
 	if matchedType == "" {
-		return // Can't determine type, skip exhaustiveness check
+		return
 	}
 
 	td, ok := c.types[matchedType]
@@ -244,11 +556,11 @@ func (c *Checker) checkMatchExpr(me MatchExpr) {
 		return
 	}
 
-	// Check if there's a wildcard or bind pattern (catches all)
+	// Check if there's a wildcard or bind pattern
 	for _, arm := range me.Arms {
 		switch arm.Pattern.(type) {
 		case WildcardPattern, BindPattern:
-			return // Wildcard covers everything
+			return
 		}
 	}
 
@@ -269,5 +581,32 @@ func (c *Checker) checkMatchExpr(me MatchExpr) {
 
 	if len(missing) > 0 {
 		c.addErrorAt(me.Pos, "non-exhaustive match on %s: missing %s", matchedType, strings.Join(missing, ", "))
+	}
+}
+
+func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
+	switch p := pat.(type) {
+	case ConstructorPattern:
+		typeName, ok := c.ctorTypes[p.Name]
+		if !ok {
+			return
+		}
+		td := c.types[typeName]
+		var ctor Constructor
+		for _, ct := range td.Constructors {
+			if ct.Name == p.Name {
+				ctor = ct
+				break
+			}
+		}
+		for i, fp := range p.Fields {
+			if i < len(ctor.Fields) {
+				c.scope.Define(fp.Binding, ctor.Fields[i].Type)
+			}
+		}
+	case BindPattern:
+		if subjectType != nil {
+			c.scope.Define(p.Name, subjectType)
+		}
 	}
 }
