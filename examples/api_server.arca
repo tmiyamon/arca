@@ -16,19 +16,19 @@ type ApiError {
 }
 
 type ApiResponse {
-  Ok(data: String)
-  Err(error: ApiError)
+  Success(data: String)
+  Failure(error: ApiError)
 }
 
 // --- Response Handling ---
 
 fn send_response(w: http.ResponseWriter, response: ApiResponse) {
   match response {
-    Ok(data) -> {
+    Success(data) -> {
       w.WriteHeader(200)
       w.Write(to_bytes(data))
     }
-    Err(error) -> {
+    Failure(error) -> {
       match error {
         NotFound(msg) -> {
           w.WriteHeader(404)
@@ -52,8 +52,8 @@ fn send_response(w: http.ResponseWriter, response: ApiResponse) {
 fn handle_get_user(db: *sql.DB, w: http.ResponseWriter, r: *http.Request) {
   let result = find_user(db, 1)
   match result {
-    Ok(user) -> send_response(w, Ok(user_to_json(user)))
-    Err(error) -> send_response(w, Err(error))
+    Ok(user) -> send_response(w, Success(data: user_to_json(user)))
+    Error(err) -> send_response(w, Failure(error: err))
   }
 }
 

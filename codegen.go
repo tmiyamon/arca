@@ -12,7 +12,8 @@ type CodeGen struct {
 	currentRetType Type
 	usedBuiltins   map[string]bool   // track which builtins are used
 	fnNames        map[string]string  // arca name -> go name (for pub functions)
-	functions      map[string]FnDecl // arca name -> fn decl
+	functions      map[string]FnDecl   // arca name -> fn decl
+	ctorTypes      map[string]string   // constructor name -> type name
 	tmpCounter     int
 }
 
@@ -22,11 +23,15 @@ func NewCodeGen(prog *Program) *CodeGen {
 		usedBuiltins: make(map[string]bool),
 		fnNames:      make(map[string]string),
 		functions:    make(map[string]FnDecl),
+		ctorTypes:    make(map[string]string),
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
 			cg.types[d.Name] = d
+			for _, ctor := range d.Constructors {
+				cg.ctorTypes[ctor.Name] = d.Name
+			}
 		case ImportDecl:
 			cg.imports = append(cg.imports, d.Path)
 		case FnDecl:
@@ -75,6 +80,22 @@ func (cg *CodeGen) Generate(prog *Program) string {
 }
 
 func (cg *CodeGen) genBuiltins() {
+	if cg.usedBuiltins["result"] {
+		cg.writeln("type Result_[T any, E any] struct {")
+		cg.writeln("\tValue T")
+		cg.writeln("\tErr   E")
+		cg.writeln("\tIsOk  bool")
+		cg.writeln("}")
+		cg.writeln("")
+		cg.writeln("func Ok_[T any, E any](v T) Result_[T, E] {")
+		cg.writeln("\treturn Result_[T, E]{Value: v, IsOk: true}")
+		cg.writeln("}")
+		cg.writeln("")
+		cg.writeln("func Err_[T any, E any](e E) Result_[T, E] {")
+		cg.writeln("\treturn Result_[T, E]{Err: e}")
+		cg.writeln("}")
+		cg.writeln("")
+	}
 	if cg.usedBuiltins["option"] {
 		cg.writeln("type Option_[T any] struct {")
 		cg.writeln("\tValue T")
@@ -252,10 +273,14 @@ func (cg *CodeGen) goType(t Type) string {
 			}
 			return "interface{}"
 		case "Result":
-			if len(tt.Params) > 0 {
-				return "(" + cg.goType(tt.Params[0]) + ", error)"
+			cg.usedBuiltins["result"] = true
+			if len(tt.Params) >= 2 {
+				return "Result_[" + cg.goType(tt.Params[0]) + ", " + cg.goType(tt.Params[1]) + "]"
 			}
-			return "(interface{}, error)"
+			if len(tt.Params) == 1 {
+				return "Result_[" + cg.goType(tt.Params[0]) + ", error]"
+			}
+			return "Result_[interface{}, error]"
 		default:
 			return tt.Name
 		}
@@ -315,18 +340,7 @@ func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
 			cg.genReturnExpr(e.Expr, indent)
 		}
 	case ConstructorCall:
-		if cg.currentRetType != nil && isResultType(cg.currentRetType) {
-			if e.Name == "Ok" && len(e.Fields) == 1 {
-				cg.writeln(fmt.Sprintf("%sreturn %s, nil", indent, cg.genExprStr(e.Fields[0].Value)))
-				return
-			}
-			if e.Name == "Error" && len(e.Fields) == 1 {
-				okType := resultOkType(cg.currentRetType)
-				cg.writeln(fmt.Sprintf("%sreturn %s, %s", indent, cg.goZeroValue(okType), cg.genExprStr(e.Fields[0].Value)))
-				return
-			}
-		}
-		// Some/None handled by genExprStr
+		// All built-in constructors (Ok, Error, Some, None) handled by genExprStr
 		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
 	default:
 		cg.writeln(fmt.Sprintf("%sreturn %s", indent, cg.genExprStr(expr)))
@@ -449,6 +463,19 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 	case FieldAccess:
 		return fmt.Sprintf("%s.%s", cg.genExprStr(e.Expr), capitalize(e.Field))
 	case ConstructorCall:
+		// Built-in Result constructors
+		if e.Name == "Ok" && len(e.Fields) == 1 {
+			cg.usedBuiltins["result"] = true
+			val := cg.genExprStr(e.Fields[0].Value)
+			typeArgs := cg.resultTypeArgs()
+			return fmt.Sprintf("Ok_%s(%s)", typeArgs, val)
+		}
+		if e.Name == "Error" && len(e.Fields) == 1 {
+			cg.usedBuiltins["result"] = true
+			val := cg.genExprStr(e.Fields[0].Value)
+			typeArgs := cg.resultTypeArgs()
+			return fmt.Sprintf("Err_%s(%s)", typeArgs, val)
+		}
 		// Built-in Option constructors
 		if e.Name == "Some" && len(e.Fields) == 1 {
 			cg.usedBuiltins["option"] = true
@@ -660,6 +687,45 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 
 // --- Match Expression ---
 
+func (cg *CodeGen) isResultMatch(me MatchExpr) bool {
+	for _, arm := range me.Arms {
+		if cp, ok := arm.Pattern.(ConstructorPattern); ok {
+			if cp.Name == "Ok" || cp.Name == "Error" {
+				// Make sure it's not a user-defined constructor
+				if _, isUserCtor := cg.ctorTypes[cp.Name]; !isUserCtor {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (cg *CodeGen) genResultMatch(me MatchExpr, indent string, isReturn bool) {
+	subject := cg.genExprStr(me.Subject)
+	for _, arm := range me.Arms {
+		cp, ok := arm.Pattern.(ConstructorPattern)
+		if !ok {
+			continue
+		}
+		if cp.Name == "Ok" {
+			cg.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
+			if len(cp.Fields) > 0 {
+				cg.writeln(fmt.Sprintf("%s\t%s := %s.Value", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
+		}
+		if cp.Name == "Error" {
+			cg.writeln(fmt.Sprintf("%s} else {", indent))
+			if len(cp.Fields) > 0 {
+				cg.writeln(fmt.Sprintf("%s\t%s := %s.Err", indent, snakeToCamel(cp.Fields[0].Binding), subject))
+			}
+			cg.genArmBody(arm.Body, indent+"\t", isReturn)
+		}
+	}
+	cg.writeln(fmt.Sprintf("%s}", indent))
+}
+
 func (cg *CodeGen) isOptionMatch(me MatchExpr) bool {
 	for _, arm := range me.Arms {
 		if cp, ok := arm.Pattern.(ConstructorPattern); ok {
@@ -788,6 +854,11 @@ func (cg *CodeGen) genArmBody(body Expr, indent string, isReturn bool) {
 func (cg *CodeGen) genMatchExpr(me MatchExpr, indent string, isReturn bool) {
 	subject := cg.genExprStr(me.Subject)
 
+	if cg.isResultMatch(me) {
+		cg.genResultMatch(me, indent, isReturn)
+		return
+	}
+
 	if cg.isListMatch(me) {
 		cg.genListMatch(me, indent, isReturn)
 		return
@@ -904,6 +975,21 @@ func (cg *CodeGen) genLetDestructure(pat Pattern, value Expr, indent string) {
 	}
 }
 
+func (cg *CodeGen) resultTypeArgs() string {
+	if cg.currentRetType == nil {
+		return ""
+	}
+	if nt, ok := cg.currentRetType.(NamedType); ok && nt.Name == "Result" {
+		if len(nt.Params) >= 2 {
+			return "[" + cg.goType(nt.Params[0]) + ", " + cg.goType(nt.Params[1]) + "]"
+		}
+		if len(nt.Params) == 1 {
+			return "[" + cg.goType(nt.Params[0]) + ", error]"
+		}
+	}
+	return ""
+}
+
 func (cg *CodeGen) isTriCall(call FnCall) bool {
 	if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
 		return true
@@ -912,15 +998,20 @@ func (cg *CodeGen) isTriCall(call FnCall) bool {
 }
 
 func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
-	cg.writeln(fmt.Sprintf("%s%s, err := %s", indent, snakeToCamel(name), cg.genExprStr(expr)))
-	cg.writeln(fmt.Sprintf("%sif err != nil {", indent))
+	cg.tmpCounter++
+	tmpVal := fmt.Sprintf("__try_val%d", cg.tmpCounter)
+	tmpErr := fmt.Sprintf("__try_err%d", cg.tmpCounter)
+	cg.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, cg.genExprStr(expr)))
+	cg.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
 	if cg.currentRetType != nil && isResultType(cg.currentRetType) {
-		okType := resultOkType(cg.currentRetType)
-		cg.writeln(fmt.Sprintf("%s\treturn %s, err", indent, cg.goZeroValue(okType)))
+		cg.usedBuiltins["result"] = true
+		typeArgs := cg.resultTypeArgs()
+		cg.writeln(fmt.Sprintf("%s\treturn Err_%s(%s)", indent, typeArgs, tmpErr))
 	} else {
-		cg.writeln(fmt.Sprintf("%s\tpanic(err)", indent))
+		cg.writeln(fmt.Sprintf("%s\tpanic(%s)", indent, tmpErr))
 	}
 	cg.writeln(fmt.Sprintf("%s}", indent))
+	cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(name), tmpVal))
 }
 
 func isResultType(t Type) bool {

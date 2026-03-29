@@ -354,6 +354,7 @@ func (c *Checker) isKnownType(name string) bool {
 	builtins := map[string]bool{
 		"Int": true, "Float": true, "String": true, "Bool": true,
 		"List": true, "Option": true, "Result": true,
+		"error": true,
 	}
 	if builtins[name] {
 		return true
