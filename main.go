@@ -44,6 +44,8 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(fmtCmd(os.Args[2]))
+	case "health":
+		os.Exit(healthCmd())
 	default:
 		// Backwards compat: if arg looks like a file, treat as emit
 		if strings.HasSuffix(cmd, ".arca") {
@@ -63,6 +65,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  build <file.arca> [-o out]   Transpile and compile to binary")
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 	fmt.Fprintln(os.Stderr, "  fmt   <file.arca>            Format source code in place")
+	fmt.Fprintln(os.Stderr, "  health                       Check environment")
 }
 
 func parseFile(path string) (*Program, error) {
@@ -177,6 +180,70 @@ func writeBuildGo(inputPath string, goCode string) (string, error) {
 		return "", err
 	}
 	return goFile, nil
+}
+
+func healthCmd() int {
+	ok := true
+
+	// Check Go
+	const minGoMajor, minGoMinor = 1, 18 // generics required
+
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		fmt.Println("  go: not found")
+		ok = false
+	} else {
+		out, err := exec.Command("go", "version").Output()
+		if err != nil {
+			fmt.Println("  go: found but cannot run")
+			ok = false
+		} else {
+			verStr := strings.TrimSpace(string(out))
+			// Extract "1.24.3 darwin/amd64" from "go version go1.24.3 darwin/amd64"
+			short := strings.TrimPrefix(verStr, "go version go")
+			fmt.Printf("  go: %s (%s)\n", short, goPath)
+			// Check minimum version
+			var major, minor int
+			if _, err := fmt.Sscanf(verStr, "go version go%d.%d", &major, &minor); err == nil {
+				if major < minGoMajor || (major == minGoMajor && minor < minGoMinor) {
+					fmt.Printf("  go: version %d.%d is too old, need >= %d.%d (generics)\n", major, minor, minGoMajor, minGoMinor)
+					ok = false
+				}
+			}
+		}
+	}
+
+	// Check Go env
+	if goPath != "" {
+		out, _ := exec.Command("go", "env", "GOPATH").Output()
+		fmt.Printf("  GOPATH: %s\n", strings.TrimSpace(string(out)))
+		out, _ = exec.Command("go", "env", "GOROOT").Output()
+		fmt.Printf("  GOROOT: %s\n", strings.TrimSpace(string(out)))
+	}
+
+	// Test compile
+	if goPath != "" {
+		dir, err := os.MkdirTemp("", "arca-health-*")
+		if err == nil {
+			defer os.RemoveAll(dir)
+			testFile := filepath.Join(dir, "main.go")
+			os.WriteFile(testFile, []byte("package main\nfunc main() {}\n"), 0644)
+			cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "test"), testFile)
+			if err := cmd.Run(); err != nil {
+				fmt.Println("  compile: failed")
+				ok = false
+			} else {
+				fmt.Println("  compile: ok")
+			}
+		}
+	}
+
+	if ok {
+		fmt.Println("\nAll checks passed.")
+		return 0
+	}
+	fmt.Println("\nSome checks failed.")
+	return 1
 }
 
 func fmtCmd(inputPath string) int {
