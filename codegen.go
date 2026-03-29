@@ -428,6 +428,8 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		return cg.genLambda(e)
 	case TupleExpr:
 		return cg.genTuple(e)
+	case ListLit:
+		return cg.genListLit(e)
 	case BinaryExpr:
 		return fmt.Sprintf("%s %s %s", cg.genExprStr(e.Left), e.Op, cg.genExprStr(e.Right))
 	case RangeExpr:
@@ -498,6 +500,29 @@ func (cg *CodeGen) genTuple(t TupleExpr) string {
 		elems[i] = cg.genExprStr(e)
 	}
 	return fmt.Sprintf("/* tuple(%s) */", strings.Join(elems, ", "))
+}
+
+func (cg *CodeGen) genListLit(l ListLit) string {
+	if len(l.Elements) == 0 {
+		return "[]interface{}{}"
+	}
+	elems := make([]string, len(l.Elements))
+	for i, e := range l.Elements {
+		elems[i] = cg.genExprStr(e)
+	}
+	// Infer element type from first element
+	elemType := "interface{}"
+	switch l.Elements[0].(type) {
+	case IntLit:
+		elemType = "int"
+	case FloatLit:
+		elemType = "float64"
+	case StringLit, StringInterp:
+		elemType = "string"
+	case BoolLit:
+		elemType = "bool"
+	}
+	return fmt.Sprintf("[]%s{%s}", elemType, strings.Join(elems, ", "))
 }
 
 func (cg *CodeGen) genRange(r RangeExpr) string {
@@ -795,6 +820,10 @@ func collectIdents(expr Expr, used map[string]bool) {
 	case StringInterp:
 		for _, p := range e.Parts {
 			collectIdents(p, used)
+		}
+	case ListLit:
+		for _, el := range e.Elements {
+			collectIdents(el, used)
 		}
 	case BinaryExpr:
 		collectIdents(e.Left, used)

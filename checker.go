@@ -251,6 +251,14 @@ func (c *Checker) inferType(expr Expr) Type {
 			return c.inferType(e.Expr)
 		}
 		return nil
+	case ListLit:
+		if len(e.Elements) > 0 {
+			elemType := c.inferType(e.Elements[0])
+			if elemType != nil {
+				return NamedType{Name: "List", Params: []Type{elemType}}
+			}
+		}
+		return NamedType{Name: "List"}
 	case TupleExpr:
 		elems := make([]Type, len(e.Elements))
 		for i, el := range e.Elements {
@@ -397,6 +405,10 @@ func (c *Checker) checkExpr(expr Expr) {
 	case StringInterp:
 		for _, part := range e.Parts {
 			c.checkExpr(part)
+		}
+	case ListLit:
+		for _, elem := range e.Elements {
+			c.checkExpr(elem)
 		}
 	case TupleExpr:
 		for _, elem := range e.Elements {

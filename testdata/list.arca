@@ -1,0 +1,10 @@
+import go.fmt
+
+fn main() {
+  let nums = [1, 2, 3, 4, 5]
+  let names = ["alice", "bob", "charlie"]
+  let empty = []
+  fmt.Println(nums)
+  fmt.Println(names)
+  fmt.Println(empty)
+}

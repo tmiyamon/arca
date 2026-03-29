@@ -100,6 +100,10 @@ type ForExpr struct {
 	Body    Expr
 }
 
+type ListLit struct {
+	Elements []Expr
+}
+
 type RangeExpr struct {
 	Start Expr
 	End   Expr
@@ -125,6 +129,7 @@ func (ConstructorCall) exprNode() {}
 func (Lambda) exprNode()          {}
 func (TupleExpr) exprNode()       {}
 func (ForExpr) exprNode()         {}
+func (ListLit) exprNode()          {}
 func (RangeExpr) exprNode()       {}
 func (BinaryExpr) exprNode()      {}
 

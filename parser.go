@@ -430,6 +430,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TkLParen:
 		return p.parseTupleOrLambda()
 
+	case TkLBracket:
+		return p.parseListLit()
+
 	case TkIdent:
 		p.advance()
 		expr := Expr(Ident{Name: tok.Lit})
@@ -468,6 +471,23 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	default:
 		return nil, fmt.Errorf("%d:%d: expected expression, got %s", tok.Line, tok.Col, tok)
 	}
+}
+
+func (p *Parser) parseListLit() (Expr, error) {
+	p.advance() // skip '['
+	var elements []Expr
+	for p.peek().Kind != TkRBracket {
+		elem, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, elem)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ']'
+	return ListLit{Elements: elements}, nil
 }
 
 func (p *Parser) parseStringInterp() (Expr, error) {
