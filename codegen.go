@@ -39,8 +39,6 @@ func NewCodeGen(prog *Program) *CodeGen {
 			cg.functions[d.Name] = d
 			if d.Public {
 				cg.fnNames[d.Name] = snakeToPascal(d.Name)
-			} else if strings.Contains(d.Name, "_") {
-				cg.fnNames[d.Name] = snakeToCamel(d.Name)
 			}
 		}
 	}
@@ -370,8 +368,6 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 	name := fd.Name
 	if fd.Public {
 		name = snakeToPascal(name)
-	} else {
-		name = snakeToCamel(name)
 	}
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
@@ -904,21 +900,13 @@ func capitalize(s string) string {
 }
 
 func snakeToCamel(s string) string {
-	parts := strings.Split(s, "_")
-	for i, p := range parts {
-		if i > 0 {
-			parts[i] = capitalize(p)
-		}
-	}
-	return strings.Join(parts, "")
+	// With camelCase convention, identifiers pass through as-is
+	return s
 }
 
 func snakeToPascal(s string) string {
-	parts := strings.Split(s, "_")
-	for i, p := range parts {
-		parts[i] = capitalize(p)
-	}
-	return strings.Join(parts, "")
+	// pub functions: capitalize first letter
+	return capitalize(s)
 }
 
 func collectUsedIdents(expr Expr) map[string]bool {

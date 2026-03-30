@@ -2,6 +2,6 @@ import go.fmt
 import user
 
 fn main() {
-  let u = new_user("Alice", 30)
-  fmt.Println(user_name(u))
+  let u = newUser("Alice", 30)
+  fmt.Println(userName(u))
 }

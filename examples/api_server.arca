@@ -6,31 +6,35 @@ import go.strconv
 
 type User {
   User(id: Int, name: String, email: String)
+
+  pub fn toJson() -> String {
+    "{\"id\": ${self.id}, \"name\": \"${self.name}\", \"email\": \"${self.email}\"}"
+  }
 }
 
 type ApiError {
   NotFound(message: String)
   BadRequest(message: String)
+
+  fn send(w: http.ResponseWriter) {
+    match self {
+      NotFound(msg) -> sendJson(w, 404, "{\"error\": \"${msg}\"}")
+      BadRequest(msg) -> sendJson(w, 400, "{\"error\": \"${msg}\"}")
+    }
+  }
 }
 
 // --- Response Handling ---
 
-fn send_json(w: http.ResponseWriter, status: Int, body: String) {
+fn sendJson(w: http.ResponseWriter, status: Int, body: String) {
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
-  w.Write(to_bytes(body))
-}
-
-fn send_error(w: http.ResponseWriter, err: ApiError) {
-  match err {
-    NotFound(msg) -> send_json(w, 404, "{\"error\": \"${msg}\"}")
-    BadRequest(msg) -> send_json(w, 400, "{\"error\": \"${msg}\"}")
-  }
+  w.Write(toBytes(body))
 }
 
 // --- Data ---
 
-fn find_user_by_id(id: Int) -> Result[User, ApiError] {
+fn findUserById(id: Int) -> Result[User, ApiError] {
   match id {
     1 -> Ok(User(id: 1, name: "Alice", email: "alice@example.com"))
     2 -> Ok(User(id: 2, name: "Bob", email: "bob@example.com"))
@@ -38,41 +42,37 @@ fn find_user_by_id(id: Int) -> Result[User, ApiError] {
   }
 }
 
-fn user_to_json(user: User) -> String {
-  "{\"id\": ${user.id}, \"name\": \"${user.name}\", \"email\": \"${user.email}\"}"
-}
-
 // --- Handlers ---
 
-fn handle_user(w: http.ResponseWriter, r: *http.Request) {
-  let id_str = r.URL.Query().Get("id")
-  let id = parse_id(id_str)
+fn handleUser(w: http.ResponseWriter, r: *http.Request) {
+  let idStr = r.URL.Query().Get("id")
+  let id = parseId(idStr)
   match id {
     Ok(n) -> {
-      let user_result = find_user_by_id(n)
-      match user_result {
-        Ok(user) -> send_json(w, 200, user_to_json(user))
-        Error(err) -> send_error(w, err)
+      let userResult = findUserById(n)
+      match userResult {
+        Ok(user) -> sendJson(w, 200, user.toJson())
+        Error(err) -> err.send(w)
       }
     }
-    Error(err) -> send_error(w, BadRequest(message: "invalid id"))
+    Error(err) -> BadRequest(message: "invalid id").send(w)
   }
 }
 
-fn parse_id(s: String) -> Result[Int, error] {
+fn parseId(s: String) -> Result[Int, error] {
   let n = strconv.Atoi(s)?
   Ok(n)
 }
 
-fn handle_health(w: http.ResponseWriter, r: *http.Request) {
-  send_json(w, 200, "{\"status\": \"ok\"}")
+fn handleHealth(w: http.ResponseWriter, r: *http.Request) {
+  sendJson(w, 200, "{\"status\": \"ok\"}")
 }
 
 // --- Main ---
 
 fn main() {
-  http.HandleFunc("/user", handle_user)
-  http.HandleFunc("/health", handle_health)
+  http.HandleFunc("/user", handleUser)
+  http.HandleFunc("/health", handleHealth)
   fmt.Println("Listening on :8080")
   http.ListenAndServe(":8080", nil)
 }

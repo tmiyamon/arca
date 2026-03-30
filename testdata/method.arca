@@ -3,11 +3,11 @@ import go.fmt
 type User {
   User(name: String, age: Int)
 
-  fn is_adult() -> Bool {
+  fn isAdult() -> Bool {
     self.age >= 18
   }
 
-  pub fn to_json() -> String {
+  pub fn toJson() -> String {
     "{\"name\": \"${self.name}\", \"age\": ${self.age}}"
   }
 
@@ -18,7 +18,7 @@ type User {
 
 fn main() {
   let user = User(name: "Alice", age: 30)
-  fmt.Println(user.is_adult())
-  fmt.Println(user.to_json())
+  fmt.Println(user.isAdult())
+  fmt.Println(user.toJson())
   fmt.Println(user.greet("Hello"))
 }

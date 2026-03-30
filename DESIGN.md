@@ -7,7 +7,7 @@ This document records language design decisions, their rationale, and trade-offs
 
 ## Naming Conventions
 
-- **Arca source**: `snake_case` for functions, variables, fields
+- **Arca source**: `camelCase` for functions, variables, fields
 - **Generated Go**: `camelCase` (private), `PascalCase` (public)
 - **Types**: `PascalCase` in both Arca and Go
 - **Constructors**: `PascalCase` in Arca

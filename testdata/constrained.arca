@@ -11,12 +11,12 @@ type User {
   )
 }
 
-fn create_user() -> Result[User, error] {
+fn createUser() -> Result[User, error] {
   let user = User(id: 1, name: "Alice", age: 30)?
   Ok(user)
 }
 
 fn main() {
-  let result = create_user()
+  let result = createUser()
   fmt.Println(result)
 }

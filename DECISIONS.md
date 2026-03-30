@@ -4,6 +4,24 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-03-30: Naming convention — camelCase
+
+**Context:** Arca was using snake_case, requiring snake→camelCase conversion in codegen for Go output.
+
+**Arguments for camelCase:**
+- Go uses camelCase — no conversion needed
+- Kotlin/Java analogy: same runtime, same naming convention
+- Go FFI calls (`r.URL.Query().Get("id")`) already camelCase — mixing with snake_case looks inconsistent
+- Less codegen complexity, fewer bugs
+
+**Arguments for snake_case:**
+- Rust/Gleam/Python convention
+- Functional/ML language culture
+
+**Decision:** camelCase. Arca sits on Go's world, should match Go's conventions. Like Kotlin matches Java.
+
+---
+
 ## 2026-03-30: Methods — decided to add
 
 **Context:** Constrained types were implemented, and we found that domain operations on constrained types (e.g. `Age.increment()`) need to be closed within the type.
@@ -11,7 +29,7 @@ Design discussions and their reasoning. Newest first.
 **Arguments for methods:**
 - Constrained types need per-type operations that respect constraints
 - Go FFI already returns objects with methods — inconsistent to not have methods in Arca
-- Name collision: `increment_age` vs `increment_score` vs `fn Age.increment(self)`
+- Name collision: `incrementAge` vs `incrementScore` vs `fn Age.increment(self)`
 - IDE discoverability: `age.` shows available operations
 
 **Arguments against:**
@@ -109,7 +127,7 @@ Design discussions and their reasoning. Newest first.
 
 ## 2026-03-29: UFCS (Uniform Function Call Syntax) — rejected
 
-**Context:** Considered D/Nim's UFCS as alternative to methods. `user.to_json()` = `to_json(user)`.
+**Context:** Considered D/Nim's UFCS as alternative to methods. `user.toJson()` = `toJson(user)`.
 
 **Pros:** No method concept needed, data/operation separation preserved.
 **Cons:** "Is this a method or UFCS?" confusion. Mixed reception in D/Nim community. Doesn't solve name collision without overloading.
@@ -189,7 +207,7 @@ Documented in one session:
 - `pub` visibility
 - 1 file = 1 module
 - `fn` / `type` / `match`
-- snake_case in Arca, camelCase in generated Go
+- camelCase in Arca, camelCase in generated Go
 
 ---
 

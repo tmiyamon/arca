@@ -45,7 +45,7 @@ type Pair[A, B] {
 ### Functions
 
 ```
-pub fn status_label(status: OrderStatus) -> String {
+pub fn statusLabel(status: OrderStatus) -> String {
   match status {
     Pending -> "pending"
     Confirmed -> "confirmed"
@@ -53,7 +53,7 @@ pub fn status_label(status: OrderStatus) -> String {
   }
 }
 
-fn internal_helper() -> Int {
+fn internalHelper() -> Int {
   42
 }
 ```
@@ -123,7 +123,7 @@ for i in 0..10 {
 ### Error Propagation (provisional)
 
 ```
-pub fn find_user(id: Int) -> Result[User, Error] {
+pub fn findUser(id: Int) -> Result[User, Error] {
   let row = db.query_row("SELECT ...", id)?
   let user = scan(row)?
   Ok(user)
@@ -219,8 +219,8 @@ Uses Go's testing package directly.
 ```
 import go/testing
 
-fn test_status_label(t: testing.T) {
-  assert status_label(Pending) == "pending"
+fn test_statusLabel(t: testing.T) {
+  assert statusLabel(Pending) == "pending"
 }
 ```
 
@@ -243,7 +243,7 @@ type PositiveInt = Int{min: 1}
 type Email = String{pattern: ".+@.+", max_length: 255}
 
 // Custom validation
-type EvenInt = Int{validate: is_even}
+type EvenInt = Int{validate: isEven}
 
 // Constructor returns Result (validation may fail)
 let user = User(id: 1, name: "Alice", email: "a@b.com")?
@@ -268,14 +268,14 @@ fn Age.increment(self) -> Age {
   Age(self.value + 1)?
 }
 
-fn Age.is_adult(self) -> Bool {
+fn Age.isAdult(self) -> Bool {
   self.value >= 18
 }
 
 // Usage
 let age = Age(30)?
 age.increment()
-age.is_adult()
+age.isAdult()
 ```
 
 ### Assert
