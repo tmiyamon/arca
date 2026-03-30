@@ -45,6 +45,7 @@ fun main() {
   let dbResult = initDb()
   match dbResult {
     Ok(db) -> {
+      defer db.Close()
       let r = gin.Default()
       r.GET("/users", (c: *gin.Context) => handleGetUsers(db, c))
       r.GET("/users/:id", (c: *gin.Context) => handleGetUser(db, c))
