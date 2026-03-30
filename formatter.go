@@ -76,6 +76,32 @@ func (f *Formatter) formatTypeDecl(d TypeDecl) {
 		}
 		f.writeln("")
 	}
+	if len(d.Methods) > 0 {
+		f.writeln("")
+		for _, method := range d.Methods {
+			f.writeIndent()
+			if method.Public {
+				f.write("pub ")
+			}
+			f.write("fn " + method.Name + "(")
+			for i, p := range method.Params {
+				if i > 0 {
+					f.write(", ")
+				}
+				f.write(p.Name + ": " + f.formatType(p.Type))
+			}
+			f.write(")")
+			if method.ReturnType != nil {
+				f.write(" -> " + f.formatType(method.ReturnType))
+			}
+			f.writeln(" {")
+			f.indent++
+			f.formatBody(method.Body)
+			f.indent--
+			f.writeIndent()
+			f.writeln("}")
+		}
+	}
 	f.indent--
 	f.writeln("}")
 }

@@ -12,9 +12,10 @@ type CodeGen struct {
 	currentRetType Type
 	usedBuiltins   map[string]bool   // track which builtins are used
 	fnNames        map[string]string  // arca name -> go name (for pub functions)
-	functions      map[string]FnDecl   // arca name -> fn decl
-	ctorTypes      map[string]string   // constructor name -> type name
-	tmpCounter     int
+	functions        map[string]FnDecl   // arca name -> fn decl
+	ctorTypes        map[string]string   // constructor name -> type name
+	tmpCounter       int
+	currentReceiver  string              // "" or receiver var name (e.g. "u" for User)
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -123,6 +124,38 @@ func (cg *CodeGen) genTypeDecl(td TypeDecl) {
 	} else {
 		cg.genSumType(td)
 	}
+	// Generate methods
+	for _, method := range td.Methods {
+		cg.genMethodDecl(td.Name, method)
+		cg.writeln("")
+	}
+}
+
+func (cg *CodeGen) genMethodDecl(typeName string, fd FnDecl) {
+	methodName := snakeToCamel(fd.Name)
+	if fd.Public {
+		methodName = snakeToPascal(fd.Name)
+	}
+	params := make([]string, len(fd.Params))
+	for i, p := range fd.Params {
+		params[i] = fmt.Sprintf("%s %s", snakeToCamel(p.Name), cg.goType(p.Type))
+	}
+	retType := ""
+	if fd.ReturnType != nil {
+		retType = " " + cg.goType(fd.ReturnType)
+	}
+	receiver := strings.ToLower(typeName[:1])
+	cg.writeln(fmt.Sprintf("func (%s %s) %s(%s)%s {", receiver, typeName, methodName, strings.Join(params, ", "), retType))
+	cg.currentRetType = fd.ReturnType
+	cg.currentReceiver = receiver
+	if fd.ReturnType != nil {
+		cg.genReturnExpr(fd.Body, "\t")
+	} else {
+		cg.genVoidBody(fd.Body, "\t")
+	}
+	cg.currentReceiver = ""
+	cg.currentRetType = nil
+	cg.writeln("}")
 }
 
 func goTypeParams(td TypeDecl) string {
@@ -443,6 +476,10 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		}
 		return "false"
 	case Ident:
+		// self → receiver variable
+		if e.Name == "self" && cg.currentReceiver != "" {
+			return cg.currentReceiver
+		}
 		// Built-in constants
 		if e.Name == "None" {
 			cg.usedBuiltins["option"] = true
@@ -495,6 +532,11 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		args := make([]string, len(e.Args))
 		for i, a := range e.Args {
 			args[i] = cg.genExprWithContext(a, e, i)
+		}
+		// Method call: obj.method(args)
+		if fa, ok := e.Fn.(FieldAccess); ok {
+			methodName := cg.resolveMethodName(fa.Field)
+			return fmt.Sprintf("%s.%s(%s)", cg.genExprStr(fa.Expr), methodName, strings.Join(args, ", "))
 		}
 		return fmt.Sprintf("%s(%s)", cg.genExprStr(e.Fn), strings.Join(args, ", "))
 	case FieldAccess:
@@ -763,6 +805,22 @@ func (cg *CodeGen) genLetDestructure(pat Pattern, value Expr, indent string) {
 			cg.writeln(fmt.Sprintf("%s%s := %s[%d:]", indent, snakeToCamel(p.Rest), tmp, len(p.Elements)))
 		}
 	}
+}
+
+func (cg *CodeGen) resolveMethodName(name string) string {
+	// Check if this is a pub method in any known type
+	for _, td := range cg.types {
+		for _, m := range td.Methods {
+			if m.Name == name {
+				if m.Public {
+					return snakeToPascal(name)
+				}
+				return snakeToCamel(name)
+			}
+		}
+	}
+	// Default: could be Go FFI method, pass through with capitalize
+	return capitalize(name)
 }
 
 func (cg *CodeGen) resultTypeArgs() string {

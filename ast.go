@@ -220,6 +220,7 @@ type TypeDecl struct {
 	Name         string
 	Params       []string
 	Constructors []Constructor
+	Methods      []FnDecl
 }
 
 type TypeAliasDecl struct {
@@ -238,12 +239,13 @@ type Field struct {
 }
 
 type FnDecl struct {
-	Pos        Pos
-	Name       string
-	Public     bool
-	Params     []FnParam
-	ReturnType Type // nil = no return type (void)
-	Body       Expr
+	Pos          Pos
+	Name         string
+	Public       bool
+	ReceiverType string // "" for free functions, "User" for fn User.method(self)
+	Params       []FnParam
+	ReturnType   Type // nil = no return type (void)
+	Body         Expr
 }
 
 type FnParam struct {

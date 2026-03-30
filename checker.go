@@ -329,7 +329,30 @@ func (c *Checker) checkTypeDecl(td TypeDecl) {
 			c.checkTypeExists(field.Type)
 		}
 	}
+	// Check methods
+	for _, method := range td.Methods {
+		c.checkMethodDecl(td, method)
+	}
 	c.typeParams = prev
+}
+
+func (c *Checker) checkMethodDecl(td TypeDecl, fd FnDecl) {
+	for _, param := range fd.Params {
+		c.checkTypeExists(param.Type)
+	}
+	if fd.ReturnType != nil {
+		c.checkTypeExists(fd.ReturnType)
+	}
+	c.pushScope()
+	c.currentFn = &fd
+	// Register self as the type
+	c.scope.Define("self", NamedType{Name: td.Name})
+	for _, param := range fd.Params {
+		c.scope.Define(param.Name, param.Type)
+	}
+	c.checkExpr(fd.Body)
+	c.currentFn = nil
+	c.popScope()
 }
 
 func (c *Checker) checkTypeExists(t Type) {

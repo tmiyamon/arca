@@ -130,15 +130,36 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		return nil, err
 	}
 	var constructors []Constructor
+	var methods []FnDecl
 	for p.peek().Kind != TkRBrace {
-		ctor, err := p.parseConstructor()
-		if err != nil {
-			return nil, err
+		// Method: fn or pub fn
+		if p.peek().Kind == TkFn {
+			method, err := p.parseMethodDecl(name.Lit, false)
+			if err != nil {
+				return nil, err
+			}
+			methods = append(methods, method)
+		} else if p.peek().Kind == TkPub {
+			p.advance() // skip 'pub'
+			if p.peek().Kind != TkFn {
+				return nil, fmt.Errorf("%d:%d: expected fn after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
+			}
+			method, err := p.parseMethodDecl(name.Lit, true)
+			if err != nil {
+				return nil, err
+			}
+			methods = append(methods, method)
+		} else {
+			// Constructor
+			ctor, err := p.parseConstructor()
+			if err != nil {
+				return nil, err
+			}
+			constructors = append(constructors, ctor)
 		}
-		constructors = append(constructors, ctor)
 	}
 	p.advance() // skip '}'
-	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors}, nil
+	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors, Methods: methods}, nil
 }
 
 func (p *Parser) parseConstructor() (Constructor, error) {
@@ -287,6 +308,45 @@ func (p *Parser) parseTupleType() (Type, error) {
 	}
 	p.advance() // skip ')'
 	return TupleType{Elements: elements}, nil
+}
+
+func (p *Parser) parseMethodDecl(receiverType string, public bool) (FnDecl, error) {
+	pos := Pos{p.peek().Line, p.peek().Col}
+	p.advance() // skip 'fn'
+	name, err := p.expect(TkIdent)
+	if err != nil {
+		return FnDecl{}, err
+	}
+	if _, err := p.expect(TkLParen); err != nil {
+		return FnDecl{}, err
+	}
+	var params []FnParam
+	for p.peek().Kind != TkRParen {
+		param, err := p.parseFnParam()
+		if err != nil {
+			return FnDecl{}, err
+		}
+		params = append(params, param)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ')'
+
+	var retType Type
+	if p.peek().Kind == TkArrow {
+		p.advance()
+		retType, err = p.parseType()
+		if err != nil {
+			return FnDecl{}, err
+		}
+	}
+
+	body, err := p.parseBlockExpr()
+	if err != nil {
+		return FnDecl{}, err
+	}
+	return FnDecl{Pos: pos, Name: name.Lit, Public: public, ReceiverType: receiverType, Params: params, ReturnType: retType, Body: body}, nil
 }
 
 func (p *Parser) parseFnDecl(public bool) (Decl, error) {
