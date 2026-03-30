@@ -135,6 +135,24 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		return TypeAliasDecl{Name: name.Lit, Type: typ}, nil
 	}
 
+	// Short record: type Name(fields...)
+	if p.peek().Kind == TkLParen {
+		p.advance() // skip '('
+		var fields []Field
+		for p.peek().Kind != TkRParen {
+			field, err := p.parseField()
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, field)
+			if p.peek().Kind == TkComma {
+				p.advance()
+			}
+		}
+		p.advance() // skip ')'
+		return TypeDecl{Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}}, nil
+	}
+
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}

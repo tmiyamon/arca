@@ -59,6 +59,20 @@ func (f *Formatter) formatImport(d ImportDecl) {
 }
 
 func (f *Formatter) formatTypeDecl(d TypeDecl) {
+	// Short record form: type Name(fields...)
+	if len(d.Constructors) == 1 && d.Constructors[0].Name == d.Name && len(d.Methods) == 0 {
+		ctor := d.Constructors[0]
+		f.write("type " + d.Name + "(")
+		for i, field := range ctor.Fields {
+			if i > 0 {
+				f.write(", ")
+			}
+			f.write(field.Name + ": " + f.formatType(field.Type))
+		}
+		f.writeln(")")
+		return
+	}
+
 	f.writeln("type " + d.Name + " {")
 	f.indent++
 	for _, ctor := range d.Constructors {
