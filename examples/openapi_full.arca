@@ -1,0 +1,71 @@
+// --- Primitive types ---
+
+type Product {
+  Product(
+    id: Int{min: 1, json: "id"}
+    name: String{min_length: 1, max_length: 200, json: "name"}
+    price: Float{min: 0.0, json: "price"}
+    description: String{max_length: 1000, json: "description"}
+    inStock: Bool{json: "in_stock"}
+  )
+}
+
+// --- Optional fields ---
+
+type UserProfile {
+  UserProfile(
+    id: Int{min: 1, json: "id"}
+    name: String{min_length: 1, json: "name"}
+    email: String{pattern: ".+@.+", json: "email"}
+    nickname: Option[String]{json: "nickname"}
+    age: Option[Int]{json: "age"}
+  )
+}
+
+// --- Enum ---
+
+type OrderStatus {
+  Pending
+  Confirmed
+  Shipped
+  Delivered
+  Cancelled
+}
+
+// --- Tagged union ---
+
+type PaymentMethod {
+  CreditCard(number: String, expiry: String, cvv: String)
+  BankTransfer(bankName: String, accountNumber: String)
+  Cash
+}
+
+// --- Nested types (ref) ---
+
+type Order {
+  Order(
+    id: Int{min: 1, json: "id"}
+    status: OrderStatus{json: "status"}
+    customer: UserProfile{json: "customer"}
+    payment: PaymentMethod{json: "payment"}
+    items: List[Product]{json: "items"}
+    note: Option[String]{json: "note"}
+    total: Float{min: 0.0, json: "total"}
+  )
+}
+
+// --- Constrained type aliases ---
+
+type Email = String{pattern: ".+@.+", max_length: 255}
+type PositiveInt = Int{min: 1}
+
+// --- API error ---
+
+type ApiError {
+  NotFound(message: String)
+  BadRequest(message: String, field: String)
+  Unauthorized
+  InternalError(message: String)
+}
+
+fun main() {}
