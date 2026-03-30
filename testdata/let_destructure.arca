@@ -1,6 +1,6 @@
 import go.fmt
 
-fn main() {
+fun main() {
   let items = ["alice", "bob", "charlie"]
   let [first, ..rest] = items
   fmt.Println(first)

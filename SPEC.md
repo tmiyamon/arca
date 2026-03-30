@@ -45,7 +45,7 @@ type Pair[A, B] {
 ### Functions
 
 ```
-pub fn statusLabel(status: OrderStatus) -> String {
+pub fun statusLabel(status: OrderStatus) -> String {
   match status {
     Pending -> "pending"
     Confirmed -> "confirmed"
@@ -53,7 +53,7 @@ pub fn statusLabel(status: OrderStatus) -> String {
   }
 }
 
-fn internalHelper() -> Int {
+fun internalHelper() -> Int {
   42
 }
 ```
@@ -123,7 +123,7 @@ for i in 0..10 {
 ### Error Propagation (provisional)
 
 ```
-pub fn findUser(id: Int) -> Result[User, Error] {
+pub fun findUser(id: Int) -> Result[User, Error] {
   let row = db.query_row("SELECT ...", id)?
   let user = scan(row)?
   Ok(user)
@@ -144,7 +144,7 @@ pub fn findUser(id: Int) -> Result[User, Error] {
 
 ```
 // user.arca
-pub fn find(id: Int) -> Result[User, Error] { ... }
+pub fun find(id: Int) -> Result[User, Error] { ... }
 
 // main.arca
 import user
@@ -207,7 +207,7 @@ let file = os.Open("data.txt")?
 No special syntax. Side effects (I/O, logging, etc.) are called directly.
 
 ```
-fn main() {
+fun main() {
   fmt.Println("hello")
 }
 ```
@@ -219,7 +219,7 @@ Uses Go's testing package directly.
 ```
 import go/testing
 
-fn test_statusLabel(t: testing.T) {
+fun test_statusLabel(t: testing.T) {
   assert statusLabel(Pending) == "pending"
 }
 ```
@@ -264,11 +264,11 @@ Built-in constraints:
 ```
 type Age = Int{min: 0, max: 150}
 
-fn Age.increment(self) -> Age {
+fun Age.increment(self) -> Age {
   Age(self.value + 1)?
 }
 
-fn Age.isAdult(self) -> Bool {
+fun Age.isAdult(self) -> Bool {
   self.value >= 18
 }
 

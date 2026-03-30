@@ -6,7 +6,7 @@ type Color {
   Blue
 }
 
-fn colorName(c: Color) -> String {
+fun colorName(c: Color) -> String {
   match c {
     Red -> "red"
     Green -> "green"
@@ -14,7 +14,7 @@ fn colorName(c: Color) -> String {
   }
 }
 
-fn main() {
+fun main() {
   fmt.Println("Hello from Arca!")
   fmt.Println(colorName(Red))
   fmt.Println(colorName(Blue))

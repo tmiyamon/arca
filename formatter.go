@@ -83,7 +83,7 @@ func (f *Formatter) formatTypeDecl(d TypeDecl) {
 			if method.Public {
 				f.write("pub ")
 			}
-			f.write("fn " + method.Name + "(")
+			f.write("fun " + method.Name + "(")
 			for i, p := range method.Params {
 				if i > 0 {
 					f.write(", ")
@@ -134,7 +134,7 @@ func (f *Formatter) formatFnDecl(d FnDecl) {
 	if d.Public {
 		f.write("pub ")
 	}
-	f.write("fn " + d.Name + "(")
+	f.write("fun " + d.Name + "(")
 	for i, p := range d.Params {
 		if i > 0 {
 			f.write(", ")

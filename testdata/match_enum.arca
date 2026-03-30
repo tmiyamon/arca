@@ -4,7 +4,7 @@ type Color {
   Blue
 }
 
-fn colorName(c: Color) -> String {
+fun colorName(c: Color) -> String {
   match c {
     Red -> "red"
     Green -> "green"

@@ -145,12 +145,12 @@ Methods are needed for constrained types to keep domain operations closed:
 ```arca
 type Age = Int{min: 0, max: 150}
 
-fn Age.increment(self) -> Age {
+fun Age.increment(self) -> Age {
   Age(self.value + 1)?
 }
 ```
 
-- Syntax: `fn Type.method(self) -> RetType { ... }`
+- Syntax: `fun Type.method(self) -> RetType { ... }`
 - Maps to Go methods: `func (a Age) Increment() (Age, error)`
 - Namespace per type — no collision between `Age.increment` and `Score.increment`
 - Decision driven by: constrained types need methods, Go FFI already uses methods, pipe operator becomes redundant

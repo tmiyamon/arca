@@ -1,10 +1,10 @@
 import go.fmt
 
-fn pair() -> (Int, String) {
+fun pair() -> (Int, String) {
   (42, "hello")
 }
 
-fn main() {
+fun main() {
   let (num, name) = pair()
   fmt.Println(num)
   fmt.Println(name)

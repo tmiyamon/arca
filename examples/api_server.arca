@@ -7,7 +7,7 @@ import go.strconv
 type User {
   User(id: Int, name: String, email: String)
 
-  pub fn toJson() -> String {
+  pub fun toJson() -> String {
     "{\"id\": ${self.id}, \"name\": \"${self.name}\", \"email\": \"${self.email}\"}"
   }
 }
@@ -16,7 +16,7 @@ type ApiError {
   NotFound(message: String)
   BadRequest(message: String)
 
-  fn send(w: http.ResponseWriter) {
+  fun send(w: http.ResponseWriter) {
     match self {
       NotFound(msg) -> sendJson(w, 404, "{\"error\": \"${msg}\"}")
       BadRequest(msg) -> sendJson(w, 400, "{\"error\": \"${msg}\"}")
@@ -26,7 +26,7 @@ type ApiError {
 
 // --- Response Handling ---
 
-fn sendJson(w: http.ResponseWriter, status: Int, body: String) {
+fun sendJson(w: http.ResponseWriter, status: Int, body: String) {
   w.Header().Set("Content-Type", "application/json")
   w.WriteHeader(status)
   w.Write(toBytes(body))
@@ -34,7 +34,7 @@ fn sendJson(w: http.ResponseWriter, status: Int, body: String) {
 
 // --- Data ---
 
-fn findUserById(id: Int) -> Result[User, ApiError] {
+fun findUserById(id: Int) -> Result[User, ApiError] {
   match id {
     1 -> Ok(User(id: 1, name: "Alice", email: "alice@example.com"))
     2 -> Ok(User(id: 2, name: "Bob", email: "bob@example.com"))
@@ -44,7 +44,7 @@ fn findUserById(id: Int) -> Result[User, ApiError] {
 
 // --- Handlers ---
 
-fn handleUser(w: http.ResponseWriter, r: *http.Request) {
+fun handleUser(w: http.ResponseWriter, r: *http.Request) {
   let idStr = r.URL.Query().Get("id")
   let id = parseId(idStr)
   match id {
@@ -59,18 +59,18 @@ fn handleUser(w: http.ResponseWriter, r: *http.Request) {
   }
 }
 
-fn parseId(s: String) -> Result[Int, error] {
+fun parseId(s: String) -> Result[Int, error] {
   let n = strconv.Atoi(s)?
   Ok(n)
 }
 
-fn handleHealth(w: http.ResponseWriter, r: *http.Request) {
+fun handleHealth(w: http.ResponseWriter, r: *http.Request) {
   sendJson(w, 200, "{\"status\": \"ok\"}")
 }
 
 // --- Main ---
 
-fn main() {
+fun main() {
   http.HandleFunc("/user", handleUser)
   http.HandleFunc("/health", handleHealth)
   fmt.Println("Listening on :8080")

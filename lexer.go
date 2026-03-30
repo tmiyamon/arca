@@ -70,7 +70,7 @@ var tokenNames = map[TokenKind]string{
 	TkInt: "Int", TkFloat: "Float", TkString: "String",
 	TkStringInterpStart: "InterpStart", TkStringInterpEnd: "InterpEnd",
 	TkIdent: "Ident", TkUpperIdent: "UpperIdent",
-	TkType: "type", TkFn: "fn", TkMatch: "match",
+	TkType: "type", TkFn: "fun", TkMatch: "match",
 	TkLet: "let", TkTrue: "True", TkFalse: "False",
 	TkPub: "pub", TkImport: "import", TkFor: "for", TkIn: "in", TkAssert: "assert",
 	TkLParen: "(", TkRParen: ")",
@@ -104,7 +104,7 @@ func (t Token) String() string {
 
 var keywords = map[string]TokenKind{
 	"type":   TkType,
-	"fn":     TkFn,
+	"fun":    TkFn,
 	"match":  TkMatch,
 	"let":    TkLet,
 	"True":   TkTrue,

@@ -1,13 +1,13 @@
 import go.fmt
 
-fn greet(name: Option[String]) -> String {
+fun greet(name: Option[String]) -> String {
   match name {
     Some(n) -> "Hello ${n}!"
     None -> "Hello stranger!"
   }
 }
 
-fn main() {
+fun main() {
   fmt.Println(greet(Some("Alice")))
   fmt.Println(greet(None))
 }

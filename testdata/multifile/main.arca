@@ -1,7 +1,7 @@
 import go.fmt
 import user
 
-fn main() {
+fun main() {
   let u = newUser("Alice", 30)
   fmt.Println(userName(u))
 }

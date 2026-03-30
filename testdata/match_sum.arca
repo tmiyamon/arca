@@ -3,7 +3,7 @@ type Response {
   Err(message: String)
 }
 
-fn unwrap(r: Response) -> String {
+fun unwrap(r: Response) -> String {
   match r {
     Ok(value) -> value
     Err(message) -> message

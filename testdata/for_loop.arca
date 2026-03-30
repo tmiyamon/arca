@@ -1,6 +1,6 @@
 import go.fmt
 
-fn printNumbers() {
+fun printNumbers() {
   for i in 0..5 {
     fmt.Println(i)
   }

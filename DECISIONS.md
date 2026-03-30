@@ -4,6 +4,18 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-03-30: Function keyword — `fun`
+
+**Context:** Was `fn` (Rust style). Changed to camelCase, making `fn` + camelCase an uncommon combination (only Zig).
+
+**Analysis:** Arca has methods, constrained types, type-driven design — closer to Kotlin/Swift than Rust/Gleam. `fn` is function-oriented/FP culture. `fun`/`func` is method-oriented/OOP-lean culture.
+
+**Options:** `fn` (Rust/Zig), `func` (Go/Swift), `fun` (Kotlin/Koka/Mint)
+
+**Decision:** `fun`. Short, modern, matches Kotlin (closest in philosophy). Go's `func` was considered but `fun` is 1 char shorter.
+
+---
+
 ## 2026-03-30: Naming convention — camelCase
 
 **Context:** Arca was using snake_case, requiring snake→camelCase conversion in codegen for Go output.
@@ -29,7 +41,7 @@ Design discussions and their reasoning. Newest first.
 **Arguments for methods:**
 - Constrained types need per-type operations that respect constraints
 - Go FFI already returns objects with methods — inconsistent to not have methods in Arca
-- Name collision: `incrementAge` vs `incrementScore` vs `fn Age.increment(self)`
+- Name collision: `incrementAge` vs `incrementScore` vs `fun Age.increment(self)`
 - IDE discoverability: `age.` shows available operations
 
 **Arguments against:**
@@ -37,7 +49,7 @@ Design discussions and their reasoning. Newest first.
 - Adds complexity to the language
 - Triggers trait/interface discussions
 
-**Decision:** Add methods. Syntax: `fn Type.method(self) -> RetType`. "Types express domains" takes priority over "data/operation separation".
+**Decision:** Add methods. Syntax: `fun Type.method(self) -> RetType`. "Types express domains" takes priority over "data/operation separation".
 
 ---
 
@@ -206,7 +218,7 @@ Documented in one session:
 - Newline-based statements
 - `pub` visibility
 - 1 file = 1 module
-- `fn` / `type` / `match`
+- `fun` / `type` / `match`
 - camelCase in Arca, camelCase in generated Go
 
 ---

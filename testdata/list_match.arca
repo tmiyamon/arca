@@ -1,19 +1,19 @@
 import go.fmt
 
-fn describe(items: List[String]) -> String {
+fun describe(items: List[String]) -> String {
   match items {
     [] -> "empty"
     [first, ..rest] -> "first: ${first}"
   }
 }
 
-fn main() {
+fun main() {
   fmt.Println(describe([]))
   fmt.Println(describe(["hello", "world"]))
   let extended = [0, ..nums()]
   fmt.Println(extended)
 }
 
-fn nums() -> List[Int] {
+fun nums() -> List[Int] {
   [1, 2, 3]
 }

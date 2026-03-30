@@ -2,10 +2,10 @@ type User {
   User(name: String, age: Int)
 }
 
-pub fn newUser(name: String, age: Int) -> User {
+pub fun newUser(name: String, age: Int) -> User {
   User(name: name, age: age)
 }
 
-pub fn userName(u: User) -> String {
+pub fun userName(u: User) -> String {
   u.name
 }

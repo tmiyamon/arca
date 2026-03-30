@@ -1,17 +1,17 @@
 import go.fmt
 import go.net.http
 
-fn handle_hello(w: http.ResponseWriter, r: *http.Request) {
+fun handleHello(w: http.ResponseWriter, r: *http.Request) {
   fmt.Fprintf(w, "Hello from Arca!")
 }
 
-fn handle_health(w: http.ResponseWriter, r: *http.Request) {
+fun handleHealth(w: http.ResponseWriter, r: *http.Request) {
   fmt.Fprintf(w, "ok")
 }
 
-fn main() {
-  http.HandleFunc("/", handle_hello)
-  http.HandleFunc("/health", handle_health)
+fun main() {
+  http.HandleFunc("/", handleHello)
+  http.HandleFunc("/health", handleHealth)
   fmt.Println("Listening on :8080")
   http.ListenAndServe(":8080", nil)
 }

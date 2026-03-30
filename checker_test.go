@@ -36,7 +36,7 @@ type Order {
 
 func TestCheckerUnknownConstructor(t *testing.T) {
 	errs := checkSource(`
-fn make() -> String {
+fun make() -> String {
   Bogus(id: 1)
 }
 `)
@@ -54,7 +54,7 @@ type Point {
   Point(x: Int, y: Int)
 }
 
-fn make() -> Point {
+fun make() -> Point {
   Point(x: 1)
 }
 `)
@@ -72,7 +72,7 @@ type Point {
   Point(x: Int, y: Int)
 }
 
-fn make() -> Point {
+fun make() -> Point {
   Point(x: 1, z: 2)
 }
 `)
@@ -92,7 +92,7 @@ type Color {
   Blue
 }
 
-fn name(c: Color) -> String {
+fun name(c: Color) -> String {
   match c {
     Red -> "red"
     Green -> "green"
@@ -115,7 +115,7 @@ type Color {
   Blue
 }
 
-fn name(c: Color) -> String {
+fun name(c: Color) -> String {
   match c {
     Red -> "red"
     Green -> "green"
@@ -136,7 +136,7 @@ type Color {
   Blue
 }
 
-fn name(c: Color) -> String {
+fun name(c: Color) -> String {
   match c {
     Red -> "red"
     _ -> "other"
@@ -150,7 +150,7 @@ fn name(c: Color) -> String {
 
 func TestCheckerUnknownReturnType(t *testing.T) {
 	errs := checkSource(`
-fn make() -> Bogus {
+fun make() -> Bogus {
   42
 }
 `)
@@ -173,7 +173,7 @@ type User {
   User(name: String, status: Status)
 }
 
-pub fn is_active(u: User) -> Bool {
+pub fun is_active(u: User) -> Bool {
   match u.status {
     Active -> True
     Inactive -> False
@@ -187,11 +187,11 @@ pub fn is_active(u: User) -> Bool {
 
 func TestCheckerWrongArgCount(t *testing.T) {
 	errs := checkSource(`
-fn add(a: Int, b: Int) -> Int {
+fun add(a: Int, b: Int) -> Int {
   a + b
 }
 
-fn main() {
+fun main() {
   add(1)
 }
 `)
@@ -205,11 +205,11 @@ fn main() {
 
 func TestCheckerWrongArgType(t *testing.T) {
 	errs := checkSource(`
-fn greet(name: String) -> String {
+fun greet(name: String) -> String {
   name
 }
 
-fn main() {
+fun main() {
   greet(42)
 }
 `)
@@ -223,7 +223,7 @@ fn main() {
 
 func TestCheckerReturnTypeMismatch(t *testing.T) {
 	errs := checkSource(`
-fn get_name() -> String {
+fun get_name() -> String {
   42
 }
 `)
@@ -241,7 +241,7 @@ type Point {
   Point(x: Int, y: Int)
 }
 
-fn make() -> Point {
+fun make() -> Point {
   Point(x: "hello", y: 2)
 }
 `)
@@ -255,11 +255,11 @@ fn make() -> Point {
 
 func TestCheckerLetInference(t *testing.T) {
 	errs := checkSource(`
-fn greet(name: String) -> String {
+fun greet(name: String) -> String {
   name
 }
 
-fn main() {
+fun main() {
   let x = 42
   greet(x)
 }
@@ -278,11 +278,11 @@ type Wrapper {
   Wrap(value: Int)
 }
 
-fn greet(name: String) -> String {
+fun greet(name: String) -> String {
   name
 }
 
-fn use(w: Wrapper) -> String {
+fun use(w: Wrapper) -> String {
   match w {
     Wrap(value) -> greet(value)
   }
