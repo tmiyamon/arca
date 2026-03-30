@@ -326,6 +326,8 @@ func (cg *CodeGen) goType(t Type) string {
 	switch tt := t.(type) {
 	case NamedType:
 		switch tt.Name {
+		case "Unit":
+			return "struct{}"
 		case "Int":
 			return "int"
 		case "Float":
@@ -491,6 +493,9 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 			return cg.currentReceiver
 		}
 		// Built-in constants
+		if e.Name == "Unit" {
+			return "struct{}{}"
+		}
 		if e.Name == "None" {
 			cg.usedBuiltins["option"] = true
 			return "None_[any]()"
@@ -897,6 +902,8 @@ func (cg *CodeGen) goZeroValue(t Type) string {
 	switch tt := t.(type) {
 	case NamedType:
 		switch tt.Name {
+		case "Unit":
+			return "struct{}{}"
 		case "Int", "Float":
 			return "0"
 		case "String":

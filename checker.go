@@ -375,6 +375,7 @@ func (c *Checker) checkTypeExists(t Type) {
 
 func (c *Checker) isKnownType(name string) bool {
 	builtins := map[string]bool{
+		"Unit": true,
 		"Int": true, "Float": true, "String": true, "Bool": true,
 		"List": true, "Option": true, "Result": true,
 		"error": true,
