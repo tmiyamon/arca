@@ -657,7 +657,10 @@ func (cg *CodeGen) genLambda(l Lambda) string {
 	if l.ReturnType != nil {
 		retType = " " + cg.goType(l.ReturnType)
 	}
-	return fmt.Sprintf("func(%s)%s { return %s }", strings.Join(params, ", "), retType, body)
+	if l.ReturnType != nil {
+		return fmt.Sprintf("func(%s)%s { return %s }", strings.Join(params, ", "), retType, body)
+	}
+	return fmt.Sprintf("func(%s) { %s }", strings.Join(params, ", "), body)
 }
 
 func (cg *CodeGen) inferGoType(expr Expr) string {
