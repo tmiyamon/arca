@@ -14,18 +14,11 @@ type User {
 
 // --- DB Operations ---
 
-fun execSql(db: *sql.DB, query: String) -> Result[Bool, error] {
-  let result = db.Exec(query)?
-  fmt.Println("Rows affected:", result)
-  Ok(True)
-}
-
 fun run() -> Result[Bool, error] {
   let db = sql.Open("sqlite", ":memory:")?
-  execSql(db, "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")
-  let r1 = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?
-  let r2 = db.Exec("INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com')")?
-  fmt.Println("Inserted:", r1, r2)
+  let _ = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")?
+  let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?
+  let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com')")?
 
   let row1 = db.QueryRow("SELECT name FROM users WHERE id = 1")
   let row2 = db.QueryRow("SELECT name FROM users WHERE id = 2")

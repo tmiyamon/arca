@@ -447,6 +447,11 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			cg.genTryLetStmt(s.Name, call.Args[0], indent)
 			return
 		}
+		// Discard: let _ = expr
+		if s.Name == "_" {
+			cg.writeln(fmt.Sprintf("%s_ = %s", indent, cg.genExprStr(s.Value)))
+			return
+		}
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
 	case AssertStmt:
 		exprStr := cg.genExprStr(s.Expr)
@@ -852,7 +857,10 @@ func (cg *CodeGen) isTriCall(call FnCall) bool {
 
 func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
 	cg.tmpCounter++
-	tmpVal := fmt.Sprintf("__try_val%d", cg.tmpCounter)
+	tmpVal := "_"
+	if name != "_" {
+		tmpVal = fmt.Sprintf("__try_val%d", cg.tmpCounter)
+	}
 	tmpErr := fmt.Sprintf("__try_err%d", cg.tmpCounter)
 	cg.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, cg.genExprStr(expr)))
 	cg.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
@@ -864,7 +872,9 @@ func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
 		cg.writeln(fmt.Sprintf("%s\tpanic(%s)", indent, tmpErr))
 	}
 	cg.writeln(fmt.Sprintf("%s}", indent))
-	cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(name), tmpVal))
+	if name != "_" {
+		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(name), tmpVal))
+	}
 }
 
 func isResultType(t Type) bool {

@@ -513,6 +513,19 @@ func (p *Parser) parseLetStmt() (Stmt, error) {
 		return LetStmt{Pattern: pat, Value: value}, nil
 	}
 
+	// let _ = expr (discard)
+	if p.peek().Kind == TkUnderscore {
+		p.advance()
+		if _, err := p.expect(TkEq); err != nil {
+			return nil, err
+		}
+		value, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		return LetStmt{Name: "_", Value: value}, nil
+	}
+
 	name, err := p.expect(TkIdent)
 	if err != nil {
 		return nil, err
