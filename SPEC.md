@@ -226,6 +226,65 @@ fn test_status_label(t: testing.T) {
 
 Run with `go test` on the generated Go code.
 
+### Constrained Types
+
+```
+// Constraints on fields
+type User {
+  User(
+    id: Int{min: 1}
+    name: String{min_length: 1, max_length: 100}
+    email: String{pattern: ".+@.+"}
+  )
+}
+
+// Type alias with constraints
+type PositiveInt = Int{min: 1}
+type Email = String{pattern: ".+@.+", max_length: 255}
+
+// Custom validation
+type EvenInt = Int{validate: is_even}
+
+// Constructor returns Result (validation may fail)
+let user = User(id: 1, name: "Alice", email: "a@b.com")?
+```
+
+Built-in constraints:
+
+| Type | Constraints |
+|------|-------------|
+| Int | `min`, `max` |
+| Float | `min`, `max` |
+| String | `min_length`, `max_length`, `pattern` |
+| List | `min_length`, `max_length` |
+| All | `validate` (custom function) |
+
+### Methods (planned)
+
+```
+type Age = Int{min: 0, max: 150}
+
+fn Age.increment(self) -> Age {
+  Age(self.value + 1)?
+}
+
+fn Age.is_adult(self) -> Bool {
+  self.value >= 18
+}
+
+// Usage
+let age = Age(30)?
+age.increment()
+age.is_adult()
+```
+
+### Assert
+
+```
+assert add(1, 2) == 3
+assert x > 0
+```
+
 ### Comments
 
 ```

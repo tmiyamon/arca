@@ -93,9 +93,68 @@ This document records language design decisions, their rationale, and trade-offs
 
 ## Things Intentionally Not Included
 
-- **No ad-hoc polymorphism** (type classes/traits) — same as Go
+- **No ad-hoc polymorphism** (type classes/traits) — same as Go. May revisit if needed for io.Reader/io.Writer
 - **No macros** — simplicity over metaprogramming
 - **No exceptions** — Result type for error handling
 - **No null** — Option type instead
 - **No mutable variables** — fully immutable
 - **No side effect tracking** — pragmatic, Go FFI makes it impractical
+
+## Constrained Types
+
+Types can carry constraints validated at construction time:
+
+```arca
+type User {
+  User(
+    id: Int{min: 1}
+    name: String{min_length: 1, max_length: 100}
+    email: String{pattern: ".+@.+"}
+  )
+}
+```
+
+- Constraints use `{}` after the type name
+- Built-in: `min`, `max`, `min_length`, `max_length`, `pattern`
+- Custom: `validate: func_name` (runtime only, not OpenAPI-convertible)
+- Constructor auto-generates validation, returns `(T, error)`
+- **Immutability guarantees constraints hold permanently after construction**
+- Type aliases for reusable constraints: `type Email = String{pattern: ".+@.+"}`
+- No re-constraining aliases: `Email{min_length: 5}` is an error
+- No cross-field constraints: use constructor functions
+- Constraints are opt-in, not forced on all types
+
+### Design principle: static vs runtime constraints
+- **Static** (Arca): Value constraints. Validated at construction, guaranteed by immutability.
+- **Runtime** (Go): Execution constraints (timeout, cancellation, context). Inherently mutable.
+- Arca guarantees values. Go guarantees execution.
+
+### Future levels
+- Constraint compatibility checking (Age vs AdultAge)
+- Condition-based narrowing
+- Go type optimization (Int{0,255} → uint8)
+- JSON/OpenAPI/DB schema derivation from constraints
+
+## Methods (planned)
+
+Methods are needed for constrained types to keep domain operations closed:
+
+```arca
+type Age = Int{min: 0, max: 150}
+
+fn Age.increment(self) -> Age {
+  Age(self.value + 1)?
+}
+```
+
+- Syntax: `fn Type.method(self) -> RetType { ... }`
+- Maps to Go methods: `func (a Age) Increment() (Age, error)`
+- Namespace per type — no collision between `Age.increment` and `Score.increment`
+- Decision driven by: constrained types need methods, Go FFI already uses methods, pipe operator becomes redundant
+- Pipe operator will likely be dropped once methods are added
+
+## Go Runtime Primitives
+
+- `defer`, `context`, `goroutine`, `channel` — use Go transparently, don't abstract
+- `defer` needed but syntax is "un-type-like" — accepted as Go's domain
+- Arca guarantees values (static constraints), Go guarantees execution (runtime constraints)
