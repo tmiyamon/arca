@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 pub fun greet(name: String) -> String {
   "Hello ${name}!"

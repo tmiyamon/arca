@@ -1,5 +1,5 @@
-import go.fmt
-import go.net.http
+import go "fmt"
+import go "net/http"
 
 fun handleHello(w: http.ResponseWriter, r: *http.Request) {
   fmt.Fprintf(w, "Hello from Arca!")

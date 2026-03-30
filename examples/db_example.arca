@@ -1,0 +1,46 @@
+import go "fmt"
+import go "database/sql"
+import go _ "modernc.org/sqlite"
+
+// --- Domain Types ---
+
+type User {
+  User(id: Int, name: String, email: String)
+
+  pub fun toJson() -> String {
+    "{\"id\": ${self.id}, \"name\": \"${self.name}\", \"email\": \"${self.email}\"}"
+  }
+}
+
+// --- DB Operations ---
+
+fun execSql(db: *sql.DB, query: String) -> Result[Bool, error] {
+  let result = db.Exec(query)?
+  fmt.Println("Rows affected:", result)
+  Ok(True)
+}
+
+fun run() -> Result[Bool, error] {
+  let db = sql.Open("sqlite", ":memory:")?
+  execSql(db, "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")
+  let r1 = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?
+  let r2 = db.Exec("INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com')")?
+  fmt.Println("Inserted:", r1, r2)
+
+  let row1 = db.QueryRow("SELECT name FROM users WHERE id = 1")
+  let row2 = db.QueryRow("SELECT name FROM users WHERE id = 2")
+  fmt.Println("Row 1:", row1)
+  fmt.Println("Row 2:", row2)
+  db.Close()
+  Ok(True)
+}
+
+// --- Main ---
+
+fun main() {
+  let result = run()
+  match result {
+    Ok(v) -> fmt.Println("Done")
+    Error(err) -> fmt.Println("Error:", err)
+  }
+}

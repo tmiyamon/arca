@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 import user
 
 fun main() {

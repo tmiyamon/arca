@@ -143,16 +143,21 @@ func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*P
 	return merged, nil
 }
 
-func transpile(inputPath string) (string, error) {
+type transpileResult struct {
+	goCode      string
+	goImports   []goImportEntry
+}
+
+func transpile(inputPath string) (*transpileResult, error) {
 	prog, err := parseFile(inputPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	loaded := map[string]bool{inputPath: true}
 	prog, err = resolveImports(inputPath, prog, loaded)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	checker := NewChecker()
@@ -161,25 +166,79 @@ func transpile(inputPath string) (string, error) {
 		for _, e := range errs {
 			msgs = append(msgs, e.Message)
 		}
-		return "", fmt.Errorf("type errors:\n  %s", strings.Join(msgs, "\n  "))
+		return nil, fmt.Errorf("type errors:\n  %s", strings.Join(msgs, "\n  "))
 	}
 
 	codegen := NewCodeGen(prog)
-	return codegen.Generate(prog), nil
+	code := codegen.Generate(prog)
+	return &transpileResult{goCode: code, goImports: codegen.goImports}, nil
 }
 
-func writeBuildGo(inputPath string, goCode string) (string, error) {
+func isStdLib(pkg string) bool {
+	// Go standard library packages don't contain dots in the first segment
+	parts := strings.SplitN(pkg, "/", 2)
+	return !strings.Contains(parts[0], ".")
+}
+
+func writeBuildDir(inputPath string, result *transpileResult) (string, error) {
+	goCode := result.goCode
 	dir := filepath.Join(filepath.Dir(inputPath), "build")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
 
-	base := strings.TrimSuffix(filepath.Base(inputPath), ".arca")
-	goFile := filepath.Join(dir, base+".go")
+	// Clean old .go files
+	oldFiles, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	for _, f := range oldFiles {
+		os.Remove(f)
+	}
+
+	// Write main.go
+	goFile := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
 		return "", err
 	}
-	return goFile, nil
+
+	// Collect external dependencies
+	var externalDeps []string
+	for _, imp := range result.goImports {
+		if !isStdLib(imp.path) {
+			externalDeps = append(externalDeps, imp.path)
+		}
+	}
+
+	// Write go.mod
+	modFile := filepath.Join(dir, "go.mod")
+	if _, err := os.Stat(modFile); os.IsNotExist(err) {
+		cmd := exec.Command("go", "mod", "init", "arcabuild")
+		cmd.Dir = dir
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("go mod init failed: %w", err)
+		}
+	}
+
+	// Add external dependencies
+	for _, dep := range externalDeps {
+		cmd := exec.Command("go", "get", dep)
+		cmd.Dir = dir
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("go get %s failed: %w", dep, err)
+		}
+	}
+
+	// Tidy
+	if len(externalDeps) > 0 {
+		cmd := exec.Command("go", "mod", "tidy")
+		cmd.Dir = dir
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("go mod tidy failed: %w", err)
+		}
+	}
+
+	return dir, nil
 }
 
 func healthCmd() int {
@@ -246,6 +305,16 @@ func healthCmd() int {
 	return 1
 }
 
+func emitCmd(inputPath string) int {
+	result, err := transpile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Print(result.goCode)
+	return 0
+}
+
 func fmtCmd(inputPath string) int {
 	prog, err := parseFile(inputPath)
 	if err != nil {
@@ -261,30 +330,22 @@ func fmtCmd(inputPath string) int {
 	return 0
 }
 
-func emitCmd(inputPath string) int {
-	goCode, err := transpile(inputPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	fmt.Print(goCode)
-	return 0
-}
 
 func runCmd(inputPath string) int {
-	goCode, err := transpile(inputPath)
+	result, err := transpile(inputPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	goFile, err := writeBuildGo(inputPath, goCode)
+	buildDir, err := writeBuildDir(inputPath, result)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error writing build file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error writing build: %v\n", err)
 		return 1
 	}
 
-	cmd := exec.Command("go", "run", goFile)
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = buildDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -298,15 +359,15 @@ func runCmd(inputPath string) int {
 }
 
 func buildCmd(inputPath string, outputPath string) int {
-	goCode, err := transpile(inputPath)
+	result, err := transpile(inputPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	goFile, err := writeBuildGo(inputPath, goCode)
+	buildDir, err := writeBuildDir(inputPath, result)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error writing build file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error writing build: %v\n", err)
 		return 1
 	}
 
@@ -321,7 +382,8 @@ func buildCmd(inputPath string, outputPath string) int {
 		return 1
 	}
 
-	cmd := exec.Command("go", "build", "-o", absOutput, goFile)
+	cmd := exec.Command("go", "build", "-o", absOutput, ".")
+	cmd.Dir = buildDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

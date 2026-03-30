@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 fun pair() -> (Int, String) {
   (42, "hello")

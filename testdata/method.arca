@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 type User {
   User(name: String, age: Int)

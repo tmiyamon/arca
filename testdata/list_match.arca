@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 fun describe(items: List[String]) -> String {
   match items {

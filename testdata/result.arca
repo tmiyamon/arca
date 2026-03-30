@@ -1,5 +1,5 @@
-import go.fmt
-import go.strconv
+import go "fmt"
+import go "strconv"
 
 fun parseAndDouble(s: String) -> Result[Int, error] {
   let n = strconv.Atoi(s)?

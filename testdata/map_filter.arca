@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 fun main() {
   let doubled = map(nums(), (x: Int) -> Int => x * 2)

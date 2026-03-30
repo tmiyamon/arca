@@ -5,17 +5,22 @@ import (
 	"strings"
 )
 
+type goImportEntry struct {
+	path       string
+	sideEffect bool
+}
+
 type CodeGen struct {
-	buf            strings.Builder
-	types          map[string]TypeDecl
-	imports        []string
-	currentRetType Type
-	usedBuiltins   map[string]bool   // track which builtins are used
-	fnNames        map[string]string  // arca name -> go name (for pub functions)
-	functions        map[string]FnDecl   // arca name -> fn decl
-	ctorTypes        map[string]string   // constructor name -> type name
-	tmpCounter       int
-	currentReceiver  string              // "" or receiver var name (e.g. "u" for User)
+	buf             strings.Builder
+	types           map[string]TypeDecl
+	goImports       []goImportEntry
+	currentRetType  Type
+	usedBuiltins    map[string]bool
+	fnNames         map[string]string
+	functions       map[string]FnDecl
+	ctorTypes       map[string]string
+	tmpCounter      int
+	currentReceiver string
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -34,7 +39,12 @@ func NewCodeGen(prog *Program) *CodeGen {
 				cg.ctorTypes[ctor.Name] = d.Name
 			}
 		case ImportDecl:
-			cg.imports = append(cg.imports, d.Path)
+			if strings.HasPrefix(d.Path, "go/") {
+				cg.goImports = append(cg.goImports, goImportEntry{
+					path:       d.Path[3:], // strip "go/"
+					sideEffect: d.SideEffect,
+				})
+			}
 		case FnDecl:
 			cg.functions[d.Name] = d
 			if d.Public {
@@ -70,15 +80,14 @@ func (cg *CodeGen) Generate(prog *Program) string {
 	cg.writeln("")
 
 	// Generate imports
-	if len(cg.imports) > 0 {
+	if len(cg.goImports) > 0 {
 		cg.writeln("import (")
-		for _, imp := range cg.imports {
-			// Strip "go/" prefix for Go standard library
-			goImp := imp
-			if strings.HasPrefix(goImp, "go/") {
-				goImp = goImp[3:]
+		for _, imp := range cg.goImports {
+			if imp.sideEffect {
+				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
+			} else {
+				cg.writeln(fmt.Sprintf("\t%q", imp.path))
 			}
-			cg.writeln(fmt.Sprintf("\t%q", goImp))
 		}
 		if cg.usedBuiltins["regexp"] {
 			cg.writeln("\t\"regexp\"")

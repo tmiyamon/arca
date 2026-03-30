@@ -213,7 +213,8 @@ type Decl interface {
 }
 
 type ImportDecl struct {
-	Path string // e.g. "go/fmt", "user"
+	Path       string // e.g. "go/fmt", "user"
+	SideEffect bool   // import go _ "pkg"
 }
 
 type TypeDecl struct {

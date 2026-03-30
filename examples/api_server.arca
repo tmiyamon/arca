@@ -1,6 +1,6 @@
-import go.fmt
-import go.net.http
-import go.strconv
+import go "fmt"
+import go "net/http"
+import go "strconv"
 
 // --- Domain Types ---
 

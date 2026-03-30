@@ -68,27 +68,36 @@ func (p *Parser) parseDecl() (Decl, error) {
 
 func (p *Parser) parseImportDecl() (Decl, error) {
 	p.advance() // skip 'import'
-	var parts []string
-	tok := p.advance()
+	tok := p.peek()
+
+	// Go package: import go "path" or import go _ "path"
+	if tok.Kind == TkIdent && tok.Lit == "go" {
+		p.advance() // skip 'go'
+		sideEffect := false
+		if p.peek().Kind == TkUnderscore {
+			p.advance() // skip '_'
+			sideEffect = true
+		}
+		pathTok, err := p.expect(TkString)
+		if err != nil {
+			return nil, fmt.Errorf("%d:%d: expected string path after 'import go', got %s", p.peek().Line, p.peek().Col, p.peek())
+		}
+		return ImportDecl{Path: "go/" + pathTok.Lit, SideEffect: sideEffect}, nil
+	}
+
+	// Arca module: import user or import order.item
 	if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
 		return nil, fmt.Errorf("%d:%d: expected module path, got %s", tok.Line, tok.Col, tok)
 	}
-	parts = append(parts, tok.Lit)
+	p.advance()
+	path := tok.Lit
 	for p.peek().Kind == TkDot {
 		p.advance()
-		tok = p.advance()
-		if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
-			return nil, fmt.Errorf("%d:%d: expected identifier in import path, got %s", tok.Line, tok.Col, tok)
+		next := p.advance()
+		if next.Kind != TkIdent && next.Kind != TkUpperIdent {
+			return nil, fmt.Errorf("%d:%d: expected identifier in import path, got %s", next.Line, next.Col, next)
 		}
-		parts = append(parts, tok.Lit)
-	}
-	path := parts[0]
-	for _, part := range parts[1:] {
-		if parts[0] == "go" {
-			path += "/" + part
-		} else {
-			path += "." + part
-		}
+		path += "." + next.Lit
 	}
 	return ImportDecl{Path: path}, nil
 }

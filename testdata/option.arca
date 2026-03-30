@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 fun greet(name: Option[String]) -> String {
   match name {

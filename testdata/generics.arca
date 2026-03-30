@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 type Pair[A, B] {
   Pair(first: A, second: B)

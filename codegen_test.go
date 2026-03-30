@@ -22,13 +22,13 @@ func TestCodegen(t *testing.T) {
 				t.Fatalf("missing expected output %s: %v", goFile, err)
 			}
 
-			got, err := transpile(arcaFile)
+			result, err := transpile(arcaFile)
 			if err != nil {
 				t.Fatalf("transpile error: %v", err)
 			}
 
-			if got != string(expected) {
-				t.Errorf("output mismatch for %s\n--- expected ---\n%s\n--- got ---\n%s", arcaFile, expected, got)
+			if result.goCode != string(expected) {
+				t.Errorf("output mismatch for %s\n--- expected ---\n%s\n--- got ---\n%s", arcaFile, expected, result.goCode)
 			}
 		})
 	}
@@ -46,7 +46,7 @@ func TestGeneratedGoCompiles(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
-			goCode, err := transpile(arcaFile)
+			result, err := transpile(arcaFile)
 			if err != nil {
 				t.Fatalf("transpile error: %v", err)
 			}
@@ -58,7 +58,7 @@ func TestGeneratedGoCompiles(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			goFile := filepath.Join(dir, "main.go")
-			if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
+			if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
 				t.Fatal(err)
 			}
 
@@ -73,7 +73,7 @@ func TestGeneratedGoCompiles(t *testing.T) {
 
 func TestE2EMultifile(t *testing.T) {
 	arcaFile := "testdata/multifile/main.arca"
-	goCode, err := transpile(arcaFile)
+	result, err := transpile(arcaFile)
 	if err != nil {
 		t.Fatalf("transpile error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestE2EMultifile(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
+	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +103,7 @@ func TestE2EMultifile(t *testing.T) {
 
 func TestE2E(t *testing.T) {
 	arcaFile := "testdata/hello.arca"
-	goCode, err := transpile(arcaFile)
+	result, err := transpile(arcaFile)
 	if err != nil {
 		t.Fatalf("transpile error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestE2E(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(goCode), 0644); err != nil {
+	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
 		t.Fatal(err)
 	}
 

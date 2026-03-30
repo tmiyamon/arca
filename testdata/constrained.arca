@@ -1,4 +1,4 @@
-import go.fmt
+import go "fmt"
 
 type PositiveInt = Int{min: 1}
 type Email = String{pattern: ".+@.+", max_length: 255}
