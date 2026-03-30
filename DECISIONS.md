@@ -4,6 +4,36 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-03-30: Pipe operator — keeping it
+
+**Context:** Methods were added. Considered dropping pipe. But Go generics can't add new type parameters to methods (`func (l List[T]) Map[U](...) List[U]` is illegal). Collection operations (map/filter/fold) can't be method chains.
+
+**Decision:** Keep both. Clear split:
+- **Methods** — type domain operations (`user.toJson()`)
+- **Pipe** — collection operations (`users |> map(...) |> filter(...)`)
+
+Not ideal (two styles) but technically necessary.
+
+---
+
+## 2026-03-30: struct tags from constrained types
+
+**Context:** gin + sqlx need `json:"name" db:"name"` struct tags. Where to put this metadata?
+
+**Options:** Annotations (@json), separate tags block, auto-generate from field names, mix into constrained types `{}`.
+
+**Decision:** Mix into `{}`. String-valued keys become struct tags, numeric-valued keys become validation constraints. Single source of truth. `Int{min: 1, json: "id", db: "id"}`.
+
+---
+
+## 2026-03-30: Short record syntax
+
+**Context:** `type User { User(name: String) }` is redundant for single-constructor types.
+
+**Decision:** `type User(name: String)` as shorthand. Equivalent AST. Formatter outputs short form when no methods.
+
+---
+
 ## 2026-03-30: `&` operator for Go FFI
 
 **Context:** Go libraries require `&T` for mutation (db.Get, json.Unmarshal, rows.Scan). Arca is immutable.
