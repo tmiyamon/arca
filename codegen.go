@@ -964,8 +964,11 @@ func collectIdents(expr Expr, used map[string]bool) {
 		}
 	case Block:
 		for _, s := range e.Stmts {
-			if ls, ok := s.(LetStmt); ok {
-				collectIdents(ls.Value, used)
+			switch st := s.(type) {
+			case LetStmt:
+				collectIdents(st.Value, used)
+			case ExprStmt:
+				collectIdents(st.Expr, used)
 			}
 		}
 		if e.Expr != nil {
