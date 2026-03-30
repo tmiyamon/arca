@@ -297,6 +297,29 @@ age.increment()
 age.isAdult()
 ```
 
+### Defer
+
+```
+fun run() -> Result[Unit, error] {
+  let db = sql.Open("sqlite", ":memory:")?
+  defer db.Close()
+  // db is automatically closed when function returns
+  Ok(Unit)
+}
+```
+
+### Short Record Syntax
+
+```
+// Shorthand for single-constructor types
+type Point(x: Int, y: Int)
+
+// Equivalent to
+type Point {
+  Point(x: Int, y: Int)
+}
+```
+
 ### Assert
 
 ```
