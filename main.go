@@ -44,6 +44,12 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(fmtCmd(os.Args[2]))
+	case "openapi":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: arca openapi <file.arca>")
+			os.Exit(1)
+		}
+		os.Exit(openapiCmd(os.Args[2]))
 	case "health":
 		os.Exit(healthCmd())
 	default:
@@ -65,6 +71,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  build <file.arca> [-o out]   Transpile and compile to binary")
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 	fmt.Fprintln(os.Stderr, "  fmt   <file.arca>            Format source code in place")
+	fmt.Fprintln(os.Stderr, "  openapi <file.arca>          Generate OpenAPI spec")
 	fmt.Fprintln(os.Stderr, "  health                       Check environment")
 }
 
