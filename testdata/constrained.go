@@ -1,0 +1,59 @@
+package main
+
+import (
+	"fmt"
+)
+
+type User struct {
+	Id int
+	Name string
+	Age int
+}
+
+func NewUser(id int, name string, age int) (User, error) {
+	if id < 1 {
+		return User{}, fmt.Errorf("id: must be >= 1")
+	}
+	if len(name) < 1 {
+		return User{}, fmt.Errorf("name: min length 1")
+	}
+	if len(name) > 100 {
+		return User{}, fmt.Errorf("name: max length 100")
+	}
+	if age < 0 {
+		return User{}, fmt.Errorf("age: must be >= 0")
+	}
+	if age > 150 {
+		return User{}, fmt.Errorf("age: must be <= 150")
+	}
+	return User{Id: id, Name: name, Age: age}, nil
+}
+
+func createUser() Result_[User, error] {
+	__try_val1, __try_err1 := NewUser(1, "Alice", 30)
+	if __try_err1 != nil {
+		return Err_[User, error](__try_err1)
+	}
+	user := __try_val1
+	return Ok_[User, error](user)
+}
+
+func main() {
+	result := createUser()
+	fmt.Println(result)
+}
+
+type Result_[T any, E any] struct {
+	Value T
+	Err   E
+	IsOk  bool
+}
+
+func Ok_[T any, E any](v T) Result_[T, E] {
+	return Result_[T, E]{Value: v, IsOk: true}
+}
+
+func Err_[T any, E any](e E) Result_[T, E] {
+	return Result_[T, E]{Err: e}
+}
+

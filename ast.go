@@ -13,10 +13,16 @@ type Type interface {
 	typeNode()
 }
 
+type Constraint struct {
+	Key   string // "min", "max", "min_length", "max_length", "pattern", "validate"
+	Value Expr   // IntLit, FloatLit, StringLit, or Ident (for validate)
+}
+
 type NamedType struct {
-	Pos    Pos
-	Name   string
-	Params []Type
+	Pos         Pos
+	Name        string
+	Params      []Type
+	Constraints []Constraint
 }
 
 type PointerType struct {
@@ -216,6 +222,11 @@ type TypeDecl struct {
 	Constructors []Constructor
 }
 
+type TypeAliasDecl struct {
+	Name string
+	Type Type
+}
+
 type Constructor struct {
 	Name   string
 	Fields []Field
@@ -240,9 +251,10 @@ type FnParam struct {
 	Type Type
 }
 
-func (ImportDecl) declNode() {}
-func (TypeDecl) declNode()   {}
-func (FnDecl) declNode()     {}
+func (ImportDecl) declNode()     {}
+func (TypeDecl) declNode()       {}
+func (TypeAliasDecl) declNode()  {}
+func (FnDecl) declNode()         {}
 
 // --- Program ---
 

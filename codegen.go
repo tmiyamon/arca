@@ -46,7 +46,27 @@ func NewCodeGen(prog *Program) *CodeGen {
 	return cg
 }
 
+func (cg *CodeGen) preScan(prog *Program) {
+	// Scan for features that need imports
+	for _, decl := range prog.Decls {
+		if td, ok := decl.(TypeDecl); ok {
+			if cg.hasConstraints(td) {
+				for _, f := range td.Constructors[0].Fields {
+					if nt, ok := f.Type.(NamedType); ok {
+						for _, c := range nt.Constraints {
+							if c.Key == "pattern" {
+								cg.usedBuiltins["regexp"] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func (cg *CodeGen) Generate(prog *Program) string {
+	cg.preScan(prog)
 	cg.writeln("package main")
 	cg.writeln("")
 
@@ -61,6 +81,9 @@ func (cg *CodeGen) Generate(prog *Program) string {
 			}
 			cg.writeln(fmt.Sprintf("\t%q", goImp))
 		}
+		if cg.usedBuiltins["regexp"] {
+			cg.writeln("\t\"regexp\"")
+		}
 		cg.writeln(")")
 		cg.writeln("")
 	}
@@ -70,6 +93,8 @@ func (cg *CodeGen) Generate(prog *Program) string {
 		case TypeDecl:
 			cg.genTypeDecl(d)
 			cg.writeln("")
+		case TypeAliasDecl:
+			// Type aliases are resolved at use site, no Go code needed
 		case FnDecl:
 			cg.genFnDecl(d)
 			cg.writeln("")
@@ -218,12 +243,86 @@ func (cg *CodeGen) genEnumType(td TypeDecl) {
 	cg.writeln("}")
 }
 
+func (cg *CodeGen) hasConstraints(td TypeDecl) bool {
+	if len(td.Constructors) != 1 {
+		return false
+	}
+	for _, f := range td.Constructors[0].Fields {
+		if nt, ok := f.Type.(NamedType); ok && len(nt.Constraints) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (cg *CodeGen) genStructType(td TypeDecl) {
 	ctor := td.Constructors[0]
 	cg.writeln(fmt.Sprintf("type %s%s struct {", td.Name, goTypeParams(td)))
 	for _, f := range ctor.Fields {
 		cg.writeln(fmt.Sprintf("\t%s %s", capitalize(f.Name), cg.goType(f.Type)))
 	}
+	cg.writeln("}")
+
+	if cg.hasConstraints(td) {
+		cg.genValidatingConstructor(td)
+	}
+}
+
+func (cg *CodeGen) genValidatingConstructor(td TypeDecl) {
+	ctor := td.Constructors[0]
+	// func NewUser(id int, name string, age int) (User, error) {
+	params := make([]string, len(ctor.Fields))
+	for i, f := range ctor.Fields {
+		params[i] = fmt.Sprintf("%s %s", snakeToCamel(f.Name), cg.goType(f.Type))
+	}
+	cg.writeln("")
+	cg.writeln(fmt.Sprintf("func New%s(%s) (%s, error) {", td.Name, strings.Join(params, ", "), td.Name))
+
+	// Generate validation checks
+	for _, f := range ctor.Fields {
+		nt, ok := f.Type.(NamedType)
+		if !ok || len(nt.Constraints) == 0 {
+			continue
+		}
+		fieldVar := snakeToCamel(f.Name)
+		for _, c := range nt.Constraints {
+			valStr := cg.genExprStr(c.Value)
+			switch c.Key {
+			case "min":
+				cg.writeln(fmt.Sprintf("\tif %s < %s {", fieldVar, valStr))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: must be >= %s\")", td.Name, f.Name, valStr))
+				cg.writeln("\t}")
+			case "max":
+				cg.writeln(fmt.Sprintf("\tif %s > %s {", fieldVar, valStr))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: must be <= %s\")", td.Name, f.Name, valStr))
+				cg.writeln("\t}")
+			case "min_length":
+				cg.writeln(fmt.Sprintf("\tif len(%s) < %s {", fieldVar, valStr))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: min length %s\")", td.Name, f.Name, valStr))
+				cg.writeln("\t}")
+			case "max_length":
+				cg.writeln(fmt.Sprintf("\tif len(%s) > %s {", fieldVar, valStr))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: max length %s\")", td.Name, f.Name, valStr))
+				cg.writeln("\t}")
+			case "pattern":
+				cg.usedBuiltins["regexp"] = true
+				cg.writeln(fmt.Sprintf("\tif !regexp.MustCompile(%s).MatchString(%s) {", valStr, fieldVar))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: must match pattern\")", td.Name, f.Name))
+				cg.writeln("\t}")
+			case "validate":
+				cg.writeln(fmt.Sprintf("\tif !%s(%s) {", valStr, fieldVar))
+				cg.writeln(fmt.Sprintf("\t\treturn %s{}, fmt.Errorf(\"%s: validation failed\")", td.Name, f.Name))
+				cg.writeln("\t}")
+			}
+		}
+	}
+
+	// Return constructed value
+	fields := make([]string, len(ctor.Fields))
+	for i, f := range ctor.Fields {
+		fields[i] = fmt.Sprintf("%s: %s", capitalize(f.Name), snakeToCamel(f.Name))
+	}
+	cg.writeln(fmt.Sprintf("\treturn %s{%s}, nil", td.Name, strings.Join(fields, ", ")))
 	cg.writeln("}")
 }
 
@@ -664,6 +763,14 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 				goName := typeName
 				if len(td.Constructors) > 1 {
 					goName = typeName + cc.Name
+				}
+				// Constrained type: use NewType() constructor
+				if cg.hasConstraints(td) {
+					args := make([]string, len(cc.Fields))
+					for i, f := range cc.Fields {
+						args[i] = cg.genExprStr(f.Value)
+					}
+					return fmt.Sprintf("New%s(%s)", goName, strings.Join(args, ", "))
 				}
 				fields := make([]string, len(cc.Fields))
 				for i, f := range cc.Fields {

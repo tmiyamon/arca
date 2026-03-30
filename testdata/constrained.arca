@@ -1,0 +1,22 @@
+import go.fmt
+
+type PositiveInt = Int{min: 1}
+type Email = String{pattern: ".+@.+", max_length: 255}
+
+type User {
+  User(
+    id: Int{min: 1}
+    name: String{min_length: 1, max_length: 100}
+    age: Int{min: 0, max: 150}
+  )
+}
+
+fn create_user() -> Result[User, error] {
+  let user = User(id: 1, name: "Alice", age: 30)?
+  Ok(user)
+}
+
+fn main() {
+  let result = create_user()
+  fmt.Println(result)
+}

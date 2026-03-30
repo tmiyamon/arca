@@ -116,6 +116,16 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		p.advance() // skip ']'
 	}
 
+	// Type alias: type Name = Type
+	if p.peek().Kind == TkEq {
+		p.advance() // skip '='
+		typ, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		return TypeAliasDecl{Name: name.Lit, Type: typ}, nil
+	}
+
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
@@ -207,12 +217,59 @@ func (p *Parser) parseType() (Type, error) {
 				}
 			}
 			p.advance() // skip ']'
-			return NamedType{Pos: pos, Name: name, Params: params}, nil
+			constraints, err := p.tryParseConstraints()
+			if err != nil {
+				return nil, err
+			}
+			return NamedType{Pos: pos, Name: name, Params: params, Constraints: constraints}, nil
 		}
-		return NamedType{Pos: pos, Name: name}, nil
+		constraints, err := p.tryParseConstraints()
+		if err != nil {
+			return nil, err
+		}
+		return NamedType{Pos: pos, Name: name, Constraints: constraints}, nil
 	default:
 		return nil, fmt.Errorf("%d:%d: expected type, got %s", tok.Line, tok.Col, tok)
 	}
+}
+
+func (p *Parser) tryParseConstraints() ([]Constraint, error) {
+	// Check if { follows and contains key: value pairs
+	if p.peek().Kind != TkLBrace {
+		return nil, nil
+	}
+	// Look ahead to distinguish constraints {key: val} from block {expr}
+	if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkIdent {
+		if p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Kind == TkColon {
+			// It's a constraint block
+			return p.parseConstraints()
+		}
+	}
+	return nil, nil
+}
+
+func (p *Parser) parseConstraints() ([]Constraint, error) {
+	p.advance() // skip '{'
+	var constraints []Constraint
+	for p.peek().Kind != TkRBrace {
+		key, err := p.expect(TkIdent)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(TkColon); err != nil {
+			return nil, err
+		}
+		value, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		constraints = append(constraints, Constraint{Key: key.Lit, Value: value})
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip '}'
+	return constraints, nil
 }
 
 func (p *Parser) parseTupleType() (Type, error) {
