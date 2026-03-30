@@ -16,6 +16,30 @@ Not ideal (two styles) but technically necessary.
 
 ---
 
+## 2026-03-31: struct tags — rethinking
+
+**Context:** Realized json/db metadata belongs to fields, not types. `type ProductId = Int{min: 1, json: "id"}` breaks when reused — json key leaks to other fields.
+
+**Current state:** Mixed in `{}`. Works but conceptually wrong.
+
+**Options considered:**
+- Separate types per layer (User, UserRow, UserResponse) + spread syntax for conversion
+- Trait to mark types as JsonModel/DbModel
+- Auto-generate from field names (camelCase → json, snake_case → db)
+- `.go` accessor to drop to raw Go when needed
+
+**Decision:** Unresolved. Current implementation works but needs rethinking. Type-per-layer approach is cleanest conceptually but needs spread syntax for practicality.
+
+---
+
+## 2026-03-31: `.go` accessor idea
+
+**Context:** Arca stdlib should hide Go. But sometimes raw Go access is needed.
+
+**Idea:** `expr.go.Method()` gives raw Go access. Boundary marker like `&`. Self-responsibility zone. Not implemented yet.
+
+---
+
 ## 2026-03-30: struct tags from constrained types
 
 **Context:** gin + sqlx need `json:"name" db:"name"` struct tags. Where to put this metadata?
