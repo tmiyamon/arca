@@ -207,9 +207,14 @@ type AssertStmt struct {
 	Expr Expr
 }
 
+type DeferStmt struct {
+	Expr Expr
+}
+
 func (LetStmt) stmtNode()   {}
 func (ExprStmt) stmtNode()  {}
 func (AssertStmt) stmtNode() {}
+func (DeferStmt) stmtNode()  {}
 
 // --- Top-level declarations ---
 

@@ -457,6 +457,13 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 				return nil, err
 			}
 			stmts = append(stmts, AssertStmt{Expr: expr})
+		} else if p.peek().Kind == TkDefer {
+			p.advance() // skip 'defer'
+			expr, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			stmts = append(stmts, DeferStmt{Expr: expr})
 		} else {
 			expr, err := p.parseExpr()
 			if err != nil {

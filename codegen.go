@@ -487,6 +487,8 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			return
 		}
 		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
+	case DeferStmt:
+		cg.writeln(fmt.Sprintf("%sdefer %s", indent, cg.genExprStr(s.Expr)))
 	case AssertStmt:
 		exprStr := cg.genExprStr(s.Expr)
 		cg.writeln(fmt.Sprintf("%sif !(%s) {", indent, exprStr))

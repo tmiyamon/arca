@@ -196,6 +196,9 @@ func (f *Formatter) formatStmt(stmt Stmt) {
 		} else {
 			f.writeln("let " + s.Name + " = " + f.formatExpr(s.Value))
 		}
+	case DeferStmt:
+		f.writeIndent()
+		f.writeln("defer " + f.formatExpr(s.Expr))
 	case AssertStmt:
 		f.writeIndent()
 		f.writeln("assert " + f.formatExpr(s.Expr))
