@@ -51,11 +51,16 @@ func (f *Formatter) formatDecl(decl Decl) {
 }
 
 func (f *Formatter) formatImport(d ImportDecl) {
-	path := d.Path
-	if strings.HasPrefix(path, "go/") {
-		path = "go." + strings.ReplaceAll(path[3:], "/", ".")
+	if strings.HasPrefix(d.Path, "go/") {
+		goPath := d.Path[3:]
+		if d.SideEffect {
+			f.writeln(fmt.Sprintf("import go _ %q", goPath))
+		} else {
+			f.writeln(fmt.Sprintf("import go %q", goPath))
+		}
+	} else {
+		f.writeln("import " + d.Path)
 	}
-	f.writeln("import " + path)
 }
 
 func (f *Formatter) formatTypeDecl(d TypeDecl) {
