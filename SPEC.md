@@ -158,16 +158,21 @@ let u = user.find(1)
 import user
 import order.item
 
-// Go packages (prefixed with go.)
-import go.fmt
-import go.database.sql
-import go.net.http
+// Go packages (string literal path)
+import go "fmt"
+import go "database/sql"
+import go "net/http"
+import go "github.com/gin-gonic/gin"
+
+// Side-effect import (DB drivers etc.)
+import go _ "modernc.org/sqlite"
 ```
 
 ### Built-in Types
 
 | Type | Description |
 |------|-------------|
+| Unit | No value (void) |
 | Int | Integer |
 | Float | Floating point |
 | String | UTF-8 string |
@@ -179,14 +184,28 @@ import go.net.http
 
 ### FFI (Go interop)
 
-Go packages are imported with the `go/` prefix and called directly.
+Go packages are imported with string literal paths.
 
 ```
-import go.fmt
-import go.os
+import go "fmt"
+import go "os"
 
 fmt.Println("hello")
 let file = os.Open("data.txt")?
+```
+
+**Address operator (`&`) for Go FFI:**
+
+```
+let user = User(id: 0, name: "", email: "")
+let _ = db.Get(&user, "SELECT ...")?
+// & marks the boundary where immutability guarantee ends
+```
+
+**Discarding values:**
+
+```
+let _ = db.Exec("INSERT ...")?   // discard success value, propagate error
 ```
 
 **Return type conversion (automatic):**
@@ -217,7 +236,7 @@ fun main() {
 Uses Go's testing package directly.
 
 ```
-import go/testing
+import go "testing"
 
 fun test_statusLabel(t: testing.T) {
   assert statusLabel(Pending) == "pending"

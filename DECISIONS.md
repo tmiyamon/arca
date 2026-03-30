@@ -4,6 +4,40 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-03-30: `&` operator for Go FFI
+
+**Context:** Go libraries require `&T` for mutation (db.Get, json.Unmarshal, rows.Scan). Arca is immutable.
+
+**Options:** `&expr` (Go syntax), `ref(expr)` (function), auto-detect (needs Go type info).
+
+**Decision:** `&expr`. Acts as boundary marker — immutability guarantee ends here. Same as Rust's `unsafe` in spirit. All immutable languages (Haskell, OCaml, Gleam) allow FFI mutation.
+
+---
+
+## 2026-03-30: Unit type
+
+**Context:** Go functions returning `error` only (no value) need Result wrapping. `Result[???, error]`.
+
+**Decision:** `Unit` type. `Result[Unit, error]` for error-only functions. `Ok(Unit)` for success. Go generates `struct{}`.
+
+---
+
+## 2026-03-30: `let _` for discarding values
+
+**Context:** Go FFI calls return values that Arca doesn't need. Go rejects unused variables.
+
+**Decision:** `let _ = expr` discards value. `let _ = expr?` discards success value but propagates error. Explicit discard — don't allow implicit.
+
+---
+
+## 2026-03-30: Import redesign — string literals
+
+**Context:** `import go.modernc.org.sqlite` broke because dot-to-slash conversion mangled domain names. TLD hacks were fragile.
+
+**Decision:** `import go "path"` with string literal. Go package paths passed through verbatim. Side-effect: `import go _ "pkg"`. No conversion, no bugs.
+
+---
+
 ## 2026-03-30: Function keyword — `fun`
 
 **Context:** Was `fn` (Rust style). Changed to camelCase, making `fn` + camelCase an uncommon combination (only Zig).
