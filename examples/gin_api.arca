@@ -1,0 +1,67 @@
+import go "fmt"
+import go "net/http"
+import go "github.com/gin-gonic/gin"
+import go "github.com/jmoiron/sqlx"
+import go _ "modernc.org/sqlite"
+
+// --- Domain Types ---
+
+type User {
+  User(id: Int, name: String, email: String)
+}
+
+type CreateUserRequest {
+  CreateUserRequest(name: String, email: String)
+}
+
+// --- DB ---
+
+fun initDb() -> Result[*sqlx.DB, error] {
+  let db = sqlx.Open("sqlite", ":memory:")?
+  let _ = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")?
+  let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?
+  let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Bob', 'bob@example.com')")?
+  Ok(db)
+}
+
+// --- Handlers ---
+
+fun handleGetUsers(db: *sqlx.DB, c: *gin.Context) {
+  let users = []
+  let _ = db.Select(users, "SELECT id, name, email FROM users")
+  c.JSON(http.StatusOK, users)
+}
+
+fun handleGetUser(db: *sqlx.DB, c: *gin.Context) {
+  let id = c.Param("id")
+  let user = User(id: 0, name: "", email: "")
+  let err = db.Get(user, "SELECT id, name, email FROM users WHERE id = ?", id)
+  match err {
+    None -> c.JSON(http.StatusOK, user)
+    Some(e) -> c.JSON(http.StatusNotFound, "user not found")
+  }
+}
+
+fun handleCreateUser(db: *sqlx.DB, c: *gin.Context) {
+  let req = CreateUserRequest(name: "", email: "")
+  c.ShouldBindJSON(req)
+  let _ = db.Exec("INSERT INTO users (name, email) VALUES (?, ?)", req.name, req.email)
+  c.JSON(http.StatusCreated, req)
+}
+
+// --- Main ---
+
+fun main() {
+  let db = initDb()
+  match db {
+    Ok(db) -> {
+      let r = gin.Default()
+      r.GET("/users", (c: *gin.Context) => handleGetUsers(db, c))
+      r.GET("/users/:id", (c: *gin.Context) => handleGetUser(db, c))
+      r.POST("/users", (c: *gin.Context) => handleCreateUser(db, c))
+      fmt.Println("Starting server on :8080")
+      r.Run(":8080")
+    }
+    Error(err) -> fmt.Println("DB error:", err)
+  }
+}

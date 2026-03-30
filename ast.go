@@ -142,6 +142,11 @@ func (Lambda) exprNode()          {}
 func (TupleExpr) exprNode()       {}
 func (ForExpr) exprNode()         {}
 func (ListLit) exprNode()          {}
+type RefExpr struct {
+	Expr Expr
+}
+
+func (RefExpr) exprNode()         {}
 func (RangeExpr) exprNode()       {}
 func (BinaryExpr) exprNode()      {}
 

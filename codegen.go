@@ -580,6 +580,8 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		return cg.genLambda(e)
 	case TupleExpr:
 		return cg.genTuple(e)
+	case RefExpr:
+		return "&" + cg.genExprStr(e.Expr)
 	case ListLit:
 		return cg.genListLit(e)
 	case BinaryExpr:
@@ -967,6 +969,8 @@ func collectIdents(expr Expr, used map[string]bool) {
 		for _, p := range e.Parts {
 			collectIdents(p, used)
 		}
+	case RefExpr:
+		collectIdents(e.Expr, used)
 	case ListLit:
 		for _, el := range e.Elements {
 			collectIdents(el, used)

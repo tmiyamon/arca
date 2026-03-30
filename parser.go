@@ -624,6 +624,14 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	tok := p.peek()
 
 	switch tok.Kind {
+	case TkAmpersand:
+		p.advance()
+		expr, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		return RefExpr{Expr: expr}, nil
+
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)

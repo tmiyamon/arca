@@ -59,7 +59,8 @@ const (
 	TkNotEq    // !=
 	TkLtEq     // <=
 	TkGtEq     // >=
-	TkAnd      // &&
+	TkAmpersand // &
+	TkAnd       // &&
 	TkOr       // ||
 	TkBang     // !
 
@@ -81,7 +82,7 @@ var tokenNames = map[TokenKind]string{
 	TkPipe: "|>", TkQuestion: "?",
 	TkPlus: "+", TkMinus: "-", TkStar: "*", TkSlash: "/", TkPercent: "%",
 	TkLt: "<", TkGt: ">", TkEqEq: "==", TkNotEq: "!=", TkLtEq: "<=", TkGtEq: ">=",
-	TkAnd: "&&", TkOr: "||", TkBang: "!",
+	TkAmpersand: "&", TkAnd: "&&", TkOr: "||", TkBang: "!",
 	TkEOF: "EOF",
 }
 
@@ -263,7 +264,7 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 				l.advance()
 				tokens = append(tokens, Token{TkAnd, "&&", line, col})
 			} else {
-				return nil, fmt.Errorf("%d:%d: unexpected '&'", line, col)
+				tokens = append(tokens, Token{TkAmpersand, "&", line, col})
 			}
 		case ch == '-':
 			l.advance()
