@@ -1,5 +1,8 @@
 # Arca Design Decisions
 
+**Core philosophy: Type as Single Source of Truth.**
+Validation, serialization, schema, domain logic — all derived from the type definition.
+
 This document records language design decisions, their rationale, and trade-offs.
 
 ## Naming Conventions
