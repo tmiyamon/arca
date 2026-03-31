@@ -17,21 +17,33 @@ func main() {
 	cmd := os.Args[1]
 	switch cmd {
 	case "run":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: arca run <file.arca>")
+		arg := "."
+		if len(os.Args) >= 3 {
+			arg = os.Args[2]
+		}
+		entry, err := resolveEntryPoint(arg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		os.Exit(runCmd(os.Args[2]))
+		os.Exit(runCmd(entry))
 	case "build":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: arca build <file.arca> [-o output]")
+		arg := "."
+		if len(os.Args) >= 3 {
+			arg = os.Args[2]
+		}
+		entry, err := resolveEntryPoint(arg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		output := ""
-		if len(os.Args) >= 5 && os.Args[3] == "-o" {
-			output = os.Args[4]
+		for i, a := range os.Args {
+			if a == "-o" && i+1 < len(os.Args) {
+				output = os.Args[i+1]
+			}
 		}
-		os.Exit(buildCmd(os.Args[2], output))
+		os.Exit(buildCmd(entry, output))
 	case "emit":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "Usage: arca emit <file.arca>")
@@ -67,12 +79,39 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: arca <command> [arguments]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  run   <file.arca>           Transpile and run")
-	fmt.Fprintln(os.Stderr, "  build <file.arca> [-o out]   Transpile and compile to binary")
+	fmt.Fprintln(os.Stderr, "  run   [path]                Transpile and run (default: ./main.arca)")
+	fmt.Fprintln(os.Stderr, "  build [path] [-o out]       Transpile and compile (default: ./main.arca)")
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 	fmt.Fprintln(os.Stderr, "  fmt   <file.arca>            Format source code in place")
 	fmt.Fprintln(os.Stderr, "  openapi <file.arca>          Generate OpenAPI spec")
 	fmt.Fprintln(os.Stderr, "  health                       Check environment")
+}
+
+func resolveEntryPoint(arg string) (string, error) {
+	// If arg is a .arca file, use directly
+	if strings.HasSuffix(arg, ".arca") {
+		return arg, nil
+	}
+
+	// If arg is a directory, look for main.arca inside
+	info, err := os.Stat(arg)
+	if err == nil && info.IsDir() {
+		mainFile := filepath.Join(arg, "main.arca")
+		if _, err := os.Stat(mainFile); err == nil {
+			return mainFile, nil
+		}
+		return "", fmt.Errorf("no main.arca found in %s", arg)
+	}
+
+	// If no arg or ".", look in current directory
+	if arg == "." || arg == "" {
+		if _, err := os.Stat("main.arca"); err == nil {
+			return "main.arca", nil
+		}
+		return "", fmt.Errorf("no main.arca found in current directory")
+	}
+
+	return "", fmt.Errorf("not a .arca file or directory: %s", arg)
 }
 
 func parseFile(path string) (*Program, error) {
