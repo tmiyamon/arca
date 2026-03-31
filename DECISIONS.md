@@ -16,6 +16,31 @@ Not ideal (two styles) but technically necessary.
 
 ---
 
+## 2026-03-31: Package and import system
+
+**Context:** Needed package system for real projects. Investigated Go, Rust, Kotlin, Python, TS approaches.
+
+**Decisions:**
+- **Package unit:** Directory = package. Package name = directory name (implicit, no `package` declaration needed)
+- **Circular imports:** Forbidden (Go constraint from transpilation)
+- **No wildcard imports:** Explicit is better. Go, Gleam, Elm also have no wildcard.
+- **Versioning:** No version-in-path (Go's `/v2` is universally disliked)
+
+**Import syntax (Kotlin/Rust inspired):**
+```arca
+import user                    // user.find() — qualified
+import user.{find, create}     // find(), create() — selective
+import user as u               // u.find() — alias
+import go "fmt"                // Go packages
+import go _ "modernc.org/sqlite" // side-effect
+```
+
+**Why not Go style:** Go's "last segment = package name" is implicit and confusing (documented complaints). Arca requires explicit qualification or selective import.
+
+**Why not Python style:** `from x import *` causes namespace pollution. Arca forbids it.
+
+---
+
 ## 2026-03-31: `.go` accessor — escape hatch to Go
 
 **Context:** Arca stdlib should hide Go. But raw Go access sometimes needed.
