@@ -101,6 +101,36 @@ func TestE2EMultifile(t *testing.T) {
 	}
 }
 
+func TestE2ESubmodule(t *testing.T) {
+	arcaFile := "testdata/submod/main.arca"
+	result, err := transpile(arcaFile)
+	if err != nil {
+		t.Fatalf("transpile error: %v", err)
+	}
+
+	dir, err := os.MkdirTemp("", "arca-e2e-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "run", goFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run failed:\n%s", output)
+	}
+
+	expected := "3\n12\n"
+	if string(output) != expected {
+		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
+	}
+}
+
 func TestE2E(t *testing.T) {
 	arcaFile := "testdata/hello.arca"
 	result, err := transpile(arcaFile)
