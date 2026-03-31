@@ -223,8 +223,10 @@ type Decl interface {
 }
 
 type ImportDecl struct {
-	Path       string // e.g. "go/fmt", "user"
-	SideEffect bool   // import go _ "pkg"
+	Path       string   // e.g. "go/fmt", "user"
+	SideEffect bool     // import go _ "pkg"
+	Names      []string // selective: import user.{find, create} → ["find", "create"]
+	Alias      string   // alias: import user as u → "u"
 }
 
 type TypeDecl struct {

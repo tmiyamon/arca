@@ -85,20 +85,49 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		return ImportDecl{Path: "go/" + pathTok.Lit, SideEffect: sideEffect}, nil
 	}
 
-	// Arca module: import user or import order.item
+	// Arca module: import user, import user.{find, create}, import user as u
 	if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
 		return nil, fmt.Errorf("%d:%d: expected module path, got %s", tok.Line, tok.Col, tok)
 	}
 	p.advance()
 	path := tok.Lit
 	for p.peek().Kind == TkDot {
-		p.advance()
+		// Check for selective import: import user.{find, create}
+		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkLBrace {
+			p.advance() // skip '.'
+			p.advance() // skip '{'
+			var names []string
+			for p.peek().Kind != TkRBrace {
+				name := p.advance()
+				if name.Kind != TkIdent && name.Kind != TkUpperIdent {
+					return nil, fmt.Errorf("%d:%d: expected name in selective import, got %s", name.Line, name.Col, name)
+				}
+				names = append(names, name.Lit)
+				if p.peek().Kind == TkComma {
+					p.advance()
+				}
+			}
+			p.advance() // skip '}'
+			return ImportDecl{Path: path, Names: names}, nil
+		}
+		p.advance() // skip '.'
 		next := p.advance()
 		if next.Kind != TkIdent && next.Kind != TkUpperIdent {
 			return nil, fmt.Errorf("%d:%d: expected identifier in import path, got %s", next.Line, next.Col, next)
 		}
 		path += "." + next.Lit
 	}
+
+	// Check for alias: import user as u
+	if p.peek().Kind == TkIdent && p.peek().Lit == "as" {
+		p.advance() // skip 'as'
+		alias := p.advance()
+		if alias.Kind != TkIdent {
+			return nil, fmt.Errorf("%d:%d: expected alias name, got %s", alias.Line, alias.Col, alias)
+		}
+		return ImportDecl{Path: path, Alias: alias.Lit}, nil
+	}
+
 	return ImportDecl{Path: path}, nil
 }
 
