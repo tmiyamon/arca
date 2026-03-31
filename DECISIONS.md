@@ -16,6 +16,37 @@ Not ideal (two styles) but technically necessary.
 
 ---
 
+## 2026-03-31: `.go` accessor — escape hatch to Go
+
+**Context:** Arca stdlib should hide Go. But raw Go access sometimes needed.
+
+**Idea:** `expr.go.Method()` accesses raw Go methods. Boundary marker like `&`. Code with `.go` = self-responsibility, no immutability guarantee.
+
+```arca
+users.go.Sort(...)
+db.go.Exec("raw sql")
+response.go.Header().Set("X-Custom", "value")
+```
+
+**Key insight:** Since Arca is a transpiler, `.go` can be compiled away at zero runtime cost. The accessor exists for the compiler to know "this crosses the boundary", not for runtime dispatch.
+
+**Status:** Idea only. Not implemented.
+
+---
+
+## 2026-03-31: Entry point resolution
+
+**Context:** Needed `arca build` to work without specifying file every time.
+
+**Decision:** Three patterns:
+- `arca build` → finds `main.arca` in current directory
+- `arca build cmd/server` → finds `main.arca` in directory
+- `arca build main.arca` → direct file (backwards compat)
+
+Follows Go convention. Package system deferred — currently 1 file = 1 module, directory is just structure.
+
+---
+
 ## 2026-03-31: struct tags — rethinking
 
 **Context:** Realized json/db metadata belongs to fields, not types. `type ProductId = Int{min: 1, json: "id"}` breaks when reused — json key leaks to other fields.

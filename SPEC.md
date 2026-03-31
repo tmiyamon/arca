@@ -333,6 +333,29 @@ assert x > 0
 // single line comment
 ```
 
+### Project Structure
+
+```
+myapp/
+├── arca.toml              // project config (planned)
+├── main.arca              // entry point
+├── user.arca
+├── db.arca
+├── cmd/
+│   ├── server/
+│   │   └── main.arca      // separate entry point
+│   └── cli/
+│       └── main.arca
+└── util/
+    └── math.arca          // import util.math
+```
+
+```
+arca build                 // build ./main.arca
+arca build cmd/server      // build cmd/server/main.arca
+arca run                   // run ./main.arca
+```
+
 ### File Extension
 
 `.arca`
