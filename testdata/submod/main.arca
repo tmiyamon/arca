@@ -2,6 +2,6 @@ import go "fmt"
 import util.math
 
 fun main() {
-  fmt.Println(add(1, 2))
-  fmt.Println(multiply(3, 4))
+  fmt.Println(math.add(1, 2))
+  fmt.Println(math.multiply(3, 4))
 }

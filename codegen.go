@@ -20,6 +20,7 @@ type CodeGen struct {
 	functions       map[string]FnDecl
 	ctorTypes       map[string]string
 	moduleNames     map[string]bool
+	goModule        string          // e.g. "arcabuild"
 	tmpCounter      int
 	currentReceiver string
 }
@@ -60,6 +61,90 @@ func NewCodeGen(prog *Program) *CodeGen {
 		}
 	}
 	return cg
+}
+
+func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
+	cg.preScan(prog)
+	cg.writeln(fmt.Sprintf("package %s", pkgName))
+	cg.writeln("")
+
+	if len(cg.goImports) > 0 {
+		cg.writeln("import (")
+		for _, imp := range cg.goImports {
+			if imp.sideEffect {
+				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
+			} else {
+				cg.writeln(fmt.Sprintf("\t%q", imp.path))
+			}
+		}
+		if cg.usedBuiltins["regexp"] {
+			cg.writeln("\t\"regexp\"")
+		}
+		cg.writeln(")")
+		cg.writeln("")
+	}
+
+	for _, decl := range prog.Decls {
+		switch d := decl.(type) {
+		case TypeDecl:
+			cg.genTypeDecl(d)
+			cg.writeln("")
+		case TypeAliasDecl:
+			// resolved at use site
+		case FnDecl:
+			if d.Public {
+				cg.genFnDecl(d)
+				cg.writeln("")
+			}
+		}
+	}
+	cg.genBuiltins()
+	return cg.buf.String()
+}
+
+func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) string {
+	cg.preScan(mainProg)
+	cg.writeln("package main")
+	cg.writeln("")
+
+	// Collect go imports + module imports
+	hasImports := len(cg.goImports) > 0 || len(modules) > 0 || cg.usedBuiltins["regexp"]
+	if hasImports {
+		cg.writeln("import (")
+		for _, imp := range cg.goImports {
+			if imp.sideEffect {
+				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
+			} else {
+				cg.writeln(fmt.Sprintf("\t%q", imp.path))
+			}
+		}
+		if cg.usedBuiltins["regexp"] {
+			cg.writeln("\t\"regexp\"")
+		}
+		for modName := range modules {
+			cg.writeln(fmt.Sprintf("\t%q", cg.goModule+"/"+modName))
+		}
+		cg.writeln(")")
+		cg.writeln("")
+	}
+
+	// Generate only main file's declarations (not imported ones)
+	for _, decl := range mainProg.Decls {
+		switch d := decl.(type) {
+		case TypeDecl:
+			cg.genTypeDecl(d)
+			cg.writeln("")
+		case TypeAliasDecl:
+			// resolved at use site
+		case FnDecl:
+			cg.genFnDecl(d)
+			cg.writeln("")
+		case ImportDecl:
+			// already handled
+		}
+	}
+	cg.genBuiltins()
+	return cg.buf.String()
 }
 
 func (cg *CodeGen) preScan(prog *Program) {
@@ -589,12 +674,16 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		for i, a := range e.Args {
 			args[i] = cg.genExprWithContext(a, e, i)
 		}
-		// Module-qualified call: user.find(1) → find(1)
+		// Module-qualified call
 		if fa, ok := e.Fn.(FieldAccess); ok {
 			if ident, ok := fa.Expr.(Ident); ok && cg.moduleNames[ident.Name] {
 				fnName := fa.Field
 				if goName, ok := cg.fnNames[fnName]; ok {
 					fnName = goName
+				}
+				if cg.goModule != "" {
+					// Multi-file: keep package qualifier
+					return fmt.Sprintf("%s.%s(%s)", ident.Name, fnName, strings.Join(args, ", "))
 				}
 				return fmt.Sprintf("%s(%s)", fnName, strings.Join(args, ", "))
 			}
