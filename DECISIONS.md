@@ -67,6 +67,18 @@ response.go.Header().Set("X-Custom", "value")
 
 ---
 
+## 2026-03-31: 1:1 file mapping and visibility
+
+**Context:** Previously all same-directory .arca files merged into one .go file. Changed to 1 .arca = 1 .go.
+
+**Decision:** Each .arca generates its own .go file. Same-directory files share `package main`. Sub-directory modules get separate Go package.
+
+**pub = package-level visibility (not file-level).** Same as Go. Same directory can access non-pub functions. If file-level privacy needed, move to separate directory.
+
+**Why:** Go compiler handles same-package type resolution across files. Simpler than merging. Easier to debug (1:1 source mapping).
+
+---
+
 ## 2026-03-31: Entry point resolution
 
 **Context:** Needed `arca build` to work without specifying file every time.

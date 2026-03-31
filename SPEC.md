@@ -350,17 +350,27 @@ assert x > 0
 
 ```
 myapp/
-├── arca.toml              // project config (planned)
 ├── main.arca              // entry point
-├── user.arca
+├── user.arca              // same package (same dir)
 ├── db.arca
 ├── cmd/
 │   ├── server/
-│   │   └── main.arca      // separate entry point
+│   │   └── main.arca
 │   └── cli/
 │       └── main.arca
 └── util/
-    └── math.arca          // import util.math
+    └── math.arca          // sub-package (import util.math)
+```
+
+Generated Go (1:1 file mapping):
+```
+build/
+├── go.mod
+├── main.go                // package main
+├── user.go                // package main (same dir = same package)
+├── db.go                  // package main
+└── math/
+    └── math.go            // package math (sub-directory = separate package)
 ```
 
 ```
@@ -368,6 +378,12 @@ arca build                 // build ./main.arca
 arca build cmd/server      // build cmd/server/main.arca
 arca run                   // run ./main.arca
 ```
+
+### Visibility
+
+- `pub` = exported to other packages (Go PascalCase)
+- No `pub` = package-internal (same directory can access)
+- Same directory = same package (Go convention)
 
 ### File Extension
 
