@@ -206,6 +206,131 @@ func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*P
 	return merged, nil
 }
 
+func expandAliases(prog *Program) {
+	// Collect alias → module name mapping
+	aliases := map[string]string{}
+	for _, decl := range prog.Decls {
+		if imp, ok := decl.(ImportDecl); ok && imp.Alias != "" {
+			parts := strings.Split(imp.Path, ".")
+			moduleName := parts[len(parts)-1]
+			aliases[imp.Alias] = moduleName
+		}
+	}
+	if len(aliases) == 0 {
+		return
+	}
+
+	// Walk all declarations and replace alias idents
+	for i, decl := range prog.Decls {
+		prog.Decls[i] = expandAliasesInDecl(decl, aliases)
+	}
+}
+
+func expandAliasesInDecl(decl Decl, aliases map[string]string) Decl {
+	switch d := decl.(type) {
+	case FnDecl:
+		d.Body = expandAliasesInExpr(d.Body, aliases)
+		return d
+	case TypeDecl:
+		for i, m := range d.Methods {
+			m.Body = expandAliasesInExpr(m.Body, aliases)
+			d.Methods[i] = m
+		}
+		return d
+	}
+	return decl
+}
+
+func expandAliasesInExpr(expr Expr, aliases map[string]string) Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case FnCall:
+		e.Fn = expandAliasesInExpr(e.Fn, aliases)
+		for i, a := range e.Args {
+			e.Args[i] = expandAliasesInExpr(a, aliases)
+		}
+		return e
+	case FieldAccess:
+		e.Expr = expandAliasesInExpr(e.Expr, aliases)
+		return e
+	case Ident:
+		if moduleName, ok := aliases[e.Name]; ok {
+			e.Name = moduleName
+		}
+		return e
+	case Block:
+		for i, s := range e.Stmts {
+			e.Stmts[i] = expandAliasesInStmt(s, aliases)
+		}
+		e.Expr = expandAliasesInExpr(e.Expr, aliases)
+		return e
+	case MatchExpr:
+		e.Subject = expandAliasesInExpr(e.Subject, aliases)
+		for i, arm := range e.Arms {
+			e.Arms[i].Body = expandAliasesInExpr(arm.Body, aliases)
+		}
+		return e
+	case BinaryExpr:
+		e.Left = expandAliasesInExpr(e.Left, aliases)
+		e.Right = expandAliasesInExpr(e.Right, aliases)
+		return e
+	case ConstructorCall:
+		for i, f := range e.Fields {
+			e.Fields[i].Value = expandAliasesInExpr(f.Value, aliases)
+		}
+		return e
+	case Lambda:
+		e.Body = expandAliasesInExpr(e.Body, aliases)
+		return e
+	case StringInterp:
+		for i, p := range e.Parts {
+			e.Parts[i] = expandAliasesInExpr(p, aliases)
+		}
+		return e
+	case ForExpr:
+		e.Iter = expandAliasesInExpr(e.Iter, aliases)
+		e.Body = expandAliasesInExpr(e.Body, aliases)
+		return e
+	case ListLit:
+		for i, el := range e.Elements {
+			e.Elements[i] = expandAliasesInExpr(el, aliases)
+		}
+		if e.Spread != nil {
+			e.Spread = expandAliasesInExpr(e.Spread, aliases)
+		}
+		return e
+	case TupleExpr:
+		for i, el := range e.Elements {
+			e.Elements[i] = expandAliasesInExpr(el, aliases)
+		}
+		return e
+	case RefExpr:
+		e.Expr = expandAliasesInExpr(e.Expr, aliases)
+		return e
+	}
+	return expr
+}
+
+func expandAliasesInStmt(stmt Stmt, aliases map[string]string) Stmt {
+	switch s := stmt.(type) {
+	case LetStmt:
+		s.Value = expandAliasesInExpr(s.Value, aliases)
+		return s
+	case ExprStmt:
+		s.Expr = expandAliasesInExpr(s.Expr, aliases)
+		return s
+	case AssertStmt:
+		s.Expr = expandAliasesInExpr(s.Expr, aliases)
+		return s
+	case DeferStmt:
+		s.Expr = expandAliasesInExpr(s.Expr, aliases)
+		return s
+	}
+	return stmt
+}
+
 type transpileResult struct {
 	goCode      string
 	goImports   []goImportEntry
@@ -216,6 +341,9 @@ func transpile(inputPath string) (*transpileResult, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Expand aliases before resolving imports (only affects main file)
+	expandAliases(prog)
 
 	loaded := map[string]bool{inputPath: true}
 	prog, err = resolveImports(inputPath, prog, loaded)

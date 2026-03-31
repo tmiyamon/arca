@@ -45,9 +45,6 @@ func NewCodeGen(prog *Program) *CodeGen {
 				// Arca module — register module name
 				parts := strings.Split(d.Path, ".")
 				cg.moduleNames[parts[len(parts)-1]] = true
-				if d.Alias != "" {
-					cg.moduleNames[d.Alias] = true
-				}
 			}
 			if strings.HasPrefix(d.Path, "go/") {
 				cg.goImports = append(cg.goImports, goImportEntry{
@@ -607,10 +604,8 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		}
 		return fmt.Sprintf("%s(%s)", cg.genExprStr(e.Fn), strings.Join(args, ", "))
 	case FieldAccess:
-		// Module-qualified access: user.User → User
-		if ident, ok := e.Expr.(Ident); ok && cg.moduleNames[ident.Name] {
-			return capitalize(e.Field)
-		}
+		// Don't resolve module names for plain field access
+		// Module resolution only happens inside FnCall (method call path)
 		return fmt.Sprintf("%s.%s", cg.genExprStr(e.Expr), capitalize(e.Field))
 	case ConstructorCall:
 		// Built-in Result constructors

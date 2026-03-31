@@ -1,0 +1,11 @@
+type User {
+  User(name: String, age: Int)
+}
+
+pub fun newUser(name: String, age: Int) -> User {
+  User(name: name, age: age)
+}
+
+pub fun userName(u: User) -> String {
+  u.name
+}
