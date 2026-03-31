@@ -334,6 +334,7 @@ func expandAliasesInStmt(stmt Stmt, aliases map[string]string) Stmt {
 type moduleCode struct {
 	packageName string
 	goCode      string
+	isSubDir    bool // true = separate Go package directory
 }
 
 type transpileResult struct {
@@ -352,12 +353,13 @@ func transpile(inputPath string) (*transpileResult, error) {
 	// Expand aliases before resolving imports (only affects main file)
 	expandAliases(mainProg)
 
-	// Collect per-module programs
+	// Collect same-directory and sub-directory module programs
 	dir := filepath.Dir(inputPath)
-	moduleProgramsMap := map[string]*Program{} // module name → program
-	collectModulePrograms(dir, mainProg, moduleProgramsMap, map[string]bool{inputPath: true})
+	subModules := map[string]*Program{}   // sub-directory modules
+	sameDirFiles := map[string]*Program{} // same-directory .arca files
+	collectAllModules(dir, mainProg, subModules, sameDirFiles, map[string]bool{inputPath: true})
 
-	// Also resolve with flat merge for checker (uses existing logic)
+	// Flat merge for checker
 	loaded := map[string]bool{inputPath: true}
 	mergedProg, err := resolveImports(inputPath, mainProg, loaded)
 	if err != nil {
@@ -375,25 +377,27 @@ func transpile(inputPath string) (*transpileResult, error) {
 
 	goModule := "arcabuild"
 
-	if len(moduleProgramsMap) == 0 {
-		// No sub-modules: single file output (same as before)
-		codegen := NewCodeGen(mergedProg)
-		code := codegen.Generate(mergedProg)
-		return &transpileResult{goCode: code, goImports: codegen.goImports}, nil
+	// Generate per-file Go code for same-dir files
+	var modules []moduleCode
+	for fileName, fileProg := range sameDirFiles {
+		cg := NewCodeGen(fileProg)
+		code := cg.Generate(fileProg)
+		modules = append(modules, moduleCode{packageName: fileName, goCode: code})
 	}
 
-	// Multi-file: generate per-module Go code
-	var modules []moduleCode
-	for modName, modProg := range moduleProgramsMap {
+	// Generate sub-directory module Go code
+	for modName, modProg := range subModules {
 		cg := NewCodeGen(modProg)
 		code := cg.GeneratePackage(modName, modProg)
-		modules = append(modules, moduleCode{packageName: modName, goCode: code})
+		modules = append(modules, moduleCode{packageName: modName, goCode: code, isSubDir: true})
 	}
 
-	// Generate main module (only main file's decls + same-dir imports)
+	// Generate main file
 	mainCg := NewCodeGen(mergedProg)
-	mainCg.goModule = goModule
-	mainCode := mainCg.GenerateMain(mergedProg, moduleProgramsMap)
+	if len(subModules) > 0 {
+		mainCg.goModule = goModule
+	}
+	mainCode := mainCg.GenerateMain(mainProg, subModules)
 
 	return &transpileResult{
 		goCode:    mainCode,
@@ -401,6 +405,37 @@ func transpile(inputPath string) (*transpileResult, error) {
 		modules:   modules,
 		goModule:  goModule,
 	}, nil
+}
+
+func collectAllModules(dir string, prog *Program, subModules map[string]*Program, sameDirFiles map[string]*Program, loaded map[string]bool) {
+	for _, decl := range prog.Decls {
+		imp, ok := decl.(ImportDecl)
+		if !ok || strings.HasPrefix(imp.Path, "go/") {
+			continue
+		}
+
+		modulePath := filepath.Join(dir, strings.ReplaceAll(imp.Path, ".", "/") + ".arca")
+		if loaded[modulePath] {
+			continue
+		}
+		loaded[modulePath] = true
+
+		modProg, err := parseFile(modulePath)
+		if err != nil {
+			continue
+		}
+
+		if strings.Contains(imp.Path, ".") {
+			// Sub-directory module
+			parts := strings.Split(imp.Path, ".")
+			modName := parts[len(parts)-1]
+			subModules[modName] = modProg
+			collectAllModules(filepath.Dir(modulePath), modProg, subModules, sameDirFiles, loaded)
+		} else {
+			// Same-directory file
+			sameDirFiles[imp.Path] = modProg
+		}
+	}
 }
 
 func collectModulePrograms(dir string, prog *Program, modules map[string]*Program, loaded map[string]bool) {
@@ -461,13 +496,22 @@ func writeBuildDir(inputPath string, result *transpileResult) (string, error) {
 
 	// Write per-module Go files
 	for _, mod := range result.modules {
-		modDir := filepath.Join(dir, mod.packageName)
-		if err := os.MkdirAll(modDir, 0755); err != nil {
-			return "", err
-		}
-		modFile := filepath.Join(modDir, mod.packageName+".go")
-		if err := os.WriteFile(modFile, []byte(mod.goCode), 0644); err != nil {
-			return "", err
+		if mod.isSubDir {
+			// Sub-directory module: build/modname/modname.go
+			modDir := filepath.Join(dir, mod.packageName)
+			if err := os.MkdirAll(modDir, 0755); err != nil {
+				return "", err
+			}
+			modFile := filepath.Join(modDir, mod.packageName+".go")
+			if err := os.WriteFile(modFile, []byte(mod.goCode), 0644); err != nil {
+				return "", err
+			}
+		} else {
+			// Same-directory file: build/filename.go
+			modFile := filepath.Join(dir, mod.packageName+".go")
+			if err := os.WriteFile(modFile, []byte(mod.goCode), 0644); err != nil {
+				return "", err
+			}
 		}
 	}
 

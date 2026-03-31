@@ -72,27 +72,16 @@ func TestGeneratedGoCompiles(t *testing.T) {
 }
 
 func TestE2EMultifile(t *testing.T) {
-	arcaFile := "testdata/multifile/main.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
+	buildCmd := exec.Command("go", "build", "-o", "arca_test_bin", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("failed to build arca: %v", err)
 	}
+	defer os.Remove("arca_test_bin")
 
-	dir, err := os.MkdirTemp("", "arca-e2e-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
+	cmd := exec.Command("./arca_test_bin", "run", "testdata/multifile/main.arca")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
+		t.Fatalf("arca run failed:\n%s", output)
 	}
 
 	expected := "Alice\n"
