@@ -154,18 +154,31 @@ let u = user.find(1)
 ### Imports
 
 ```
-// Arca modules
+// Arca modules — qualified access
 import user
-import order.item
+user.find(1)
+
+// Selective import — direct access
+import user.{find, create}
+find(1)
+
+// Alias
+import user as u
+u.find(1)
+
+// Submodule
+import util.math
+util.math.add(1, 2)
 
 // Go packages (string literal path)
 import go "fmt"
 import go "database/sql"
-import go "net/http"
 import go "github.com/gin-gonic/gin"
 
 // Side-effect import (DB drivers etc.)
 import go _ "modernc.org/sqlite"
+
+// No wildcard imports
 ```
 
 ### Built-in Types
