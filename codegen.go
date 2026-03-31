@@ -19,6 +19,7 @@ type CodeGen struct {
 	fnNames         map[string]string
 	functions       map[string]FnDecl
 	ctorTypes       map[string]string
+	moduleNames     map[string]bool
 	tmpCounter      int
 	currentReceiver string
 }
@@ -30,6 +31,7 @@ func NewCodeGen(prog *Program) *CodeGen {
 		fnNames:      make(map[string]string),
 		functions:    make(map[string]FnDecl),
 		ctorTypes:    make(map[string]string),
+		moduleNames:  make(map[string]bool),
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -39,6 +41,14 @@ func NewCodeGen(prog *Program) *CodeGen {
 				cg.ctorTypes[ctor.Name] = d.Name
 			}
 		case ImportDecl:
+			if !strings.HasPrefix(d.Path, "go/") {
+				// Arca module — register module name
+				parts := strings.Split(d.Path, ".")
+				cg.moduleNames[parts[len(parts)-1]] = true
+				if d.Alias != "" {
+					cg.moduleNames[d.Alias] = true
+				}
+			}
 			if strings.HasPrefix(d.Path, "go/") {
 				cg.goImports = append(cg.goImports, goImportEntry{
 					path:       d.Path[3:], // strip "go/"
@@ -582,13 +592,25 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		for i, a := range e.Args {
 			args[i] = cg.genExprWithContext(a, e, i)
 		}
-		// Method call: obj.method(args)
+		// Module-qualified call: user.find(1) → find(1)
 		if fa, ok := e.Fn.(FieldAccess); ok {
+			if ident, ok := fa.Expr.(Ident); ok && cg.moduleNames[ident.Name] {
+				fnName := fa.Field
+				if goName, ok := cg.fnNames[fnName]; ok {
+					fnName = goName
+				}
+				return fmt.Sprintf("%s(%s)", fnName, strings.Join(args, ", "))
+			}
+			// Regular method call: obj.method(args)
 			methodName := cg.resolveMethodName(fa.Field)
 			return fmt.Sprintf("%s.%s(%s)", cg.genExprStr(fa.Expr), methodName, strings.Join(args, ", "))
 		}
 		return fmt.Sprintf("%s(%s)", cg.genExprStr(e.Fn), strings.Join(args, ", "))
 	case FieldAccess:
+		// Module-qualified access: user.User → User
+		if ident, ok := e.Expr.(Ident); ok && cg.moduleNames[ident.Name] {
+			return capitalize(e.Field)
+		}
 		return fmt.Sprintf("%s.%s", cg.genExprStr(e.Expr), capitalize(e.Field))
 	case ConstructorCall:
 		// Built-in Result constructors

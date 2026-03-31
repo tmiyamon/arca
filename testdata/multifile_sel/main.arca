@@ -1,0 +1,7 @@
+import go "fmt"
+import user.{newUser, userName}
+
+fun main() {
+  let u = newUser("Bob", 25)
+  fmt.Println(userName(u))
+}

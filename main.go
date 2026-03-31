@@ -149,7 +149,9 @@ func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*P
 			continue
 		}
 
-		// Arca module import
+		// Arca module import — keep in merged for codegen to know module names
+		merged.Decls = append(merged.Decls, decl)
+
 		modulePath := filepath.Join(dir, strings.ReplaceAll(imp.Path, ".", "/") + ".arca")
 		if loaded[modulePath] {
 			continue
@@ -167,15 +169,30 @@ func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*P
 			return nil, err
 		}
 
-		// Only include pub declarations from imported modules
+		// Determine which names to import
+		selectiveNames := make(map[string]bool)
+		if len(imp.Names) > 0 {
+			for _, n := range imp.Names {
+				selectiveNames[n] = true
+			}
+		}
+
+		// Include declarations from imported modules
 		for _, d := range modProg.Decls {
 			switch dd := d.(type) {
 			case FnDecl:
 				if dd.Public {
-					merged.Decls = append(merged.Decls, d)
+					if len(selectiveNames) > 0 {
+						// Selective: only import named functions
+						if selectiveNames[dd.Name] {
+							merged.Decls = append(merged.Decls, d)
+						}
+					} else {
+						merged.Decls = append(merged.Decls, d)
+					}
 				}
 			case TypeDecl:
-				// Types are always visible (needed for type checking)
+				// Types are always imported (needed for type checking)
 				merged.Decls = append(merged.Decls, d)
 			case ImportDecl:
 				// Pass through Go imports from imported modules
