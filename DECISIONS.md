@@ -39,6 +39,14 @@ import go _ "modernc.org/sqlite" // side-effect
 
 **Why not Python style:** `from x import *` causes namespace pollution. Arca forbids it.
 
+**Design principle:** Generated Go should be valid, idiomatic Go. Arca abstractions (alias, namespaces) are resolved before codegen, not leaked into Go output.
+
+**Implementation notes:**
+- Alias expansion happens before import resolution (main file only). `u.find()` → `user.find()` at AST level.
+- Module-qualified calls (`user.find()`) resolved to flat calls (`find()`) in codegen since all modules merge into one Go file.
+- FieldAccess module resolution only happens inside FnCall context, preventing collision with variable names (e.g. parameter `u` vs alias `u`).
+- Types are always imported regardless of selective import (needed for type checking).
+
 ---
 
 ## 2026-03-31: `.go` accessor — escape hatch to Go
