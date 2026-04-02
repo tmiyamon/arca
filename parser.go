@@ -306,6 +306,9 @@ func (p *Parser) parseTagsBlock() ([]TagRule, error) {
 		}
 
 		rules = append(rules, rule)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
 	}
 	p.advance() // skip '}'
 	return rules, nil
