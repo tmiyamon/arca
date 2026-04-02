@@ -1,3 +1,4 @@
 /arca
 *.exe
 build/
+.DS_Store

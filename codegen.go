@@ -13,6 +13,7 @@ type goImportEntry struct {
 type CodeGen struct {
 	buf             strings.Builder
 	types           map[string]TypeDecl
+	typeAliases     map[string]TypeAliasDecl
 	goImports       []goImportEntry
 	currentRetType  Type
 	usedBuiltins    map[string]bool
@@ -28,6 +29,7 @@ type CodeGen struct {
 func NewCodeGen(prog *Program) *CodeGen {
 	cg := &CodeGen{
 		types:        make(map[string]TypeDecl),
+		typeAliases:  make(map[string]TypeAliasDecl),
 		usedBuiltins: make(map[string]bool),
 		fnNames:      make(map[string]string),
 		functions:    make(map[string]FnDecl),
@@ -41,6 +43,8 @@ func NewCodeGen(prog *Program) *CodeGen {
 			for _, ctor := range d.Constructors {
 				cg.ctorTypes[ctor.Name] = d.Name
 			}
+		case TypeAliasDecl:
+			cg.typeAliases[d.Name] = d
 		case ImportDecl:
 			if !strings.HasPrefix(d.Path, "go/") {
 				// Arca module — register module name
@@ -1067,6 +1071,17 @@ func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 				return fmt.Sprintf("%s%s{%s}", goName, typeArgs, strings.Join(fields, ", "))
 			}
 		}
+	}
+	// Type alias constructor: Email("test@example.com") → NewEmail("test@example.com") or Email("test@example.com")
+	if alias, ok := cg.typeAliases[cc.Name]; ok {
+		args := make([]string, len(cc.Fields))
+		for i, f := range cc.Fields {
+			args[i] = cg.genExprStr(f.Value)
+		}
+		if nt, ok := alias.Type.(NamedType); ok && len(nt.Constraints) > 0 {
+			return fmt.Sprintf("New%s(%s)", cc.Name, strings.Join(args, ", "))
+		}
+		return fmt.Sprintf("%s(%s)", cc.Name, strings.Join(args, ", "))
 	}
 	return fmt.Sprintf("%s{/* unknown */}", cc.Name)
 }

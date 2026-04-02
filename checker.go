@@ -41,21 +41,23 @@ func (s *Scope) Lookup(name string) (Type, bool) {
 // --- Checker ---
 
 type Checker struct {
-	types      map[string]TypeDecl
-	ctorTypes  map[string]string // constructor name -> type name
-	functions  map[string]FnDecl
-	errors     []CheckError
-	scope      *Scope
-	currentFn  *FnDecl
-	typeParams map[string]bool // currently in-scope type parameters
+	types       map[string]TypeDecl
+	typeAliases map[string]TypeAliasDecl
+	ctorTypes   map[string]string // constructor name -> type name
+	functions   map[string]FnDecl
+	errors      []CheckError
+	scope       *Scope
+	currentFn   *FnDecl
+	typeParams  map[string]bool // currently in-scope type parameters
 }
 
 func NewChecker() *Checker {
 	return &Checker{
-		types:     make(map[string]TypeDecl),
-		ctorTypes: make(map[string]string),
-		functions: make(map[string]FnDecl),
-		scope:     NewScope(nil),
+		types:       make(map[string]TypeDecl),
+		typeAliases: make(map[string]TypeAliasDecl),
+		ctorTypes:   make(map[string]string),
+		functions:   make(map[string]FnDecl),
+		scope:       NewScope(nil),
 	}
 }
 
@@ -68,6 +70,8 @@ func (c *Checker) Check(prog *Program) []CheckError {
 			for _, ctor := range d.Constructors {
 				c.ctorTypes[ctor.Name] = d.Name
 			}
+		case TypeAliasDecl:
+			c.typeAliases[d.Name] = d
 		case FnDecl:
 			c.functions[d.Name] = d
 		}
@@ -390,7 +394,10 @@ func (c *Checker) isKnownType(name string) bool {
 	if strings.Contains(name, ".") {
 		return true
 	}
-	_, ok := c.types[name]
+	if _, ok := c.types[name]; ok {
+		return true
+	}
+	_, ok := c.typeAliases[name]
 	return ok
 }
 
@@ -577,6 +584,14 @@ func (c *Checker) checkFnCall(e FnCall) {
 func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 	// Built-in Result constructors
 	if cc.Name == "Ok" || cc.Name == "Error" || cc.Name == "Some" || cc.Name == "None" {
+		for _, fv := range cc.Fields {
+			c.checkExpr(fv.Value)
+		}
+		return
+	}
+
+	// Type alias constructor: Email("test@example.com")
+	if _, ok := c.typeAliases[cc.Name]; ok {
 		for _, fv := range cc.Fields {
 			c.checkExpr(fv.Value)
 		}
