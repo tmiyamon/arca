@@ -45,6 +45,8 @@ func (f *Formatter) formatDecl(decl Decl) {
 		f.formatImport(d)
 	case TypeDecl:
 		f.formatTypeDecl(d)
+	case TypeAliasDecl:
+		f.formatTypeAliasDecl(d)
 	case FnDecl:
 		f.formatFnDecl(d)
 	}
@@ -61,6 +63,11 @@ func (f *Formatter) formatImport(d ImportDecl) {
 	} else {
 		f.writeln("import " + d.Path)
 	}
+}
+
+func (f *Formatter) formatTypeAliasDecl(d TypeAliasDecl) {
+	f.writeIndent()
+	f.writeln("type " + d.Name + " = " + f.formatType(d.Type))
 }
 
 func (f *Formatter) formatTypeDecl(d TypeDecl) {
@@ -128,14 +135,22 @@ func (f *Formatter) formatTypeDecl(d TypeDecl) {
 func (f *Formatter) formatType(t Type) string {
 	switch tt := t.(type) {
 	case NamedType:
+		base := tt.Name
 		if len(tt.Params) > 0 {
 			params := make([]string, len(tt.Params))
 			for i, p := range tt.Params {
 				params[i] = f.formatType(p)
 			}
-			return tt.Name + "[" + strings.Join(params, ", ") + "]"
+			base = tt.Name + "[" + strings.Join(params, ", ") + "]"
 		}
-		return tt.Name
+		if len(tt.Constraints) > 0 {
+			cs := make([]string, len(tt.Constraints))
+			for i, c := range tt.Constraints {
+				cs[i] = c.Key + ": " + f.formatExpr(c.Value)
+			}
+			return base + "{" + strings.Join(cs, ", ") + "}"
+		}
+		return base
 	case PointerType:
 		return "*" + f.formatType(tt.Inner)
 	case TupleType:

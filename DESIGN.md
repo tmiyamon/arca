@@ -125,7 +125,8 @@ type User {
 - Custom: `validate: func_name` (runtime only, not OpenAPI-convertible)
 - Constructor auto-generates validation, returns `(T, error)`
 - **Immutability guarantees constraints hold permanently after construction**
-- Type aliases for reusable constraints: `type Email = String{pattern: ".+@.+"}`
+- Type aliases generate Go defined types (nominal): `type Email = String{...}` → `type Email string` + `NewEmail()`
+- `UserId` and `OrderId` are distinct types even with identical constraints
 - No re-constraining aliases: `Email{min_length: 5}` is an error
 - No cross-field constraints: use constructor functions
 - Constraints are opt-in, not forced on all types

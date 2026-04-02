@@ -33,6 +33,11 @@ func generateOpenAPI(prog *Program) map[string]interface{} {
 			if schema != nil {
 				schemas[d.Name] = schema
 			}
+		case TypeAliasDecl:
+			schema := typeAliasToSchema(d)
+			if schema != nil {
+				schemas[d.Name] = schema
+			}
 		}
 	}
 
@@ -225,6 +230,51 @@ func fieldJsonName(f Field, tags []TagRule) string {
 		}
 	}
 	return f.Name
+}
+
+func typeAliasToSchema(d TypeAliasDecl) map[string]interface{} {
+	nt, ok := d.Type.(NamedType)
+	if !ok {
+		return nil
+	}
+	schema := map[string]interface{}{}
+	switch nt.Name {
+	case "Int":
+		schema["type"] = "integer"
+	case "Float":
+		schema["type"] = "number"
+	case "String":
+		schema["type"] = "string"
+	case "Bool":
+		schema["type"] = "boolean"
+	default:
+		return nil
+	}
+	for _, c := range nt.Constraints {
+		switch c.Key {
+		case "min":
+			if lit, ok := c.Value.(IntLit); ok {
+				schema["minimum"] = lit.Value
+			}
+		case "max":
+			if lit, ok := c.Value.(IntLit); ok {
+				schema["maximum"] = lit.Value
+			}
+		case "min_length":
+			if lit, ok := c.Value.(IntLit); ok {
+				schema["minLength"] = lit.Value
+			}
+		case "max_length":
+			if lit, ok := c.Value.(IntLit); ok {
+				schema["maxLength"] = lit.Value
+			}
+		case "pattern":
+			if lit, ok := c.Value.(StringLit); ok {
+				schema["pattern"] = lit.Value
+			}
+		}
+	}
+	return schema
 }
 
 func typeRefToSchema(t Type) map[string]interface{} {

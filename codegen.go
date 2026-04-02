@@ -68,7 +68,8 @@ func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
 	cg.writeln(fmt.Sprintf("package %s", pkgName))
 	cg.writeln("")
 
-	if len(cg.goImports) > 0 {
+	hasImports := len(cg.goImports) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
+	if hasImports {
 		cg.writeln("import (")
 		for _, imp := range cg.goImports {
 			if imp.sideEffect {
@@ -76,6 +77,9 @@ func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
 			} else {
 				cg.writeln(fmt.Sprintf("\t%q", imp.path))
 			}
+		}
+		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
+			cg.writeln("\t\"fmt\"")
 		}
 		if cg.usedBuiltins["regexp"] {
 			cg.writeln("\t\"regexp\"")
@@ -90,7 +94,8 @@ func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
 			cg.genTypeDecl(d)
 			cg.writeln("")
 		case TypeAliasDecl:
-			// resolved at use site
+			cg.genTypeAliasDecl(d)
+			cg.writeln("")
 		case FnDecl:
 			if d.Public {
 				cg.genFnDecl(d)
@@ -108,7 +113,7 @@ func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) 
 	cg.writeln("")
 
 	// Collect go imports + module imports
-	hasImports := len(cg.goImports) > 0 || len(modules) > 0 || cg.usedBuiltins["regexp"]
+	hasImports := len(cg.goImports) > 0 || len(modules) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
 	if hasImports {
 		cg.writeln("import (")
 		for _, imp := range cg.goImports {
@@ -117,6 +122,9 @@ func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) 
 			} else {
 				cg.writeln(fmt.Sprintf("\t%q", imp.path))
 			}
+		}
+		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
+			cg.writeln("\t\"fmt\"")
 		}
 		if cg.usedBuiltins["regexp"] {
 			cg.writeln("\t\"regexp\"")
@@ -135,7 +143,8 @@ func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) 
 			cg.genTypeDecl(d)
 			cg.writeln("")
 		case TypeAliasDecl:
-			// resolved at use site
+			cg.genTypeAliasDecl(d)
+			cg.writeln("")
 		case FnDecl:
 			cg.genFnDecl(d)
 			cg.writeln("")
@@ -150,15 +159,25 @@ func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) 
 func (cg *CodeGen) preScan(prog *Program) {
 	// Scan for features that need imports
 	for _, decl := range prog.Decls {
-		if td, ok := decl.(TypeDecl); ok {
-			if cg.hasConstraints(td) {
-				for _, f := range td.Constructors[0].Fields {
+		switch d := decl.(type) {
+		case TypeDecl:
+			if cg.hasConstraints(d) {
+				for _, f := range d.Constructors[0].Fields {
 					if nt, ok := f.Type.(NamedType); ok {
 						for _, c := range nt.Constraints {
 							if c.Key == "pattern" {
 								cg.usedBuiltins["regexp"] = true
 							}
 						}
+					}
+				}
+			}
+		case TypeAliasDecl:
+			if nt, ok := d.Type.(NamedType); ok && len(nt.Constraints) > 0 {
+				cg.usedBuiltins["fmt"] = true
+				for _, c := range nt.Constraints {
+					if c.Key == "pattern" {
+						cg.usedBuiltins["regexp"] = true
 					}
 				}
 			}
@@ -172,7 +191,8 @@ func (cg *CodeGen) Generate(prog *Program) string {
 	cg.writeln("")
 
 	// Generate imports
-	if len(cg.goImports) > 0 {
+	hasImports := len(cg.goImports) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
+	if hasImports {
 		cg.writeln("import (")
 		for _, imp := range cg.goImports {
 			if imp.sideEffect {
@@ -180,6 +200,9 @@ func (cg *CodeGen) Generate(prog *Program) string {
 			} else {
 				cg.writeln(fmt.Sprintf("\t%q", imp.path))
 			}
+		}
+		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
+			cg.writeln("\t\"fmt\"")
 		}
 		if cg.usedBuiltins["regexp"] {
 			cg.writeln("\t\"regexp\"")
@@ -194,7 +217,8 @@ func (cg *CodeGen) Generate(prog *Program) string {
 			cg.genTypeDecl(d)
 			cg.writeln("")
 		case TypeAliasDecl:
-			// Type aliases are resolved at use site, no Go code needed
+			cg.genTypeAliasDecl(d)
+			cg.writeln("")
 		case FnDecl:
 			cg.genFnDecl(d)
 			cg.writeln("")
@@ -202,6 +226,15 @@ func (cg *CodeGen) Generate(prog *Program) string {
 	}
 	cg.genBuiltins()
 	return cg.buf.String()
+}
+
+func (cg *CodeGen) hasGoImport(pkg string) bool {
+	for _, imp := range cg.goImports {
+		if imp.path == pkg {
+			return true
+		}
+	}
+	return false
 }
 
 func (cg *CodeGen) write(s string) {
@@ -456,6 +489,69 @@ func (cg *CodeGen) genValidatingConstructor(td TypeDecl) {
 	}
 	cg.writeln(fmt.Sprintf("\treturn %s{%s}, nil", td.Name, strings.Join(fields, ", ")))
 	cg.writeln("}")
+}
+
+func (cg *CodeGen) genTypeAliasDecl(d TypeAliasDecl) {
+	nt, ok := d.Type.(NamedType)
+	if !ok {
+		return
+	}
+	goBase := cg.goType(NamedType{Name: nt.Name, Params: nt.Params})
+	cg.writeln(fmt.Sprintf("type %s %s", d.Name, goBase))
+
+	if len(nt.Constraints) == 0 {
+		return
+	}
+
+	// Generate NewXxx(v baseType) (Xxx, error)
+	zeroVal := typeZeroValue(d.Name, goBase)
+	cg.writeln("")
+	cg.writeln(fmt.Sprintf("func New%s(v %s) (%s, error) {", d.Name, goBase, d.Name))
+	for _, c := range nt.Constraints {
+		valStr := cg.genExprStr(c.Value)
+		switch c.Key {
+		case "min":
+			cg.writeln(fmt.Sprintf("\tif v < %s {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must be >= %s\")", zeroVal, valStr))
+			cg.writeln("\t}")
+		case "max":
+			cg.writeln(fmt.Sprintf("\tif v > %s {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must be <= %s\")", zeroVal, valStr))
+			cg.writeln("\t}")
+		case "min_length":
+			cg.writeln(fmt.Sprintf("\tif len(v) < %s {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"min length %s\")", zeroVal, valStr))
+			cg.writeln("\t}")
+		case "max_length":
+			cg.writeln(fmt.Sprintf("\tif len(v) > %s {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"max length %s\")", zeroVal, valStr))
+			cg.writeln("\t}")
+		case "pattern":
+			cg.usedBuiltins["regexp"] = true
+			cg.writeln(fmt.Sprintf("\tif !regexp.MustCompile(%s).MatchString(string(v)) {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must match pattern\")", zeroVal))
+			cg.writeln("\t}")
+		case "validate":
+			cg.writeln(fmt.Sprintf("\tif !%s(v) {", valStr))
+			cg.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"validation failed\")", zeroVal))
+			cg.writeln("\t}")
+		}
+	}
+	cg.writeln(fmt.Sprintf("\treturn %s(v), nil", d.Name))
+	cg.writeln("}")
+}
+
+func typeZeroValue(typeName string, goBase string) string {
+	switch goBase {
+	case "int", "float64":
+		return "0"
+	case "string":
+		return `""`
+	case "bool":
+		return "false"
+	default:
+		return typeName + "{}"
+	}
 }
 
 func (cg *CodeGen) genSumType(td TypeDecl) {

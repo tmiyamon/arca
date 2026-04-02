@@ -4,6 +4,22 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-02: Type alias codegen
+
+**Context:** `type Email = String{pattern: ".+@.+"}` was parsed but generated no Go code.
+
+**Decision:** Type aliases generate Go defined types (not Go type aliases):
+- `type Email = String{...}` → `type Email string` + `NewEmail(v string) (Email, error)`
+- `type UserId = Int` → `type UserId int` (no constructor if no constraints)
+
+Nominal typing: `UserId` and `OrderId` are distinct types even with same constraints.
+
+**Codegen:** `fmt` and `regexp` are auto-imported when constrained type aliases need them.
+
+**OpenAPI:** Type aliases generate standalone schema entries with constraints mapped to JSON Schema.
+
+---
+
 ## 2026-04-02: let type annotation
 
 **Context:** `let users = []` generates `[]interface{}{}` in Go — no type info for empty collections. Go FFI functions like `db.Select(&users, ...)` need correctly typed slices.
