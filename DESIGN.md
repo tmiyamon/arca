@@ -138,6 +138,22 @@ type User {
 - Go type optimization (Int{0,255} → uint8)
 - JSON/OpenAPI/DB schema derivation from constraints
 
+## Tags Block
+
+Go struct tags for external library integration. Separate from constrained types (constraints = domain values, tags = external system mapping).
+
+```arca
+type User(id: Int, userName: String) {
+  tags { json, db(snake) }
+}
+```
+
+- `tag_name` — all fields, field name as-is
+- `tag_name(snake)` — all fields, case conversion (snake, kebab)
+- `tag_name { field: "value" }` — override only specified fields
+- `()` for global rules, `{}` for overrides — no ambiguity
+- Transitional: stdlib will eventually hide this
+
 ## Methods (planned)
 
 Methods are needed for constrained types to keep domain operations closed:

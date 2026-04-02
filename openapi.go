@@ -69,7 +69,7 @@ func structToSchema(td TypeDecl) map[string]interface{} {
 
 	for _, f := range ctor.Fields {
 		prop := fieldToSchema(f)
-		jsonName := fieldJsonName(f)
+		jsonName := fieldJsonName(f, td.Tags)
 		properties[jsonName] = prop
 		if !isOptionField(f) {
 			required = append(required, jsonName)
@@ -207,15 +207,21 @@ func isOptionField(f Field) bool {
 	return false
 }
 
-func fieldJsonName(f Field) string {
-	nt, ok := f.Type.(NamedType)
-	if ok {
-		for _, c := range nt.Constraints {
-			if c.Key == "json" {
-				if lit, ok := c.Value.(StringLit); ok {
-					return lit.Value
-				}
+func fieldJsonName(f Field, tags []TagRule) string {
+	// Check tags block for json rule
+	for _, rule := range tags {
+		if rule.Name == "json" {
+			if val, ok := rule.Overrides[f.Name]; ok {
+				return val
 			}
+			// Apply case conversion
+			switch rule.Case {
+			case "snake":
+				return camelToSnake(f.Name)
+			case "kebab":
+				return camelToKebab(f.Name)
+			}
+			return f.Name
 		}
 	}
 	return f.Name

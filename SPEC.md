@@ -310,6 +310,32 @@ age.increment()
 age.isAdult()
 ```
 
+### Tags Block (Go struct tags)
+
+```
+// Simple — field names as-is
+type User(id: Int, name: String) {
+  tags { json, db }
+}
+
+// With conversion rule
+type User(id: Int, userName: String) {
+  tags { json, db(snake) }
+}
+// → Go: UserName string `json:"userName" db:"user_name"`
+
+// Individual overrides
+type User(id: Int, userName: String) {
+  tags {
+    json,
+    db(snake),
+    elastic {
+      userName: "full_name"
+    }
+  }
+}
+```
+
 ### Defer
 
 ```
