@@ -4,94 +4,6 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
-## 2026-03-30: Pipe operator — keeping it
-
-**Context:** Methods were added. Considered dropping pipe. But Go generics can't add new type parameters to methods (`func (l List[T]) Map[U](...) List[U]` is illegal). Collection operations (map/filter/fold) can't be method chains.
-
-**Decision:** Keep both. Clear split:
-- **Methods** — type domain operations (`user.toJson()`)
-- **Pipe** — collection operations (`users |> map(...) |> filter(...)`)
-
-Not ideal (two styles) but technically necessary.
-
----
-
-## 2026-03-31: Package and import system
-
-**Context:** Needed package system for real projects. Investigated Go, Rust, Kotlin, Python, TS approaches.
-
-**Decisions:**
-- **Package unit:** Directory = package. Package name = directory name (implicit, no `package` declaration needed)
-- **Circular imports:** Forbidden (Go constraint from transpilation)
-- **No wildcard imports:** Explicit is better. Go, Gleam, Elm also have no wildcard.
-- **Versioning:** No version-in-path (Go's `/v2` is universally disliked)
-
-**Import syntax (Kotlin/Rust inspired):**
-```arca
-import user                    // user.find() — qualified
-import user.{find, create}     // find(), create() — selective
-import user as u               // u.find() — alias
-import go "fmt"                // Go packages
-import go _ "modernc.org/sqlite" // side-effect
-```
-
-**Why not Go style:** Go's "last segment = package name" is implicit and confusing (documented complaints). Arca requires explicit qualification or selective import.
-
-**Why not Python style:** `from x import *` causes namespace pollution. Arca forbids it.
-
-**Design principle:** Generated Go should be valid, idiomatic Go. Arca abstractions (alias, namespaces) are resolved before codegen, not leaked into Go output.
-
-**Implementation notes:**
-- Alias expansion happens before import resolution (main file only). `u.find()` → `user.find()` at AST level.
-- Module-qualified calls (`user.find()`) resolved to flat calls (`find()`) in codegen since all modules merge into one Go file.
-- FieldAccess module resolution only happens inside FnCall context, preventing collision with variable names (e.g. parameter `u` vs alias `u`).
-- Types are always imported regardless of selective import (needed for type checking).
-
----
-
-## 2026-03-31: `.go` accessor — escape hatch to Go
-
-**Context:** Arca stdlib should hide Go. But raw Go access sometimes needed.
-
-**Idea:** `expr.go.Method()` accesses raw Go methods. Boundary marker like `&`. Code with `.go` = self-responsibility, no immutability guarantee.
-
-```arca
-users.go.Sort(...)
-db.go.Exec("raw sql")
-response.go.Header().Set("X-Custom", "value")
-```
-
-**Key insight:** Since Arca is a transpiler, `.go` can be compiled away at zero runtime cost. The accessor exists for the compiler to know "this crosses the boundary", not for runtime dispatch.
-
-**Status:** Idea only. Not implemented.
-
----
-
-## 2026-03-31: 1:1 file mapping and visibility
-
-**Context:** Previously all same-directory .arca files merged into one .go file. Changed to 1 .arca = 1 .go.
-
-**Decision:** Each .arca generates its own .go file. Same-directory files share `package main`. Sub-directory modules get separate Go package.
-
-**pub = package-level visibility (not file-level).** Same as Go. Same directory can access non-pub functions. If file-level privacy needed, move to separate directory.
-
-**Why:** Go compiler handles same-package type resolution across files. Simpler than merging. Easier to debug (1:1 source mapping).
-
----
-
-## 2026-03-31: Entry point resolution
-
-**Context:** Needed `arca build` to work without specifying file every time.
-
-**Decision:** Three patterns:
-- `arca build` → finds `main.arca` in current directory
-- `arca build cmd/server` → finds `main.arca` in directory
-- `arca build main.arca` → direct file (backwards compat)
-
-Follows Go convention. Package system deferred — currently 1 file = 1 module, directory is just structure.
-
----
-
 ## 2026-04-02: struct tags — implemented as tags block
 
 **Requirements:**
@@ -131,6 +43,76 @@ Rules:
 
 ---
 
+## 2026-03-31: 1:1 file mapping and visibility
+
+**Context:** Previously all same-directory .arca files merged into one .go file. Changed to 1 .arca = 1 .go.
+
+**Decision:** Each .arca generates its own .go file. Same-directory files share `package main`. Sub-directory modules get separate Go package.
+
+**pub = package-level visibility (not file-level).** Same as Go. Same directory can access non-pub functions. If file-level privacy needed, move to separate directory.
+
+**Why:** Go compiler handles same-package type resolution across files. Simpler than merging. Easier to debug (1:1 source mapping).
+
+---
+
+## 2026-03-31: Package and import system
+
+**Context:** Needed package system for real projects. Investigated Go, Rust, Kotlin, Python, TS approaches.
+
+**Decisions:**
+- **Package unit:** Directory = package. Package name = directory name (implicit, no `package` declaration needed)
+- **Circular imports:** Forbidden (Go constraint from transpilation)
+- **No wildcard imports:** Explicit is better. Go, Gleam, Elm also have no wildcard.
+- **Versioning:** No version-in-path (Go's `/v2` is universally disliked)
+
+**Import syntax (Kotlin/Rust inspired):**
+```arca
+import user                    // user.find() — qualified
+import user.{find, create}     // find(), create() — selective
+import user as u               // u.find() — alias
+import go "fmt"                // Go packages
+import go _ "modernc.org/sqlite" // side-effect
+```
+
+**Why not Go style:** Go's "last segment = package name" is implicit and confusing (documented complaints). Arca requires explicit qualification or selective import.
+
+**Why not Python style:** `from x import *` causes namespace pollution. Arca forbids it.
+
+**Design principle:** Generated Go should be valid, idiomatic Go. Arca abstractions (alias, namespaces) are resolved before codegen, not leaked into Go output.
+
+**Implementation notes:**
+- Alias expansion happens before import resolution (main file only). `u.find()` → `user.find()` at AST level.
+- Module-qualified calls (`user.find()`) resolved to flat calls (`find()`) in codegen since all modules merge into one Go file.
+- FieldAccess module resolution only happens inside FnCall context, preventing collision with variable names (e.g. parameter `u` vs alias `u`).
+- Types are always imported regardless of selective import (needed for type checking).
+
+---
+
+## 2026-03-31: Entry point resolution
+
+**Context:** Needed `arca build` to work without specifying file every time.
+
+**Decision:** Three patterns:
+- `arca build` → finds `main.arca` in current directory
+- `arca build cmd/server` → finds `main.arca` in directory
+- `arca build main.arca` → direct file (backwards compat)
+
+Follows Go convention. Package system deferred — currently 1 file = 1 module, directory is just structure.
+
+---
+
+## 2026-03-31: `.go` accessor idea
+
+**Context:** Arca stdlib should hide Go. But sometimes raw Go access is needed.
+
+**Idea:** `expr.go.Method()` gives raw Go access. Boundary marker like `&`. Self-responsibility zone.
+
+**Key insight:** Since Arca is a transpiler, `.go` can be compiled away at zero runtime cost. The accessor exists for the compiler to know "this crosses the boundary", not for runtime dispatch.
+
+**Status:** Idea only. Not implemented.
+
+---
+
 ## 2026-03-31: struct tags — rethinking (superseded by 2026-04-02)
 
 **Context:** Realized json/db metadata belongs to fields, not types. `type ProductId = Int{min: 1, json: "id"}` breaks when reused — json key leaks to other fields.
@@ -147,21 +129,25 @@ Rules:
 
 ---
 
-## 2026-03-31: `.go` accessor idea
+## 2026-03-30: Pipe operator — keeping it
 
-**Context:** Arca stdlib should hide Go. But sometimes raw Go access is needed.
+**Context:** Methods were added. Considered dropping pipe. But Go generics can't add new type parameters to methods (`func (l List[T]) Map[U](...) List[U]` is illegal). Collection operations (map/filter/fold) can't be method chains.
 
-**Idea:** `expr.go.Method()` gives raw Go access. Boundary marker like `&`. Self-responsibility zone. Not implemented yet.
+**Decision:** Keep both. Clear split:
+- **Methods** — type domain operations (`user.toJson()`)
+- **Pipe** — collection operations (`users |> map(...) |> filter(...)`)
+
+Not ideal (two styles) but technically necessary.
 
 ---
 
-## 2026-03-30: struct tags from constrained types
+## 2026-03-30: struct tags from constrained types (superseded by 2026-04-02)
 
 **Context:** gin + sqlx need `json:"name" db:"name"` struct tags. Where to put this metadata?
 
 **Options:** Annotations (@json), separate tags block, auto-generate from field names, mix into constrained types `{}`.
 
-**Decision:** Mix into `{}`. String-valued keys become struct tags, numeric-valued keys become validation constraints. Single source of truth. `Int{min: 1, json: "id", db: "id"}`.
+**Decision at this point:** Mix into `{}`. String-valued keys become struct tags, numeric-valued keys become validation constraints. Single source of truth. `Int{min: 1, json: "id", db: "id"}`.
 
 ---
 
@@ -308,7 +294,7 @@ Rules:
 
 ---
 
-## 2026-03-30: defer — decided not to add (for now)
+## 2026-03-30: defer — decided not to add, then added
 
 **Context:** Needed for resource cleanup. Explored alternatives.
 
@@ -319,9 +305,9 @@ Rules:
 - `with` block (Python/Kotlin) — control structure, not type-oriented
 - Wrapper functions (Scala's `Using`) — hides defer in library
 
-**Key insight:** "What method to defer" varies per type (Close, Cancel, Unlock, Rollback). Can't automate without trait/interface. Wrapper functions can absorb defer on Go side.
+**Initial decision:** Don't add defer. Use Go-side wrapper functions.
 
-**Decision:** Don't add defer to Arca yet. Use Go-side wrapper functions. Revisit when trait/interface is added.
+**Later reversed:** Added `defer` as-is from Go. Pragmatic. `defer db.Close()` is needed and Go developers understand it.
 
 ---
 
@@ -383,13 +369,13 @@ Rules:
 
 ---
 
-## 2026-03-28: Import syntax — dot separator
+## 2026-03-28: Import syntax — dot separator (superseded by 2026-03-30 string literals)
 
 **Context:** SPEC had `go/fmt`, implementation had `go.fmt`.
 
 **Analysis:** `/` is Go convention but most languages use `.` for imports (Java, Kotlin, Scala, Python, C#). Mixing `.` and `/` for Arca vs Go modules is inconsistent.
 
-**Decision:** All dots. `import go.fmt`, `import go.database.sql`, `import user`.
+**Decision at this point:** All dots. `import go.fmt`, `import go.database.sql`, `import user`.
 
 ---
 
