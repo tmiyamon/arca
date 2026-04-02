@@ -72,6 +72,10 @@ match response {
 ```
 let name = "hello"
 let count = 42
+
+// Type annotation (optional)
+let users: List[User] = []
+let count: Int = 42
 ```
 
 ### Tuples

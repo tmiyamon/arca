@@ -4,6 +4,26 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-02: let type annotation
+
+**Context:** `let users = []` generates `[]interface{}{}` in Go — no type info for empty collections. Go FFI functions like `db.Select(&users, ...)` need correctly typed slices.
+
+**Options considered:**
+- A) Explicit type annotation: `let users: List[User] = []`
+- B) Hindley-Milner type inference (infer from usage context)
+- C) Typed empty list literal: `List[User][]`
+
+**Decision:** Option A. Simple, explicit, familiar syntax (Kotlin, TypeScript, Rust all use `let x: T`).
+
+**Codegen rules:**
+- Empty list + type annotation → `var users []User` (Go zero value)
+- Non-empty value + type annotation → `var users []User = expr`
+- No annotation → `users := expr` (Go infers)
+
+**Future:** HM inference (B) may be added later to make annotations optional in more cases.
+
+---
+
 ## 2026-04-02: struct tags — implemented as tags block
 
 **Requirements:**

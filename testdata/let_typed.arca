@@ -1,0 +1,9 @@
+import go "fmt"
+
+type User(id: Int, name: String)
+
+fun main() {
+  let users: List[User] = []
+  let count: Int = 42
+  fmt.Println(users, count)
+}

@@ -680,6 +680,15 @@ func (p *Parser) parseLetStmt() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Optional type annotation: let name: Type = expr
+	var typ Type
+	if p.peek().Kind == TkColon {
+		p.advance() // skip ':'
+		typ, err = p.parseType()
+		if err != nil {
+			return nil, err
+		}
+	}
 	if _, err := p.expect(TkEq); err != nil {
 		return nil, err
 	}
@@ -687,7 +696,7 @@ func (p *Parser) parseLetStmt() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return LetStmt{Name: name.Lit, Value: value}, nil
+	return LetStmt{Name: name.Lit, Type: typ, Value: value}, nil
 }
 
 func (p *Parser) parseForExpr() (Expr, error) {

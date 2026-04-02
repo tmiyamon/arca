@@ -26,7 +26,7 @@ fun initDb() -> Result[*sqlx.DB, error] {
 // --- Handlers ---
 
 fun handleGetUsers(db: *sqlx.DB, c: *gin.Context) {
-  let users = []
+  let users: List[User] = []
   let _ = db.Select(&users, "SELECT id, name, email FROM users")
   c.JSON(http.StatusOK, users)
 }

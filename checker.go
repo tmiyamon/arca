@@ -511,8 +511,11 @@ func (c *Checker) checkStmt(stmt Stmt) {
 			// Destructuring
 			valType := c.inferType(s.Value)
 			c.bindPatternVars(s.Pattern, valType)
+		} else if s.Type != nil {
+			// Explicit type annotation: let name: Type = expr
+			c.scope.Define(s.Name, s.Type)
 		} else {
-			// Simple binding
+			// Simple binding — infer from value
 			t := c.inferType(s.Value)
 			if t != nil {
 				c.scope.Define(s.Name, t)

@@ -193,6 +193,8 @@ func (f *Formatter) formatStmt(stmt Stmt) {
 		f.writeIndent()
 		if s.Pattern != nil {
 			f.writeln("let " + f.formatPattern(s.Pattern) + " = " + f.formatExpr(s.Value))
+		} else if s.Type != nil {
+			f.writeln("let " + s.Name + ": " + f.formatType(s.Type) + " = " + f.formatExpr(s.Value))
 		} else {
 			f.writeln("let " + s.Name + " = " + f.formatExpr(s.Value))
 		}

@@ -612,7 +612,16 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			cg.writeln(fmt.Sprintf("%s_ = %s", indent, cg.genExprStr(s.Value)))
 			return
 		}
-		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
+		if s.Type != nil {
+			if ll, ok := s.Value.(ListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
+				// Empty list with type annotation: var users []User (zero value)
+				cg.writeln(fmt.Sprintf("%svar %s %s", indent, snakeToCamel(s.Name), cg.goType(s.Type)))
+			} else {
+				cg.writeln(fmt.Sprintf("%svar %s %s = %s", indent, snakeToCamel(s.Name), cg.goType(s.Type), cg.genExprStr(s.Value)))
+			}
+		} else {
+			cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
+		}
 	case DeferStmt:
 		cg.writeln(fmt.Sprintf("%sdefer %s", indent, cg.genExprStr(s.Expr)))
 	case AssertStmt:

@@ -25,6 +25,9 @@ This document records language design decisions, their rationale, and trade-offs
 
 - Arca-defined types are **fully immutable**
 - `let` is the only binding form, no `let mut`
+- Optional type annotation: `let x: Type = expr`
+- Needed for empty collections (`let users: List[User] = []`) where type can't be inferred
+- Codegen: `var x Type` for empty lists, `var x Type = expr` otherwise
 - Go types from FFI are **opaque** — Arca does not guarantee their immutability
 - Go developers are expected to understand Go's mutation semantics at the FFI boundary
 
