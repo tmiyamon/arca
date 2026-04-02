@@ -272,32 +272,39 @@ func (p *Parser) parseTagsBlock() ([]TagRule, error) {
 		}
 		rule := TagRule{Name: nameTok.Lit, Overrides: map[string]string{}}
 
+		// Global rule: db(snake)
+		if p.peek().Kind == TkLParen {
+			p.advance() // skip '('
+			caseTok := p.advance()
+			rule.Case = caseTok.Lit
+			if _, err := p.expect(TkRParen); err != nil {
+				return nil, err
+			}
+		}
+
+		// Individual overrides: db { userName: "user_name" }
 		if p.peek().Kind == TkLBrace {
 			p.advance() // skip '{'
 			for p.peek().Kind != TkRBrace {
-				key := p.advance()
-				if key.Kind != TkIdent {
-					return nil, fmt.Errorf("%d:%d: expected field name or 'case', got %s", key.Line, key.Col, key)
+				key, err := p.expect(TkIdent)
+				if err != nil {
+					return nil, err
 				}
 				if _, err := p.expect(TkColon); err != nil {
 					return nil, err
 				}
-				val := p.advance()
-				if key.Lit == "case" {
-					rule.Case = val.Lit
-				} else {
-					if val.Kind == TkString {
-						rule.Overrides[key.Lit] = val.Lit
-					} else {
-						rule.Overrides[key.Lit] = val.Lit
-					}
+				val, err := p.expect(TkString)
+				if err != nil {
+					return nil, err
 				}
+				rule.Overrides[key.Lit] = val.Lit
 				if p.peek().Kind == TkComma {
 					p.advance()
 				}
 			}
 			p.advance() // skip '}'
 		}
+
 		rules = append(rules, rule)
 	}
 	p.advance() // skip '}'
