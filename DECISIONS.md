@@ -238,7 +238,13 @@ Not ideal (two styles) but technically necessary.
 - Adds complexity to the language
 - Triggers trait/interface discussions
 
-**Decision:** Add methods. Syntax: `fun Type.method(self) -> RetType`. "Types express domains" takes priority over "data/operation separation".
+**Decision:** Add methods. Defined inside type body, `self` implicit (not in args). "Types express domains" takes priority over "data/operation separation".
+
+```arca
+type User(name: String) {
+  fun greet() -> String { "Hello ${self.name}" }
+}
+```
 
 ---
 
@@ -311,7 +317,7 @@ Not ideal (two styles) but technically necessary.
 
 ---
 
-## 2026-03-29: Pipe operator vs methods
+## 2026-03-29: Pipe operator vs methods (superseded by 2026-03-30 "keeping it")
 
 **Context:** Go FFI returns objects with methods. Arca has pipe `|>` but no methods.
 
@@ -322,7 +328,7 @@ Not ideal (two styles) but technically necessary.
 - F# has both (because .NET) — results in mixed style
 - Arca on Go = same situation as F# on .NET
 
-**Decision:** Keep pipe for now. Will likely drop when methods are added. Redundancy is acceptable during transition.
+**Decision at this point:** Keep pipe for now. Will likely drop when methods are added. Later discovered pipe is permanently needed due to Go generics constraint on collection methods.
 
 ---
 
@@ -407,8 +413,8 @@ Documented in one session:
 - Newline-based statements
 - `pub` visibility
 - 1 file = 1 module
-- `fun` / `type` / `match`
-- camelCase in Arca, camelCase in generated Go
+- `fn` / `type` / `match` (later changed: fn→fun, snake_case→camelCase)
+- snake_case in Arca, camelCase in generated Go (later unified to camelCase)
 
 ---
 
