@@ -314,12 +314,8 @@ func (cg *CodeGen) hasConstraints(td TypeDecl) bool {
 		return false
 	}
 	for _, f := range td.Constructors[0].Fields {
-		if nt, ok := f.Type.(NamedType); ok {
-			for _, c := range nt.Constraints {
-				if !tagKeys[c.Key] {
-					return true
-				}
-			}
+		if nt, ok := f.Type.(NamedType); ok && len(nt.Constraints) > 0 {
+			return true
 		}
 	}
 	return false
@@ -329,7 +325,7 @@ func (cg *CodeGen) genStructType(td TypeDecl) {
 	ctor := td.Constructors[0]
 	cg.writeln(fmt.Sprintf("type %s%s struct {", td.Name, goTypeParams(td)))
 	for _, f := range ctor.Fields {
-		tag := cg.genStructTag(f)
+		tag := cg.genStructTagFromRules(f.Name, td.Tags)
 		if tag != "" {
 			cg.writeln(fmt.Sprintf("\t%s %s %s", capitalize(f.Name), cg.goType(f.Type), tag))
 		} else {
@@ -343,27 +339,65 @@ func (cg *CodeGen) genStructType(td TypeDecl) {
 	}
 }
 
-var tagKeys = map[string]bool{
-	"json": true, "db": true, "yaml": true, "xml": true, "form": true, "binding": true,
-}
-
-func (cg *CodeGen) genStructTag(f Field) string {
-	nt, ok := f.Type.(NamedType)
-	if !ok || len(nt.Constraints) == 0 {
+func (cg *CodeGen) genStructTagFromRules(fieldName string, rules []TagRule) string {
+	if len(rules) == 0 {
 		return ""
 	}
 	var tags []string
-	for _, c := range nt.Constraints {
-		if tagKeys[c.Key] {
-			if lit, ok := c.Value.(StringLit); ok {
-				tags = append(tags, fmt.Sprintf("%s:%q", c.Key, lit.Value))
-			}
+	for _, rule := range rules {
+		// Check for individual override
+		if val, ok := rule.Overrides[fieldName]; ok {
+			tags = append(tags, fmt.Sprintf("%s:%q", rule.Name, val))
+			continue
 		}
+		// If rule has only overrides (no case), skip fields without override
+		if rule.Case == "" && len(rule.Overrides) > 0 {
+			continue
+		}
+		// Apply case conversion or default
+		tagValue := fieldName
+		switch rule.Case {
+		case "snake":
+			tagValue = camelToSnake(fieldName)
+		case "kebab":
+			tagValue = camelToKebab(fieldName)
+		}
+		tags = append(tags, fmt.Sprintf("%s:%q", rule.Name, tagValue))
 	}
 	if len(tags) == 0 {
 		return ""
 	}
 	return "`" + strings.Join(tags, " ") + "`"
+}
+
+func camelToSnake(s string) string {
+	var result []byte
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				result = append(result, '_')
+			}
+			result = append(result, byte(c+'a'-'A'))
+		} else {
+			result = append(result, byte(c))
+		}
+	}
+	return string(result)
+}
+
+func camelToKebab(s string) string {
+	var result []byte
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				result = append(result, '-')
+			}
+			result = append(result, byte(c+'a'-'A'))
+		} else {
+			result = append(result, byte(c))
+		}
+	}
+	return string(result)
 }
 
 func (cg *CodeGen) genValidatingConstructor(td TypeDecl) {

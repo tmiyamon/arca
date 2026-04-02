@@ -6,12 +6,11 @@ import go _ "modernc.org/sqlite"
 
 // --- Domain Types ---
 
-type User {
-  User(
-    id: Int{json: "id", db: "id"}
-    name: String{json: "name", db: "name"}
-    email: String{json: "email", db: "email"}
-  )
+type User(id: Int, name: String, email: String) {
+  tags {
+    json
+    db
+  }
 }
 
 // --- DB ---

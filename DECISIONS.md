@@ -92,6 +92,55 @@ Follows Go convention. Package system deferred — currently 1 file = 1 module, 
 
 ---
 
+## 2026-03-31: struct tags — ongoing design
+
+**Requirements identified:**
+1. Arbitrary tag keys (json, db, yaml, elastic, custom...)
+2. Auto-generation from field names with conversion rules (snake_case, camelCase, kebab-case)
+3. Override only exceptions
+4. Natural Arca syntax
+
+**Key insight:** struct tag is "mapping to external system's world". Constrained types are "domain value constraints". Different concerns, should be separate.
+
+**Approaches explored:**
+- Mix in `{}` — rejected (leaks via type alias, mixes concerns)
+- Separate types per layer (UserRow, UserResponse) — clean but verbose, needs spread syntax
+- `tag` block inside type — good separation but syntax felt DSL-ish
+- `#annotation` on fields — doesn't support auto-generation rules
+
+**Current best candidate:**
+```arca
+type User(id: Int, userName: String) {
+  tags {
+    json
+    db {case: snake}
+    elastic { userName: "full_name" }
+  }
+}
+```
+
+**Decision:** `tags {}` block inside type definition. Implemented.
+
+```arca
+type User(id: Int, userName: String) {
+  tags {
+    json                    // all fields, name as-is
+    db {case: snake}        // all fields, snake_case
+    elastic {               // override only
+      userName: "full_name"
+    }
+  }
+}
+```
+
+Rules:
+- Tag name alone → all fields with field name
+- `{case: snake}` → conversion rule for all fields
+- `{field: "value"}` → only specified fields get this tag
+- Mix: `{case: snake, field: "override"}` → conversion + individual override
+
+---
+
 ## 2026-03-31: struct tags — rethinking
 
 **Context:** Realized json/db metadata belongs to fields, not types. `type ProductId = Int{min: 1, json: "id"}` breaks when reused — json key leaks to other fields.

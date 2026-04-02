@@ -229,11 +229,18 @@ type ImportDecl struct {
 	Alias      string   // alias: import user as u → "u"
 }
 
+type TagRule struct {
+	Name     string            // "json", "db", "elastic", etc.
+	Case     string            // "snake", "camel", "kebab", "" (default: field name as-is)
+	Overrides map[string]string // fieldName → tagValue (individual overrides)
+}
+
 type TypeDecl struct {
 	Name         string
 	Params       []string
 	Constructors []Constructor
 	Methods      []FnDecl
+	Tags         []TagRule
 }
 
 type TypeAliasDecl struct {

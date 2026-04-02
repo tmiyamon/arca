@@ -31,6 +31,7 @@ const (
 	TkIn
 	TkAssert
 	TkDefer
+	TkTags
 
 	// Symbols
 	TkLParen
@@ -74,7 +75,7 @@ var tokenNames = map[TokenKind]string{
 	TkIdent: "Ident", TkUpperIdent: "UpperIdent",
 	TkType: "type", TkFn: "fun", TkMatch: "match",
 	TkLet: "let", TkTrue: "True", TkFalse: "False",
-	TkPub: "pub", TkImport: "import", TkFor: "for", TkIn: "in", TkAssert: "assert", TkDefer: "defer",
+	TkPub: "pub", TkImport: "import", TkFor: "for", TkIn: "in", TkAssert: "assert", TkDefer: "defer", TkTags: "tags",
 	TkLParen: "(", TkRParen: ")",
 	TkLBracket: "[", TkRBracket: "]",
 	TkLBrace: "{", TkRBrace: "}",
@@ -117,6 +118,7 @@ var keywords = map[string]TokenKind{
 	"in":     TkIn,
 	"assert": TkAssert,
 	"defer":  TkDefer,
+	"tags":   TkTags,
 }
 
 type Lexer struct {

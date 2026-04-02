@@ -179,7 +179,38 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			}
 		}
 		p.advance() // skip ')'
-		return TypeDecl{Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}}, nil
+		// Short record may have tags/methods block
+		var methods []FnDecl
+		var tags []TagRule
+		if p.peek().Kind == TkLBrace {
+			p.advance() // skip '{'
+			for p.peek().Kind != TkRBrace {
+				if p.peek().Kind == TkTags {
+					t, err := p.parseTagsBlock()
+					if err != nil {
+						return nil, err
+					}
+					tags = t
+				} else if p.peek().Kind == TkFn {
+					method, err := p.parseMethodDecl(name.Lit, false)
+					if err != nil {
+						return nil, err
+					}
+					methods = append(methods, method)
+				} else if p.peek().Kind == TkPub {
+					p.advance()
+					method, err := p.parseMethodDecl(name.Lit, true)
+					if err != nil {
+						return nil, err
+					}
+					methods = append(methods, method)
+				} else {
+					return nil, fmt.Errorf("%d:%d: expected tags, fun, or }, got %s", p.peek().Line, p.peek().Col, p.peek())
+				}
+			}
+			p.advance() // skip '}'
+		}
+		return TypeDecl{Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}, Methods: methods, Tags: tags}, nil
 	}
 
 	if _, err := p.expect(TkLBrace); err != nil {
@@ -187,7 +218,17 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 	}
 	var constructors []Constructor
 	var methods []FnDecl
+	var tags []TagRule
 	for p.peek().Kind != TkRBrace {
+		// Tags block
+		if p.peek().Kind == TkTags {
+			t, err := p.parseTagsBlock()
+			if err != nil {
+				return nil, err
+			}
+			tags = t
+			continue
+		}
 		// Method: fn or pub fn
 		if p.peek().Kind == TkFn {
 			method, err := p.parseMethodDecl(name.Lit, false)
@@ -215,7 +256,52 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		}
 	}
 	p.advance() // skip '}'
-	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors, Methods: methods}, nil
+	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags}, nil
+}
+
+func (p *Parser) parseTagsBlock() ([]TagRule, error) {
+	p.advance() // skip 'tags'
+	if _, err := p.expect(TkLBrace); err != nil {
+		return nil, err
+	}
+	var rules []TagRule
+	for p.peek().Kind != TkRBrace {
+		nameTok := p.advance()
+		if nameTok.Kind != TkIdent {
+			return nil, fmt.Errorf("%d:%d: expected tag name, got %s", nameTok.Line, nameTok.Col, nameTok)
+		}
+		rule := TagRule{Name: nameTok.Lit, Overrides: map[string]string{}}
+
+		if p.peek().Kind == TkLBrace {
+			p.advance() // skip '{'
+			for p.peek().Kind != TkRBrace {
+				key := p.advance()
+				if key.Kind != TkIdent {
+					return nil, fmt.Errorf("%d:%d: expected field name or 'case', got %s", key.Line, key.Col, key)
+				}
+				if _, err := p.expect(TkColon); err != nil {
+					return nil, err
+				}
+				val := p.advance()
+				if key.Lit == "case" {
+					rule.Case = val.Lit
+				} else {
+					if val.Kind == TkString {
+						rule.Overrides[key.Lit] = val.Lit
+					} else {
+						rule.Overrides[key.Lit] = val.Lit
+					}
+				}
+				if p.peek().Kind == TkComma {
+					p.advance()
+				}
+			}
+			p.advance() // skip '}'
+		}
+		rules = append(rules, rule)
+	}
+	p.advance() // skip '}'
+	return rules, nil
 }
 
 func (p *Parser) parseConstructor() (Constructor, error) {
