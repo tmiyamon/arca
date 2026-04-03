@@ -16,6 +16,9 @@ func main() {
 
 	cmd := os.Args[1]
 	switch cmd {
+	case "version", "--version", "-v":
+		fmt.Printf("arca %s\n", version)
+		os.Exit(0)
 	case "run":
 		arg := "."
 		if len(os.Args) >= 3 {
@@ -624,7 +627,11 @@ fun main() {
 	return 0
 }
 
+const version = "v0.1.0"
+
 func healthCmd() int {
+	arcaPath, _ := os.Executable()
+	fmt.Printf("  arca: %s (%s)\n", version, arcaPath)
 	ok := true
 
 	// Check Go
