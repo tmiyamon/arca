@@ -12,6 +12,19 @@ This document records language design decisions, their rationale, and trade-offs
 - **Types**: `PascalCase` in both Arca and Go
 - **Constructors**: `PascalCase` in Arca
 
+## Constructor Qualification
+
+Constructors require type qualification depending on the type definition:
+
+- **Single-constructor types**: Unqualified. `User(name: "Alice")` — type name = constructor name, no ambiguity.
+- **Multi-constructor types (sum types)**: Qualified. `Greeting.Hello(name: "World")` — prevents name collision across types.
+- **Enum variants**: Qualified. `Color.Red` — same reason as sum types.
+- **Type aliases**: Unqualified. `Email("test@example.com")` — single constructor.
+- **Builtins (Ok/Error/Some/None)**: Unqualified — will be explained by prelude in the future.
+- **Match patterns**: Always unqualified — subject type determines which constructors are valid.
+
+Design rationale: Two types with `Error(message: String)` would collide without qualification. Single-constructor types have no ambiguity because the type name itself is the constructor. Follows Rust/Swift pattern (qualified construction, unqualified match).
+
 ## Builtin Names
 
 `Ok`, `Error`, `Some`, `None` are builtin constructors for Result and Option types.

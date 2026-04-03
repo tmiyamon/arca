@@ -820,7 +820,36 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		return p.parseMatchExpr()
 
 	case TkUpperIdent:
-		return p.parseConstructorOrIdent()
+		expr, err := p.parseConstructorOrIdent()
+		if err != nil {
+			return nil, err
+		}
+		// Postfix chain: .field, .method()
+		for p.peek().Kind == TkDot {
+			p.advance()
+			field := p.advance()
+			if field.Kind != TkIdent && field.Kind != TkUpperIdent {
+				return nil, fmt.Errorf("%d:%d: expected field name, got %s", field.Line, field.Col, field)
+			}
+			expr = FieldAccess{Expr: expr, Field: field.Lit}
+			if p.peek().Kind == TkLParen {
+				p.advance()
+				var args []Expr
+				for p.peek().Kind != TkRParen {
+					arg, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, arg)
+					if p.peek().Kind == TkComma {
+						p.advance()
+					}
+				}
+				p.advance()
+				expr = FnCall{Fn: expr, Args: args}
+			}
+		}
+		return expr, nil
 
 	case TkLParen:
 		return p.parseTupleOrLambda()
@@ -1027,12 +1056,31 @@ parseTuple:
 	return TupleExpr{Elements: elements}, nil
 }
 
+var builtinConstructors = map[string]bool{
+	"Ok": true, "Error": true, "Some": true, "None": true,
+}
+
 func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 	name := p.advance()
 
 	if p.peek().Kind == TkDot {
 		p.advance()
 		member := p.advance()
+
+		// Type.Constructor — qualified constructor (with or without args)
+		if len(member.Lit) > 0 && member.Lit[0] >= 'A' && member.Lit[0] <= 'Z' {
+			if p.peek().Kind == TkLParen {
+				return p.parseQualifiedConstructor(name, member)
+			}
+			// Enum variant: Color.Red (no parens)
+			return ConstructorCall{
+				Pos:      Pos{name.Line, name.Col},
+				TypeName: name.Lit,
+				Name:     member.Lit,
+			}, nil
+		}
+
+		// Otherwise: field access or method call (e.g. foo.bar, fmt.Println(...))
 		qualifiedName := name.Lit + "." + member.Lit
 		expr := Expr(Ident{Name: qualifiedName})
 		if p.peek().Kind == TkLParen {
@@ -1055,33 +1103,83 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 	}
 
 	if p.peek().Kind == TkLParen {
-		p.advance()
-		var fields []FieldValue
-		for p.peek().Kind != TkRParen {
-			if p.peek().Kind == TkIdent && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkColon {
-				fieldName := p.advance()
-				p.advance() // skip ':'
-				value, err := p.parseExpr()
-				if err != nil {
-					return nil, err
-				}
-				fields = append(fields, FieldValue{Name: fieldName.Lit, Value: value})
-			} else {
-				value, err := p.parseExpr()
-				if err != nil {
-					return nil, err
-				}
-				fields = append(fields, FieldValue{Value: value})
-			}
-			if p.peek().Kind == TkComma {
-				p.advance()
-			}
+		// Builtin constructors: Ok(...), Error(...), Some(...), None(...)
+		if builtinConstructors[name.Lit] {
+			return p.parseBuiltinConstructor(name)
 		}
-		p.advance()
-		return ConstructorCall{Pos: Pos{name.Line, name.Col}, Name: name.Lit, Fields: fields}, nil
+		// Unqualified constructor: single-constructor type or type alias
+		if len(name.Lit) > 0 && name.Lit[0] >= 'A' && name.Lit[0] <= 'Z' {
+			return p.parseUnqualifiedConstructor(name)
+		}
 	}
 
 	return Ident{Name: name.Lit}, nil
+}
+
+func (p *Parser) parseQualifiedConstructor(typeName Token, ctorName Token) (Expr, error) {
+	p.advance() // skip '('
+	fields, err := p.parseFieldValues()
+	if err != nil {
+		return nil, err
+	}
+	return ConstructorCall{
+		Pos:      Pos{typeName.Line, typeName.Col},
+		TypeName: typeName.Lit,
+		Name:     ctorName.Lit,
+		Fields:   fields,
+	}, nil
+}
+
+func (p *Parser) parseBuiltinConstructor(name Token) (Expr, error) {
+	p.advance() // skip '('
+	fields, err := p.parseFieldValues()
+	if err != nil {
+		return nil, err
+	}
+	return ConstructorCall{
+		Pos:    Pos{name.Line, name.Col},
+		Name:   name.Lit,
+		Fields: fields,
+	}, nil
+}
+
+func (p *Parser) parseUnqualifiedConstructor(name Token) (Expr, error) {
+	p.advance() // skip '('
+	fields, err := p.parseFieldValues()
+	if err != nil {
+		return nil, err
+	}
+	return ConstructorCall{
+		Pos:    Pos{name.Line, name.Col},
+		Name:   name.Lit,
+		Fields: fields,
+	}, nil
+}
+
+func (p *Parser) parseFieldValues() ([]FieldValue, error) {
+	var fields []FieldValue
+	for p.peek().Kind != TkRParen {
+		if p.peek().Kind == TkIdent && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkColon {
+			fieldName := p.advance()
+			p.advance() // skip ':'
+			value, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, FieldValue{Name: fieldName.Lit, Value: value})
+		} else {
+			value, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, FieldValue{Value: value})
+		}
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ')'
+	return fields, nil
 }
 
 func (p *Parser) parseMatchExpr() (Expr, error) {

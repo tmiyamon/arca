@@ -1046,45 +1046,66 @@ func (cg *CodeGen) genForExpr(fe ForExpr, indent string) {
 }
 
 func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
-	for typeName, td := range cg.types {
-		for _, ctor := range td.Constructors {
-			if ctor.Name == cc.Name {
-				if isEnum(td) {
-					return fmt.Sprintf("%s%s", typeName, cc.Name)
+	// Resolve type: use TypeName if qualified, otherwise search by constructor name
+	typeName := cc.TypeName
+	var td TypeDecl
+	var found bool
+
+	if typeName != "" {
+		td, found = cg.types[typeName]
+	} else {
+		// Unqualified: builtin (Ok/Error/Some/None) or type alias
+		for tn, t := range cg.types {
+			for _, ctor := range t.Constructors {
+				if ctor.Name == cc.Name {
+					typeName = tn
+					td = t
+					found = true
+					break
 				}
-				goName := typeName
-				if len(td.Constructors) > 1 {
-					goName = typeName + cc.Name
-				}
-				// Constrained type: use NewType() constructor
-				if cg.hasConstraints(td) {
-					args := make([]string, len(cc.Fields))
-					for i, f := range cc.Fields {
-						args[i] = cg.genExprStr(f.Value)
-					}
-					return fmt.Sprintf("New%s(%s)", goName, strings.Join(args, ", "))
-				}
-				fields := make([]string, len(cc.Fields))
-				for i, f := range cc.Fields {
-					if f.Name != "" {
-						fields[i] = fmt.Sprintf("%s: %s", capitalize(f.Name), cg.genExprStr(f.Value))
-					} else {
-						fields[i] = cg.genExprStr(f.Value)
-					}
-				}
-				// Add type parameters if generic
-				typeArgs := ""
-				if len(td.Params) > 0 {
-					args := make([]string, len(cc.Fields))
-					for i, f := range cc.Fields {
-						args[i] = cg.inferGoType(f.Value)
-					}
-					typeArgs = "[" + strings.Join(args, ", ") + "]"
-				}
-				return fmt.Sprintf("%s%s{%s}", goName, typeArgs, strings.Join(fields, ", "))
+			}
+			if found {
+				break
 			}
 		}
 	}
+
+	if found {
+		if isEnum(td) {
+			return fmt.Sprintf("%s%s", typeName, cc.Name)
+		}
+		goName := typeName
+		if len(td.Constructors) > 1 {
+			goName = typeName + cc.Name
+		}
+		// Constrained type: use NewType() constructor
+		if cg.hasConstraints(td) {
+			args := make([]string, len(cc.Fields))
+			for i, f := range cc.Fields {
+				args[i] = cg.genExprStr(f.Value)
+			}
+			return fmt.Sprintf("New%s(%s)", goName, strings.Join(args, ", "))
+		}
+		fields := make([]string, len(cc.Fields))
+		for i, f := range cc.Fields {
+			if f.Name != "" {
+				fields[i] = fmt.Sprintf("%s: %s", capitalize(f.Name), cg.genExprStr(f.Value))
+			} else {
+				fields[i] = cg.genExprStr(f.Value)
+			}
+		}
+		// Add type parameters if generic
+		typeArgs := ""
+		if len(td.Params) > 0 {
+			args := make([]string, len(cc.Fields))
+			for i, f := range cc.Fields {
+				args[i] = cg.inferGoType(f.Value)
+			}
+			typeArgs = "[" + strings.Join(args, ", ") + "]"
+		}
+		return fmt.Sprintf("%s%s{%s}", goName, typeArgs, strings.Join(fields, ", "))
+	}
+
 	// Type alias constructor: Email("test@example.com") → NewEmail("test@example.com") or Email("test@example.com")
 	if alias, ok := cg.typeAliases[cc.Name]; ok {
 		args := make([]string, len(cc.Fields))

@@ -4,6 +4,29 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-03: Qualified constructor syntax + arca init
+
+**Context:** Constructors like `Hello(name: "World")` were callable without type qualification, leaking constructor names into global scope. Two types with `Error(message: String)` would collide.
+
+**Decision: Type-qualified constructors for multi-variant types.**
+
+| Form | Syntax | Example |
+|------|--------|---------|
+| Single-constructor | Unqualified | `User(name: "Alice")` |
+| Multi-constructor (sum type) | `Type.Constructor(...)` | `Greeting.Hello(name: "World")` |
+| Enum variant | `Type.Variant` | `Color.Red` |
+| Type alias | Unqualified | `Email("test@example.com")` |
+| Builtins (Ok/Error/Some/None) | Unqualified | `Ok(value)` |
+| Match patterns | Always unqualified | `Hello(name) -> ...` |
+
+**Rationale:** Follows Rust/Swift pattern — qualify at construction to avoid name collision, but match patterns are unqualified because the subject's type disambiguates. Single-constructor types are unqualified because type name = constructor name (no ambiguity).
+
+**Builtins (Ok/Error/Some/None):** Unqualified now. Will be explained by a prelude system in the future (auto-imported, like Rust's std::prelude).
+
+**Also added: `arca init <name>`** — creates a new project directory with a `main.arca` template showcasing ADT + pattern matching + string interpolation. Enables `arca init myapp && cd myapp && arca run` onboarding flow.
+
+---
+
 ## 2026-04-03: Constraint compatibility (Level 2)
 
 **Context:** Constrained type aliases need compatibility checking. `AdultAge = Int{min: 18, max: 150}` should be passable where `Age = Int{min: 0, max: 150}` is expected, but not vice versa.

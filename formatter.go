@@ -265,8 +265,12 @@ func (f *Formatter) formatExpr(expr Expr) string {
 	case FieldAccess:
 		return f.formatExpr(e.Expr) + "." + e.Field
 	case ConstructorCall:
+		prefix := e.Name
+		if e.TypeName != "" {
+			prefix = e.TypeName + "." + e.Name
+		}
 		if len(e.Fields) == 0 {
-			return e.Name
+			return prefix
 		}
 		fields := make([]string, len(e.Fields))
 		for i, fv := range e.Fields {
@@ -276,7 +280,7 @@ func (f *Formatter) formatExpr(expr Expr) string {
 				fields[i] = f.formatExpr(fv.Value)
 			}
 		}
-		return e.Name + "(" + strings.Join(fields, ", ") + ")"
+		return prefix + "(" + strings.Join(fields, ", ") + ")"
 	case MatchExpr:
 		return f.formatMatchExpr(e)
 	case Lambda:

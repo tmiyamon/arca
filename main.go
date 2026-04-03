@@ -62,6 +62,12 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(openapiCmd(os.Args[2]))
+	case "init":
+		name := ""
+		if len(os.Args) >= 3 {
+			name = os.Args[2]
+		}
+		os.Exit(initCmd(name))
 	case "health":
 		os.Exit(healthCmd())
 	default:
@@ -84,6 +90,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  emit  <file.arca>            Output generated Go code")
 	fmt.Fprintln(os.Stderr, "  fmt   <file.arca>            Format source code in place")
 	fmt.Fprintln(os.Stderr, "  openapi <file.arca>          Generate OpenAPI spec")
+	fmt.Fprintln(os.Stderr, "  init  [name]                 Create a new project")
 	fmt.Fprintln(os.Stderr, "  health                       Check environment")
 }
 
@@ -559,6 +566,57 @@ func writeBuildDir(inputPath string, result *transpileResult) (string, error) {
 	}
 
 	return dir, nil
+}
+
+func initCmd(name string) int {
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "Usage: arca init <project-name>")
+		return 1
+	}
+
+	// Check if directory already exists
+	if _, err := os.Stat(name); err == nil {
+		fmt.Fprintf(os.Stderr, "Directory %s already exists\n", name)
+		return 1
+	}
+
+	if err := os.MkdirAll(name, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating directory: %v\n", err)
+		return 1
+	}
+
+	mainArca := `import go "fmt"
+
+type Greeting {
+  Hello(name: String)
+  Goodbye(name: String)
+}
+
+fun message(g: Greeting) -> String {
+  match g {
+    Hello(name) -> "Hello, ${name}!"
+    Goodbye(name) -> "Goodbye, ${name}!"
+  }
+}
+
+fun main() {
+  let greet = Greeting.Hello(name: "World")
+  fmt.Println(message(greet))
+}
+`
+
+	mainPath := filepath.Join(name, "main.arca")
+	if err := os.WriteFile(mainPath, []byte(mainArca), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing main.arca: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Created %s/\n", name)
+	fmt.Println("")
+	fmt.Println("  cd " + name)
+	fmt.Println("  arca run")
+	fmt.Println("")
+	return 0
 }
 
 func healthCmd() int {

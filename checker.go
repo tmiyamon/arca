@@ -420,6 +420,9 @@ func (c *Checker) inferType(expr Expr) Type {
 				return c.currentFn.ReturnType
 			}
 		}
+		if e.TypeName != "" {
+			return NamedType{Name: e.TypeName}
+		}
 		if typeName, ok := c.ctorTypes[e.Name]; ok {
 			return NamedType{Name: typeName}
 		}
@@ -774,7 +777,31 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 		return
 	}
 
-	typeName, ok := c.ctorTypes[cc.Name]
+	var typeName string
+	var ok bool
+	if cc.TypeName != "" {
+		// Qualified: Greeting.Hello(...)
+		td, exists := c.types[cc.TypeName]
+		if !exists {
+			c.addErrorAt(cc.Pos, "unknown type: %s", cc.TypeName)
+			return
+		}
+		found := false
+		for _, ctor := range td.Constructors {
+			if ctor.Name == cc.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.addErrorAt(cc.Pos, "type %s has no constructor %s", cc.TypeName, cc.Name)
+			return
+		}
+		typeName = cc.TypeName
+		ok = true
+	} else {
+		typeName, ok = c.ctorTypes[cc.Name]
+	}
 	if !ok {
 		c.addErrorAt(cc.Pos, "unknown constructor: %s", cc.Name)
 		return

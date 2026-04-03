@@ -38,7 +38,7 @@ fun findUserById(id: Int) -> Result[User, ApiError] {
   match id {
     1 -> Ok(User(id: 1, name: "Alice", email: "alice@example.com"))
     2 -> Ok(User(id: 2, name: "Bob", email: "bob@example.com"))
-    _ -> Error(NotFound(message: "user not found"))
+    _ -> Error(ApiError.NotFound(message: "user not found"))
   }
 }
 
@@ -55,7 +55,7 @@ fun handleUser(w: http.ResponseWriter, r: *http.Request) {
         Error(err) -> err.send(w)
       }
     }
-    Error(err) -> BadRequest(message: "invalid id").send(w)
+    Error(err) -> ApiError.BadRequest(message: "invalid id").send(w)
   }
 }
 

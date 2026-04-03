@@ -16,6 +16,6 @@ fun colorName(c: Color) -> String {
 
 fun main() {
   fmt.Println("Hello from Arca!")
-  fmt.Println(colorName(Red))
-  fmt.Println(colorName(Blue))
+  fmt.Println(colorName(Color.Red))
+  fmt.Println(colorName(Color.Blue))
 }

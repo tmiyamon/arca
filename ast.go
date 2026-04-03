@@ -80,9 +80,10 @@ type Block struct {
 }
 
 type ConstructorCall struct {
-	Pos    Pos
-	Name   string
-	Fields []FieldValue
+	Pos      Pos
+	TypeName string // "Greeting" in Greeting.Hello(...), empty for builtins (Ok/Error/Some/None)
+	Name     string // "Hello" in Greeting.Hello(...), or "Ok" for builtins
+	Fields   []FieldValue
 }
 
 type FieldValue struct {

@@ -34,6 +34,30 @@ type ApiResponse {
 }
 ```
 
+### Constructor Syntax
+
+```
+// Single-constructor type: use type name directly
+let user = User(name: "Alice", age: 30)
+
+// Multi-constructor type: qualify with type name
+let greet = Greeting.Hello(name: "World")
+let err = ApiError.NotFound(message: "not found")
+
+// Enum: qualify with type name
+let color = Color.Red
+
+// Builtins (Ok/Error/Some/None): always unqualified
+let result = Ok(user)
+let opt = Some("hello")
+
+// Match patterns: always unqualified (subject type known)
+match greet {
+  Hello(name) -> "Hello, ${name}!"
+  Goodbye(name) -> "Goodbye, ${name}!"
+}
+```
+
 ### Type Parameters
 
 ```
@@ -412,6 +436,7 @@ build/
 ```
 
 ```
+arca init myapp            // create new project
 arca build                 // build ./main.arca
 arca build cmd/server      // build cmd/server/main.arca
 arca run                   // run ./main.arca
