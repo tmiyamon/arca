@@ -274,7 +274,7 @@ type User {
   )
 }
 
-// Type alias with constraints
+// Type alias (always nominal — creates distinct Go type)
 type PositiveInt = Int{min: 1}
 type Email = String{pattern: ".+@.+", max_length: 255}
 
@@ -283,6 +283,14 @@ type EvenInt = Int{validate: isEven}
 
 // Constructor returns Result (validation may fail)
 let user = User(id: 1, name: "Alice", email: "a@b.com")?
+
+// Constraint compatibility: stricter type passable where wider type expected
+type Age = Int{min: 0, max: 150}
+type AdultAge = Int{min: 18, max: 150}
+
+fun greet(age: Age) -> String { ... }
+let adult = AdultAge(25)?
+greet(adult)  // OK: AdultAge range ⊆ Age range
 ```
 
 Built-in constraints:

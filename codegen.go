@@ -905,6 +905,19 @@ func (cg *CodeGen) genExprWithContext(expr Expr, call FnCall, argIndex int) stri
 			}
 		}
 	}
+	// Type alias parameter: wrap with Go type conversion.
+	// e.g. greet(adult) → greet(Age(adult)) when param is Age and arg might be AdultAge.
+	// Same-type conversion is no-op in Go, so always wrapping is safe.
+	if fnIdent, ok := call.Fn.(Ident); ok {
+		if fn, ok := cg.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
+			paramType := fn.Params[argIndex].Type
+			if pnt, ok := paramType.(NamedType); ok {
+				if _, isAlias := cg.typeAliases[pnt.Name]; isAlias {
+					return fmt.Sprintf("%s(%s)", pnt.Name, cg.genExprStr(expr))
+				}
+			}
+		}
+	}
 	return cg.genExprStr(expr)
 }
 

@@ -136,8 +136,13 @@ type User {
 - **Runtime** (Go): Execution constraints (timeout, cancellation, context). Inherently mutable.
 - Arca guarantees values. Go guarantees execution.
 
+### Constraint compatibility (Level 2)
+- Stricter type can be passed where wider type is expected: `AdultAge → Age` ✓, `Age → AdultAge` ✗
+- Constraints normalized into dimensions: Value (min/max), Length (min_length/max_length), Pattern, Validate
+- Range dimensions: range inclusion. Exact dimensions: equality.
+- No structural aliases — `type X = T` is always nominal (newtype)
+
 ### Future levels
-- Constraint compatibility checking (Age vs AdultAge)
 - Condition-based narrowing
 - Go type optimization (Int{0,255} → uint8)
 - JSON/OpenAPI/DB schema derivation from constraints

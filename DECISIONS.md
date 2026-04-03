@@ -4,6 +4,34 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-03: Constraint compatibility (Level 2)
+
+**Context:** Constrained type aliases need compatibility checking. `AdultAge = Int{min: 18, max: 150}` should be passable where `Age = Int{min: 0, max: 150}` is expected, but not vice versa.
+
+**Design: Dimension-based normalization.**
+Constraints are normalized into independent dimensions, each with a unified comparison:
+
+| Kind | Dimensions | Comparison |
+|------|-----------|------------|
+| Range | Value (min/max), Length (min_length/max_length) | Range inclusion: `A.range ⊆ B.range` |
+| Exact | Pattern, Validate | Equality |
+
+**Rules:**
+- Source → Target is compatible if source is equal or stricter on all target dimensions
+- Target has a dimension source doesn't → source is unbounded → not compatible
+- Source has extra dimensions target doesn't → OK (stricter is fine)
+- Two unconstrained aliases with different names → nominal, never compatible (UserId ≠ OrderId)
+
+**No structural aliases.** `type X = T` is always a newtype (nominal). Structural aliases have no current use case in Arca. Revisit when function types are added to the type system.
+
+**Codegen:** Type alias parameters always get a Go type conversion (`greet(Age(adult))`). Same-type conversion is no-op in Go.
+
+**Reference:** Ada has the closest feature in a production language (`subtype`). Research/academic: Liquid Haskell, F* (refinement types). Mainstream languages (Rust, Go, Kotlin, TS) don't have this.
+
+**Status:** Implemented but may be removed if practical value doesn't materialize. Main use case is library code accepting wider types with app code using stricter types.
+
+---
+
 ## 2026-04-02: Type alias codegen
 
 **Context:** `type Email = String{pattern: ".+@.+"}` was parsed but generated no Go code.

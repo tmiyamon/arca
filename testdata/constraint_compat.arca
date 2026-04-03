@@ -1,0 +1,13 @@
+import go "fmt"
+
+type Age = Int{min: 0, max: 150}
+type AdultAge = Int{min: 18, max: 150}
+
+fun greet(age: Age) -> String {
+  "hello"
+}
+
+fun main() {
+  let adult = AdultAge(25)?
+  fmt.Println(greet(adult))
+}

@@ -295,3 +295,53 @@ fun use(w: Wrapper) -> String {
 		t.Errorf("unexpected error: %s", errs[0].Message)
 	}
 }
+
+func TestCheckerConstraintCompatibility(t *testing.T) {
+	// AdultAge → Age: compatible (stricter range fits in wider range)
+	errs := checkSource(`
+type Age = Int{min: 0, max: 150}
+type AdultAge = Int{min: 18, max: 150}
+fun greet(age: Age) -> String { "hello" }
+fun main() {
+  let adult = AdultAge(25)?
+  greet(adult)
+}
+`)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors for AdultAge→Age, got: %v", errs)
+	}
+
+	// Age → AdultAge: NOT compatible (wider range doesn't fit in stricter)
+	errs = checkSource(`
+type Age = Int{min: 0, max: 150}
+type AdultAge = Int{min: 18, max: 150}
+fun drink(age: AdultAge) -> String { "cheers" }
+fun main() {
+  let age = Age(10)?
+  drink(age)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for Age→AdultAge")
+	}
+	if !strings.Contains(errs[0].Message, "expects AdultAge, got Age") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+
+	// UserId vs OrderId: NOT compatible (nominal, no constraints)
+	errs = checkSource(`
+type UserId = Int
+type OrderId = Int
+fun findUser(id: UserId) -> String { "found" }
+fun main() {
+  let orderId = OrderId(1)
+  findUser(orderId)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for OrderId→UserId")
+	}
+	if !strings.Contains(errs[0].Message, "expects UserId, got OrderId") {
+		t.Errorf("unexpected error: %s", errs[0].Message)
+	}
+}
