@@ -4,6 +4,16 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: Variable shadowing in codegen
+
+**Context:** `let email = Email(email)?` inside a function with parameter `email` generated invalid Go — `email := __try_val1` re-declared the parameter in the same scope.
+
+**Decision:** Track declared variable names per function scope. When a let binding shadows an existing variable, codegen generates a suffixed name (`email_2`) and maps subsequent references to the new name.
+
+**Implementation:** `declareVar()` tracks names and returns unique Go names. `varNames` map stores current variable name mapping for Ident resolution. `initFnScope()` registers parameters at function entry.
+
+---
+
 ## 2026-04-04: Constrained type constructor returns Result without ?
 
 **Context:** `let email = Email("a@b.c")` with a constrained type generated broken Go code — `NewEmail()` returns `(Email, error)` but codegen assigned it to a single variable.

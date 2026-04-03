@@ -10,7 +10,22 @@ fun message(g: Greeting) -> String {
   }
 }
 
+type Email = String { min_length: 5, max_length: 255 }
+type User(email: Email) {
+  static fun from(email: String) -> Result[User] {
+    let email = Email(email)?
+    Ok(User(email))
+  }
+}
+
+
 fun main() {
   let greet = Greeting.Hello(name: "World")
   println(message(greet))
+
+  let user = User.from("b@b")
+  match user {
+    Ok(value) -> println("valid: ${value}")
+    Error(err) -> println("error: ${err}")
+  }
 }

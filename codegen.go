@@ -25,6 +25,8 @@ type CodeGen struct {
 	tmpCounter      int
 	currentReceiver string
 	currentTypeName string // set inside type methods for Self resolution
+	declaredVars    map[string]int    // track declared variable names for shadowing
+	varNames        map[string]string // current variable name mapping (original → shadowed)
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -242,6 +244,7 @@ func (cg *CodeGen) genMethodDecl(typeName string, fd FnDecl) {
 	cg.writeln(fmt.Sprintf("func (%s %s) %s(%s)%s {", receiver, typeName, methodName, strings.Join(params, ", "), retType))
 	cg.currentRetType = fd.ReturnType
 	cg.currentReceiver = receiver
+	cg.initFnScope(fd.Params)
 	if fd.ReturnType != nil {
 		cg.genReturnExpr(fd.Body, "\t")
 	} else {
@@ -249,6 +252,8 @@ func (cg *CodeGen) genMethodDecl(typeName string, fd FnDecl) {
 	}
 	cg.currentReceiver = ""
 	cg.currentRetType = nil
+	cg.declaredVars = nil
+	cg.varNames = nil
 	cg.writeln("}")
 }
 
@@ -267,12 +272,15 @@ func (cg *CodeGen) genAssociatedFunc(typeName string, fd FnDecl) {
 	}
 	cg.writeln(fmt.Sprintf("func %s(%s)%s {", funcName, strings.Join(params, ", "), retType))
 	cg.currentRetType = fd.ReturnType
+	cg.initFnScope(fd.Params)
 	if fd.ReturnType != nil {
 		cg.genReturnExpr(fd.Body, "\t")
 	} else {
 		cg.genVoidBody(fd.Body, "\t")
 	}
 	cg.currentRetType = nil
+	cg.declaredVars = nil
+	cg.varNames = nil
 	cg.writeln("}")
 }
 
@@ -700,6 +708,37 @@ func (cg *CodeGen) goType(t Type) string {
 
 // --- Function Generation ---
 
+// declareVar registers a variable name and returns the Go name to use.
+// If the name shadows an existing variable, a suffix is appended.
+// The mapping is stored so subsequent Ident references resolve correctly.
+func (cg *CodeGen) declareVar(name string) string {
+	goName := snakeToCamel(name)
+	if cg.declaredVars == nil {
+		cg.declaredVars = make(map[string]int)
+	}
+	count := cg.declaredVars[goName]
+	cg.declaredVars[goName] = count + 1
+	if count > 0 {
+		goName = fmt.Sprintf("%s_%d", goName, count+1)
+	}
+	// Store current mapping for Ident resolution
+	if cg.varNames == nil {
+		cg.varNames = make(map[string]string)
+	}
+	cg.varNames[snakeToCamel(name)] = goName
+	return goName
+}
+
+func (cg *CodeGen) initFnScope(params []FnParam) {
+	cg.declaredVars = make(map[string]int)
+	cg.varNames = make(map[string]string)
+	for _, p := range params {
+		goName := snakeToCamel(p.Name)
+		cg.declaredVars[goName] = 1
+		cg.varNames[goName] = goName
+	}
+}
+
 func (cg *CodeGen) genFnDecl(fd FnDecl) {
 	name := fd.Name
 	if fd.Public {
@@ -716,6 +755,7 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 	}
 
 	cg.currentRetType = fd.ReturnType
+	cg.initFnScope(fd.Params)
 	cg.writeln(fmt.Sprintf("func %s(%s)%s {", name, strings.Join(params, ", "), retType))
 	if fd.ReturnType != nil {
 		cg.genReturnExpr(fd.Body, "\t")
@@ -724,6 +764,8 @@ func (cg *CodeGen) genFnDecl(fd FnDecl) {
 	}
 	cg.writeln("}")
 	cg.currentRetType = nil
+	cg.declaredVars = nil
+	cg.varNames = nil
 }
 
 func (cg *CodeGen) genReturnExpr(expr Expr, indent string) {
@@ -779,20 +821,21 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			cg.writeln(fmt.Sprintf("%s_ = %s", indent, cg.genExprStr(s.Value)))
 			return
 		}
+		goVarName := cg.declareVar(s.Name)
 		// Constrained type constructor without ?: wrap in Result
 		if cg.isConstrainedConstructor(s.Value) {
-			cg.genConstrainedLetStmt(s.Name, s.Value, indent)
+			cg.genConstrainedLetStmt(goVarName, s.Value, indent)
 			return
 		}
 		if s.Type != nil {
 			if ll, ok := s.Value.(ListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
 				// Empty list with type annotation: var users []User (zero value)
-				cg.writeln(fmt.Sprintf("%svar %s %s", indent, snakeToCamel(s.Name), cg.goType(s.Type)))
+				cg.writeln(fmt.Sprintf("%svar %s %s", indent, goVarName, cg.goType(s.Type)))
 			} else {
-				cg.writeln(fmt.Sprintf("%svar %s %s = %s", indent, snakeToCamel(s.Name), cg.goType(s.Type), cg.genExprStr(s.Value)))
+				cg.writeln(fmt.Sprintf("%svar %s %s = %s", indent, goVarName, cg.goType(s.Type), cg.genExprStr(s.Value)))
 			}
 		} else {
-			cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(s.Name), cg.genExprStr(s.Value)))
+			cg.writeln(fmt.Sprintf("%s%s := %s", indent, goVarName, cg.genExprStr(s.Value)))
 		}
 	case DeferStmt:
 		cg.writeln(fmt.Sprintf("%sdefer %s", indent, cg.genExprStr(s.Expr)))
@@ -866,7 +909,13 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 			// Otherwise: Go FFI like fmt.Println
 			return e.Name
 		}
-		return snakeToCamel(e.Name)
+		goName := snakeToCamel(e.Name)
+		if cg.varNames != nil {
+			if mapped, ok := cg.varNames[goName]; ok {
+				return mapped
+			}
+		}
+		return goName
 	case FnCall:
 		// Track builtin usage
 		if ident, ok := e.Fn.(Ident); ok {
@@ -1351,11 +1400,11 @@ func (cg *CodeGen) genConstrainedLetStmt(name string, expr Expr, indent string) 
 	tmpErr := fmt.Sprintf("__cerr%d", cg.tmpCounter)
 	goType := cg.inferGoType(expr)
 	cg.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, cg.genExprStr(expr)))
-	cg.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, snakeToCamel(name), goType))
+	cg.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, name, goType))
 	cg.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-	cg.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, snakeToCamel(name), goType, tmpErr))
+	cg.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, name, goType, tmpErr))
 	cg.writeln(fmt.Sprintf("%s} else {", indent))
-	cg.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, snakeToCamel(name), goType, tmpVal))
+	cg.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, name, goType, tmpVal))
 	cg.writeln(fmt.Sprintf("%s}", indent))
 }
 
@@ -1377,7 +1426,8 @@ func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {
 	}
 	cg.writeln(fmt.Sprintf("%s}", indent))
 	if name != "_" {
-		cg.writeln(fmt.Sprintf("%s%s := %s", indent, snakeToCamel(name), tmpVal))
+		goVarName := cg.declareVar(name)
+		cg.writeln(fmt.Sprintf("%s%s := %s", indent, goVarName, tmpVal))
 	}
 }
 
