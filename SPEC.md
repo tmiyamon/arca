@@ -262,13 +262,22 @@ let _ = db.Exec("INSERT ...")?   // discard success value, propagate error
 - Go types are opaque — Arca does not guarantee their immutability
 - Go developers are expected to understand Go's mutation semantics
 
+### Built-in Functions
+
+```
+println("hello")         // print with newline
+print("hello")           // print without newline
+```
+
+Available without import. Maps to Go's `fmt.Println` / `fmt.Print`.
+
 ### Side Effects
 
 No special syntax. Side effects (I/O, logging, etc.) are called directly.
 
 ```
 fun main() {
-  fmt.Println("hello")
+  println("hello")
 }
 ```
 

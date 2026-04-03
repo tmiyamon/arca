@@ -103,6 +103,12 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - Decision deferred — `?` works for now, final syntax TBD
 - `?` has the downside that the error point is at end of line, easy to miss
 
+## Built-in Functions
+
+`println` and `print` are available without import. They map to `fmt.Println` and `fmt.Print` in generated Go, with `fmt` auto-imported when used.
+
+These are hardcoded builtins, not yet part of a prelude system. When a prelude is added, they will move there.
+
 ## Generated Go Code Style
 
 - All generated identifiers follow Go conventions (camelCase/PascalCase)

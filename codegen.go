@@ -69,30 +69,9 @@ func NewCodeGen(prog *Program) *CodeGen {
 }
 
 func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
-	cg.preScan(prog)
-	cg.writeln(fmt.Sprintf("package %s", pkgName))
-	cg.writeln("")
-
-	hasImports := len(cg.goImports) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
-	if hasImports {
-		cg.writeln("import (")
-		for _, imp := range cg.goImports {
-			if imp.sideEffect {
-				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
-			} else {
-				cg.writeln(fmt.Sprintf("\t%q", imp.path))
-			}
-		}
-		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
-			cg.writeln("\t\"fmt\"")
-		}
-		if cg.usedBuiltins["regexp"] {
-			cg.writeln("\t\"regexp\"")
-		}
-		cg.writeln(")")
-		cg.writeln("")
-	}
-
+	// Generate body first, then prepend header with imports
+	var body strings.Builder
+	cg.buf = body
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -109,39 +88,20 @@ func (cg *CodeGen) GeneratePackage(pkgName string, prog *Program) string {
 		}
 	}
 	cg.genBuiltins()
+	bodyStr := cg.buf.String()
+
+	cg.buf = strings.Builder{}
+	cg.writeln(fmt.Sprintf("package %s", pkgName))
+	cg.writeln("")
+	cg.writeImports(nil)
+	cg.buf.WriteString(bodyStr)
 	return cg.buf.String()
 }
 
 func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) string {
-	cg.preScan(mainProg)
-	cg.writeln("package main")
-	cg.writeln("")
-
-	// Collect go imports + module imports
-	hasImports := len(cg.goImports) > 0 || len(modules) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
-	if hasImports {
-		cg.writeln("import (")
-		for _, imp := range cg.goImports {
-			if imp.sideEffect {
-				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
-			} else {
-				cg.writeln(fmt.Sprintf("\t%q", imp.path))
-			}
-		}
-		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
-			cg.writeln("\t\"fmt\"")
-		}
-		if cg.usedBuiltins["regexp"] {
-			cg.writeln("\t\"regexp\"")
-		}
-		for modName := range modules {
-			cg.writeln(fmt.Sprintf("\t%q", cg.goModule+"/"+modName))
-		}
-		cg.writeln(")")
-		cg.writeln("")
-	}
-
-	// Generate only main file's declarations (not imported ones)
+	// Generate body first
+	var body strings.Builder
+	cg.buf = body
 	for _, decl := range mainProg.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -158,64 +118,20 @@ func (cg *CodeGen) GenerateMain(mainProg *Program, modules map[string]*Program) 
 		}
 	}
 	cg.genBuiltins()
+	bodyStr := cg.buf.String()
+
+	cg.buf = strings.Builder{}
+	cg.writeln("package main")
+	cg.writeln("")
+	cg.writeImports(modules)
+	cg.buf.WriteString(bodyStr)
 	return cg.buf.String()
 }
 
-func (cg *CodeGen) preScan(prog *Program) {
-	// Scan for features that need imports
-	for _, decl := range prog.Decls {
-		switch d := decl.(type) {
-		case TypeDecl:
-			if cg.hasConstraints(d) {
-				for _, f := range d.Constructors[0].Fields {
-					if nt, ok := f.Type.(NamedType); ok {
-						for _, c := range nt.Constraints {
-							if c.Key == "pattern" {
-								cg.usedBuiltins["regexp"] = true
-							}
-						}
-					}
-				}
-			}
-		case TypeAliasDecl:
-			if nt, ok := d.Type.(NamedType); ok && len(nt.Constraints) > 0 {
-				cg.usedBuiltins["fmt"] = true
-				for _, c := range nt.Constraints {
-					if c.Key == "pattern" {
-						cg.usedBuiltins["regexp"] = true
-					}
-				}
-			}
-		}
-	}
-}
-
 func (cg *CodeGen) Generate(prog *Program) string {
-	cg.preScan(prog)
-	cg.writeln("package main")
-	cg.writeln("")
-
-	// Generate imports
-	hasImports := len(cg.goImports) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
-	if hasImports {
-		cg.writeln("import (")
-		for _, imp := range cg.goImports {
-			if imp.sideEffect {
-				cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
-			} else {
-				cg.writeln(fmt.Sprintf("\t%q", imp.path))
-			}
-		}
-		if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
-			cg.writeln("\t\"fmt\"")
-		}
-		if cg.usedBuiltins["regexp"] {
-			cg.writeln("\t\"regexp\"")
-		}
-		cg.writeln(")")
-		cg.writeln("")
-	}
-
+	// Generate body first
+	var body strings.Builder
+	cg.buf = body
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -225,12 +141,47 @@ func (cg *CodeGen) Generate(prog *Program) string {
 			cg.genTypeAliasDecl(d)
 			cg.writeln("")
 		case FnDecl:
-			cg.genFnDecl(d)
-			cg.writeln("")
+			if d.Public {
+				cg.genFnDecl(d)
+				cg.writeln("")
+			}
 		}
 	}
 	cg.genBuiltins()
+	bodyStr := cg.buf.String()
+
+	cg.buf = strings.Builder{}
+	cg.writeln("package main")
+	cg.writeln("")
+	cg.writeImports(nil)
+	cg.buf.WriteString(bodyStr)
 	return cg.buf.String()
+}
+
+func (cg *CodeGen) writeImports(modules map[string]*Program) {
+	hasImports := len(cg.goImports) > 0 || len(modules) > 0 || cg.usedBuiltins["regexp"] || cg.usedBuiltins["fmt"]
+	if !hasImports {
+		return
+	}
+	cg.writeln("import (")
+	for _, imp := range cg.goImports {
+		if imp.sideEffect {
+			cg.writeln(fmt.Sprintf("\t_ %q", imp.path))
+		} else {
+			cg.writeln(fmt.Sprintf("\t%q", imp.path))
+		}
+	}
+	if cg.usedBuiltins["fmt"] && !cg.hasGoImport("fmt") {
+		cg.writeln("\t\"fmt\"")
+	}
+	if cg.usedBuiltins["regexp"] {
+		cg.writeln("\t\"regexp\"")
+	}
+	for modName := range modules {
+		cg.writeln(fmt.Sprintf("\t%q", cg.goModule+"/"+modName))
+	}
+	cg.writeln(")")
+	cg.writeln("")
 }
 
 func (cg *CodeGen) hasGoImport(pkg string) bool {
@@ -915,6 +866,20 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		// Track builtin usage
 		if ident, ok := e.Fn.(Ident); ok {
 			switch ident.Name {
+			case "println":
+				cg.usedBuiltins["fmt"] = true
+				args := make([]string, len(e.Args))
+				for i, a := range e.Args {
+					args[i] = cg.genExprStr(a)
+				}
+				return fmt.Sprintf("fmt.Println(%s)", strings.Join(args, ", "))
+			case "print":
+				cg.usedBuiltins["fmt"] = true
+				args := make([]string, len(e.Args))
+				for i, a := range e.Args {
+					args[i] = cg.genExprStr(a)
+				}
+				return fmt.Sprintf("fmt.Print(%s)", strings.Join(args, ", "))
 			case "to_bytes":
 				if len(e.Args) == 1 {
 					return fmt.Sprintf("[]byte(%s)", cg.genExprStr(e.Args[0]))

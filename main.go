@@ -585,9 +585,7 @@ func initCmd(name string) int {
 		return 1
 	}
 
-	mainArca := `import go "fmt"
-
-type Greeting {
+	mainArca := `type Greeting {
   Hello(name: String)
   Goodbye(name: String)
 }
@@ -601,7 +599,7 @@ fun message(g: Greeting) -> String {
 
 fun main() {
   let greet = Greeting.Hello(name: "World")
-  fmt.Println(message(greet))
+  println(message(greet))
 }
 `
 

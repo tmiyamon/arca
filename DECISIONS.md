@@ -4,6 +4,18 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: Builtin println/print
+
+**Context:** `import go "fmt"` + `fmt.Println(...)` was required for Hello World. First impression of the language forces Go FFI knowledge.
+
+**Decision:** `println` and `print` as builtin functions, available without import. Maps to `fmt.Println` / `fmt.Print`, with `fmt` auto-imported in generated Go.
+
+**Implementation:** Codegen refactored to body-first generation. Body is generated into a buffer first, then imports are prepended based on what was actually used. This eliminated the `preScan` AST walk (~100 lines) that was needed when imports were emitted before body generation. Adding new builtins now requires a single change in `genExprStr`.
+
+**Future:** These builtins will move to a prelude module when one is implemented.
+
+---
+
 ## 2026-04-04: Associated functions (static fun) and Self
 
 **Context:** Needed type-level functions without `self` (factory constructors like `Greeting.from("Hello")`). Current method system uses implicit `self`, so methods on interface types generated invalid Go (can't have interface receiver).
