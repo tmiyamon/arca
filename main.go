@@ -121,6 +121,13 @@ func resolveEntryPoint(arg string) (string, error) {
 	return "", fmt.Errorf("not a .arca file or directory: %s", arg)
 }
 
+func formatError(file string, pos Pos, message string) string {
+	if pos.Line > 0 {
+		return fmt.Sprintf("%s:%d:%d: %s", file, pos.Line, pos.Col, message)
+	}
+	return fmt.Sprintf("%s: %s", file, message)
+}
+
 func parseFile(path string) (*Program, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -134,7 +141,7 @@ func parseFile(path string) (*Program, error) {
 	parser := NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		return nil, fmt.Errorf("%s: parse error: %w", path, err)
+		return nil, fmt.Errorf("%s:%w", path, err)
 	}
 	return prog, nil
 }
@@ -377,9 +384,9 @@ func transpile(inputPath string) (*transpileResult, error) {
 	if errs := checker.Check(mergedProg); len(errs) > 0 {
 		var msgs []string
 		for _, e := range errs {
-			msgs = append(msgs, e.Message)
+			msgs = append(msgs, formatError(inputPath, e.Pos, e.Message))
 		}
-		return nil, fmt.Errorf("type errors:\n  %s", strings.Join(msgs, "\n  "))
+		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
 	}
 
 	goModule := "arcabuild"

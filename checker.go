@@ -128,11 +128,12 @@ func dimensionsCompatible(source, target []Dimension) bool {
 }
 
 type CheckError struct {
+	Pos     Pos
 	Message string
 }
 
 func (e CheckError) Error() string {
-	return e.Message
+	return fmt.Sprintf("%d:%d: %s", e.Pos.Line, e.Pos.Col, e.Message)
 }
 
 // --- Scope ---
@@ -215,13 +216,8 @@ func (c *Checker) Check(prog *Program) []CheckError {
 	return c.errors
 }
 
-func (c *Checker) addError(format string, args ...interface{}) {
-	c.errors = append(c.errors, CheckError{Message: fmt.Sprintf(format, args...)})
-}
-
 func (c *Checker) addErrorAt(pos Pos, format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
-	c.errors = append(c.errors, CheckError{Message: fmt.Sprintf("%d:%d: %s", pos.Line, pos.Col, msg)})
+	c.errors = append(c.errors, CheckError{Pos: pos, Message: fmt.Sprintf(format, args...)})
 }
 
 func (c *Checker) pushScope() {
@@ -749,7 +745,7 @@ func (c *Checker) checkFnCall(e FnCall) {
 		return
 	}
 	if len(e.Args) != len(fn.Params) {
-		c.addError("function '%s' expects %d arguments, got %d", ident.Name, len(fn.Params), len(e.Args))
+		c.addErrorAt(e.Pos, "function '%s' expects %d arguments, got %d", ident.Name, len(fn.Params), len(e.Args))
 		return
 	}
 	for i, arg := range e.Args {
@@ -759,7 +755,7 @@ func (c *Checker) checkFnCall(e FnCall) {
 		}
 		paramType := fn.Params[i].Type
 		if !c.typesCompatible(argType, paramType) {
-			c.addError("argument %d of '%s' expects %s, got %s",
+			c.addErrorAt(e.Pos, "argument %d of '%s' expects %s, got %s",
 				i+1, ident.Name, typeName(paramType), typeName(argType))
 		}
 	}

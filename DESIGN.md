@@ -109,6 +109,23 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 These are hardcoded builtins, not yet part of a prelude system. When a prelude is added, they will move there.
 
+## Error Messages
+
+All errors (parse, type check) follow a unified format:
+
+```
+file:line:col: message
+```
+
+Examples:
+```
+main.arca:3:11: function 'add' expects 2 arguments, got 1
+main.arca:2:11: unknown constructor: User
+main.arca:3:3: non-exhaustive match on Color: missing Green, Blue
+```
+
+Formatted by `formatError()` in main.go. Checker errors carry `Pos` (line/col) and are combined with the file path at output time.
+
 ## Generated Go Code Style
 
 - All generated identifiers follow Go conventions (camelCase/PascalCase)

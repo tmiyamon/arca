@@ -787,11 +787,12 @@ func (p *Parser) parseExpr() (Expr, error) {
 	// ? operator
 	if p.peek().Kind == TkQuestion {
 		p.advance()
-		expr = FnCall{Fn: Ident{Name: "__try"}, Args: []Expr{expr}}
+		expr = FnCall{Pos: Pos{p.peek().Line, p.peek().Col}, Fn: Ident{Name: "__try"}, Args: []Expr{expr}}
 	}
 
 	// Pipe operator
 	for p.peek().Kind == TkPipe {
+		pipePos := Pos{p.peek().Line, p.peek().Col}
 		p.advance()
 		right, err := p.parsePrimaryExpr()
 		if err != nil {
@@ -801,7 +802,7 @@ func (p *Parser) parseExpr() (Expr, error) {
 			call.Args = append([]Expr{expr}, call.Args...)
 			expr = call
 		} else {
-			expr = FnCall{Fn: right, Args: []Expr{expr}}
+			expr = FnCall{Pos: pipePos, Fn: right, Args: []Expr{expr}}
 		}
 	}
 
@@ -885,7 +886,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.advance()
-				expr = FnCall{Fn: expr, Args: args}
+				expr = FnCall{Pos: Pos{tok.Line, tok.Col}, Fn: expr, Args: args}
 			}
 		}
 		return expr, nil
@@ -914,7 +915,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.advance()
-				expr = FnCall{Fn: expr, Args: args}
+				expr = FnCall{Pos: Pos{tok.Line, tok.Col}, Fn: expr, Args: args}
 			} else if p.peek().Kind == TkDot {
 				p.advance()
 				field := p.advance()
@@ -1136,7 +1137,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 				}
 			}
 			p.advance()
-			return FnCall{Fn: expr, Args: args}, nil
+			return FnCall{Pos: Pos{name.Line, name.Col}, Fn: expr, Args: args}, nil
 		}
 		return expr, nil
 	}

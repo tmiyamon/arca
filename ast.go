@@ -54,6 +54,7 @@ type StringInterp struct {
 }
 
 type FnCall struct {
+	Pos  Pos
 	Fn   Expr
 	Args []Expr
 }
