@@ -176,23 +176,43 @@ type User(id: Int, userName: String) {
 - `()` for global rules, `{}` for overrides — no ambiguity
 - Transitional: stdlib will eventually hide this
 
-## Methods (planned)
+## Methods
 
-Methods are needed for constrained types to keep domain operations closed:
+Methods are defined inside type body with implicit `self`:
 
 ```arca
-type Age = Int{min: 0, max: 150}
+type User {
+  User(name: String, age: Int)
 
-fun Age.increment(self) -> Age {
-  Age(self.value + 1)?
+  fun greet() -> String { "Hello ${self.name}" }
 }
 ```
 
-- Syntax: `fun Type.method(self) -> RetType { ... }`
-- Maps to Go methods: `func (a Age) Increment() (Age, error)`
-- Namespace per type — no collision between `Age.increment` and `Score.increment`
-- Decision driven by: constrained types need methods, Go FFI already uses methods, pipe operator becomes redundant
-- Pipe operator will likely be dropped once methods are added
+- Maps to Go methods: `func (u User) Greet() string`
+- Namespace per type — no collision between `User.greet` and `Admin.greet`
+
+## Associated Functions (static fun)
+
+Functions attached to a type but without `self`:
+
+```arca
+type Greeting {
+  Hello(name: String)
+  Goodbye(name: String)
+
+  static fun from(s: String) -> Greeting {
+    match s {
+      "Hello" -> Self.Hello(name: "World")
+      _ -> Self.Goodbye(name: "World")
+    }
+  }
+}
+```
+
+- `static fun` = associated function, no `self` access
+- Called as `Type.method(...)` → generates Go package-level function (`greetingFrom(...)`)
+- `Self` resolves to the enclosing type name inside methods and associated functions
+- Follows Swift's `static func` pattern — explicit, one keyword, no ambiguity between method and associated function
 
 ## Go Runtime Primitives
 

@@ -109,6 +109,9 @@ func (f *Formatter) formatTypeDecl(d TypeDecl) {
 			if method.Public {
 				f.write("pub ")
 			}
+			if method.Static {
+				f.write("static ")
+			}
 			f.write("fun " + method.Name + "(")
 			for i, p := range method.Params {
 				if i > 0 {

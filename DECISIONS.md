@@ -4,6 +4,36 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: Associated functions (static fun) and Self
+
+**Context:** Needed type-level functions without `self` (factory constructors like `Greeting.from("Hello")`). Current method system uses implicit `self`, so methods on interface types generated invalid Go (can't have interface receiver).
+
+**Decision: `static fun` keyword + `Self` type reference.**
+
+```arca
+type Greeting {
+  Hello(name: String)
+  static fun from(s: String) -> Greeting {
+    match s {
+      "Hello" -> Self.Hello(name: "World")
+      _ -> Self.Goodbye(name: "World")
+    }
+  }
+}
+let g = Greeting.from("Hello")
+```
+
+**Why `static fun` over alternatives:**
+- Implicit self + body analysis to detect associated functions → caller can't tell from signature alone, confusing
+- Explicit `self` parameter (Rust/Python) → would require changing all existing methods, and Arca already has implicit self
+- `static fun` (Swift pattern) → one keyword addition, clear at definition site, no existing code changes
+
+**`Self` for type self-reference:** Inside type body (methods and associated functions), `Self` resolves to the enclosing type. Avoids repeating the type name. Follows Rust/Swift convention. Preferred over bare constructors inside type body (which would be unusual — no mainstream language does this).
+
+**Codegen:** `static fun` → Go package-level function (`greetingFrom`). Regular methods → Go methods with receiver.
+
+---
+
 ## 2026-04-03: Qualified constructor syntax + arca init
 
 **Context:** Constructors like `Hello(name: "World")` were callable without type qualification, leaking constructor names into global scope. Two types with `Error(message: String)` would collide.

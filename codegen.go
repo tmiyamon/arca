@@ -24,6 +24,7 @@ type CodeGen struct {
 	goModule        string          // e.g. "arcabuild"
 	tmpCounter      int
 	currentReceiver string
+	currentTypeName string // set inside type methods for Self resolution
 }
 
 func NewCodeGen(prog *Program) *CodeGen {
@@ -262,7 +263,13 @@ func (cg *CodeGen) genTypeDecl(td TypeDecl) {
 	}
 	// Generate methods
 	for _, method := range td.Methods {
-		cg.genMethodDecl(td.Name, method)
+		cg.currentTypeName = td.Name
+		if method.Static {
+			cg.genAssociatedFunc(td.Name, method)
+		} else {
+			cg.genMethodDecl(td.Name, method)
+		}
+		cg.currentTypeName = ""
 		cg.writeln("")
 	}
 }
@@ -292,6 +299,115 @@ func (cg *CodeGen) genMethodDecl(typeName string, fd FnDecl) {
 	cg.currentReceiver = ""
 	cg.currentRetType = nil
 	cg.writeln("}")
+}
+
+func (cg *CodeGen) genAssociatedFunc(typeName string, fd FnDecl) {
+	funcName := typeName + capitalize(fd.Name)
+	if !fd.Public {
+		funcName = strings.ToLower(typeName[:1]) + typeName[1:] + capitalize(fd.Name)
+	}
+	params := make([]string, len(fd.Params))
+	for i, p := range fd.Params {
+		params[i] = fmt.Sprintf("%s %s", snakeToCamel(p.Name), cg.goType(p.Type))
+	}
+	retType := ""
+	if fd.ReturnType != nil {
+		retType = " " + cg.goType(fd.ReturnType)
+	}
+	cg.writeln(fmt.Sprintf("func %s(%s)%s {", funcName, strings.Join(params, ", "), retType))
+	cg.currentRetType = fd.ReturnType
+	if fd.ReturnType != nil {
+		cg.genReturnExpr(fd.Body, "\t")
+	} else {
+		cg.genVoidBody(fd.Body, "\t")
+	}
+	cg.currentRetType = nil
+	cg.writeln("}")
+}
+
+func usesSelf(expr Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case Ident:
+		return e.Name == "self"
+	case FieldAccess:
+		return usesSelf(e.Expr)
+	case FnCall:
+		if usesSelf(e.Fn) {
+			return true
+		}
+		for _, a := range e.Args {
+			if usesSelf(a) {
+				return true
+			}
+		}
+	case Block:
+		for _, s := range e.Stmts {
+			if usesSelfStmt(s) {
+				return true
+			}
+		}
+		return usesSelf(e.Expr)
+	case MatchExpr:
+		if usesSelf(e.Subject) {
+			return true
+		}
+		for _, arm := range e.Arms {
+			if usesSelf(arm.Body) {
+				return true
+			}
+		}
+	case BinaryExpr:
+		return usesSelf(e.Left) || usesSelf(e.Right)
+	case ConstructorCall:
+		for _, f := range e.Fields {
+			if usesSelf(f.Value) {
+				return true
+			}
+		}
+	case Lambda:
+		return usesSelf(e.Body)
+	case StringInterp:
+		for _, p := range e.Parts {
+			if usesSelf(p) {
+				return true
+			}
+		}
+	case ForExpr:
+		return usesSelf(e.Iter) || usesSelf(e.Body)
+	case ListLit:
+		for _, el := range e.Elements {
+			if usesSelf(el) {
+				return true
+			}
+		}
+		return usesSelf(e.Spread)
+	case TupleExpr:
+		for _, el := range e.Elements {
+			if usesSelf(el) {
+				return true
+			}
+		}
+	case RefExpr:
+		return usesSelf(e.Expr)
+	}
+	return false
+}
+
+func usesSelfStmt(stmt Stmt) bool {
+	switch s := stmt.(type) {
+	case LetStmt:
+		return usesSelf(s.Value)
+	case ExprStmt:
+		return usesSelf(s.Expr)
+	case AssertStmt:
+		return usesSelf(s.Expr)
+	case DeferStmt:
+		return usesSelf(s.Expr)
+	}
+	return false
 }
 
 func goTypeParams(td TypeDecl) string {
@@ -777,8 +893,21 @@ func (cg *CodeGen) genExprStr(expr Expr) string {
 		if goName, ok := cg.fnNames[e.Name]; ok {
 			return goName
 		}
-		// Don't transform qualified names (Go FFI like fmt.Println)
+		// Check if this is a Type.method() call → associated function
 		if strings.Contains(e.Name, ".") {
+			parts := strings.SplitN(e.Name, ".", 2)
+			if td, ok := cg.types[parts[0]]; ok {
+				for _, m := range td.Methods {
+					if m.Name == parts[1] && m.Static {
+						funcName := parts[0] + capitalize(parts[1])
+						if !m.Public {
+							funcName = strings.ToLower(parts[0][:1]) + parts[0][1:] + capitalize(parts[1])
+						}
+						return funcName
+					}
+				}
+			}
+			// Otherwise: Go FFI like fmt.Println
 			return e.Name
 		}
 		return snakeToCamel(e.Name)
@@ -1048,6 +1177,9 @@ func (cg *CodeGen) genForExpr(fe ForExpr, indent string) {
 func (cg *CodeGen) genConstructorCall(cc ConstructorCall) string {
 	// Resolve type: use TypeName if qualified, otherwise search by constructor name
 	typeName := cc.TypeName
+	if typeName == "Self" && cg.currentTypeName != "" {
+		typeName = cg.currentTypeName
+	}
 	var td TypeDecl
 	var found bool
 

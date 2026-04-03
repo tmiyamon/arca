@@ -163,14 +163,15 @@ func (s *Scope) Lookup(name string) (Type, bool) {
 // --- Checker ---
 
 type Checker struct {
-	types       map[string]TypeDecl
-	typeAliases map[string]TypeAliasDecl
-	ctorTypes   map[string]string // constructor name -> type name
-	functions   map[string]FnDecl
-	errors      []CheckError
-	scope       *Scope
-	currentFn   *FnDecl
-	typeParams  map[string]bool // currently in-scope type parameters
+	types           map[string]TypeDecl
+	typeAliases     map[string]TypeAliasDecl
+	ctorTypes       map[string]string // constructor name -> type name
+	functions       map[string]FnDecl
+	errors          []CheckError
+	scope           *Scope
+	currentFn       *FnDecl
+	currentTypeName string // set inside type methods for Self resolution
+	typeParams      map[string]bool // currently in-scope type parameters
 }
 
 func NewChecker() *Checker {
@@ -421,7 +422,11 @@ func (c *Checker) inferType(expr Expr) Type {
 			}
 		}
 		if e.TypeName != "" {
-			return NamedType{Name: e.TypeName}
+			tn := e.TypeName
+			if tn == "Self" && c.currentTypeName != "" {
+				tn = c.currentTypeName
+			}
+			return NamedType{Name: tn}
 		}
 		if typeName, ok := c.ctorTypes[e.Name]; ok {
 			return NamedType{Name: typeName}
@@ -514,7 +519,9 @@ func (c *Checker) checkTypeDecl(td TypeDecl) {
 	}
 	// Check methods
 	for _, method := range td.Methods {
+		c.currentTypeName = td.Name
 		c.checkMethodDecl(td, method)
+		c.currentTypeName = ""
 	}
 	c.typeParams = prev
 }
@@ -779,11 +786,15 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 
 	var typeName string
 	var ok bool
-	if cc.TypeName != "" {
-		// Qualified: Greeting.Hello(...)
-		td, exists := c.types[cc.TypeName]
+	qualifiedType := cc.TypeName
+	if qualifiedType == "Self" && c.currentTypeName != "" {
+		qualifiedType = c.currentTypeName
+	}
+	if qualifiedType != "" {
+		// Qualified: Greeting.Hello(...) or Self.Hello(...)
+		td, exists := c.types[qualifiedType]
 		if !exists {
-			c.addErrorAt(cc.Pos, "unknown type: %s", cc.TypeName)
+			c.addErrorAt(cc.Pos, "unknown type: %s", qualifiedType)
 			return
 		}
 		found := false
@@ -794,10 +805,10 @@ func (c *Checker) checkConstructorCall(cc ConstructorCall) {
 			}
 		}
 		if !found {
-			c.addErrorAt(cc.Pos, "type %s has no constructor %s", cc.TypeName, cc.Name)
+			c.addErrorAt(cc.Pos, "type %s has no constructor %s", qualifiedType, cc.Name)
 			return
 		}
-		typeName = cc.TypeName
+		typeName = qualifiedType
 		ok = true
 	} else {
 		typeName, ok = c.ctorTypes[cc.Name]

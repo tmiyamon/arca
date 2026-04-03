@@ -191,6 +191,12 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 						return nil, err
 					}
 					tags = t
+				} else if p.peek().Kind == TkStatic {
+					method, err := p.parseStaticMethodDecl(name.Lit)
+					if err != nil {
+						return nil, err
+					}
+					methods = append(methods, method)
 				} else if p.peek().Kind == TkFn {
 					method, err := p.parseMethodDecl(name.Lit, false)
 					if err != nil {
@@ -199,11 +205,20 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 					methods = append(methods, method)
 				} else if p.peek().Kind == TkPub {
 					p.advance()
-					method, err := p.parseMethodDecl(name.Lit, true)
-					if err != nil {
-						return nil, err
+					if p.peek().Kind == TkStatic {
+						method, err := p.parseStaticMethodDecl(name.Lit)
+						if err != nil {
+							return nil, err
+						}
+						method.Public = true
+						methods = append(methods, method)
+					} else {
+						method, err := p.parseMethodDecl(name.Lit, true)
+						if err != nil {
+							return nil, err
+						}
+						methods = append(methods, method)
 					}
-					methods = append(methods, method)
 				} else {
 					return nil, fmt.Errorf("%d:%d: expected tags, fun, or }, got %s", p.peek().Line, p.peek().Col, p.peek())
 				}
@@ -229,8 +244,14 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			tags = t
 			continue
 		}
-		// Method: fn or pub fn
-		if p.peek().Kind == TkFn {
+		// Method: fn, static fn, pub fn, pub static fn
+		if p.peek().Kind == TkStatic {
+			method, err := p.parseStaticMethodDecl(name.Lit)
+			if err != nil {
+				return nil, err
+			}
+			methods = append(methods, method)
+		} else if p.peek().Kind == TkFn {
 			method, err := p.parseMethodDecl(name.Lit, false)
 			if err != nil {
 				return nil, err
@@ -238,14 +259,22 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			methods = append(methods, method)
 		} else if p.peek().Kind == TkPub {
 			p.advance() // skip 'pub'
-			if p.peek().Kind != TkFn {
-				return nil, fmt.Errorf("%d:%d: expected fn after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
+			if p.peek().Kind == TkStatic {
+				method, err := p.parseStaticMethodDecl(name.Lit)
+				if err != nil {
+					return nil, err
+				}
+				method.Public = true
+				methods = append(methods, method)
+			} else if p.peek().Kind == TkFn {
+				method, err := p.parseMethodDecl(name.Lit, true)
+				if err != nil {
+					return nil, err
+				}
+				methods = append(methods, method)
+			} else {
+				return nil, fmt.Errorf("%d:%d: expected fn or static after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
 			}
-			method, err := p.parseMethodDecl(name.Lit, true)
-			if err != nil {
-				return nil, err
-			}
-			methods = append(methods, method)
 		} else {
 			// Constructor
 			ctor, err := p.parseConstructor()
@@ -460,6 +489,16 @@ func (p *Parser) parseTupleType() (Type, error) {
 	}
 	p.advance() // skip ')'
 	return TupleType{Elements: elements}, nil
+}
+
+func (p *Parser) parseStaticMethodDecl(receiverType string) (FnDecl, error) {
+	p.advance() // skip 'static'
+	fd, err := p.parseMethodDecl(receiverType, false)
+	if err != nil {
+		return fd, err
+	}
+	fd.Static = true
+	return fd, nil
 }
 
 func (p *Parser) parseMethodDecl(receiverType string, public bool) (FnDecl, error) {

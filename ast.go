@@ -263,6 +263,7 @@ type FnDecl struct {
 	Pos          Pos
 	Name         string
 	Public       bool
+	Static       bool   // static fun = associated function (no self)
 	ReceiverType string // "" for free functions, "User" for fn User.method(self)
 	Params       []FnParam
 	ReturnType   Type // nil = no return type (void)

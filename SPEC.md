@@ -327,24 +327,41 @@ Built-in constraints:
 | List | `min_length`, `max_length` |
 | All | `validate` (custom function) |
 
-### Methods (planned)
+### Methods
 
 ```
-type Age = Int{min: 0, max: 150}
+type User {
+  User(name: String, age: Int)
 
-fun Age.increment(self) -> Age {
-  Age(self.value + 1)?
+  fun greet(greeting: String) -> String {
+    "${greeting}, ${self.name}!"
+  }
 }
 
-fun Age.isAdult(self) -> Bool {
-  self.value >= 18
-}
-
-// Usage
-let age = Age(30)?
-age.increment()
-age.isAdult()
+let user = User(name: "Alice", age: 30)
+user.greet("Hello")  // "Hello, Alice!"
 ```
+
+### Associated Functions (static fun)
+
+```
+type Greeting {
+  Hello(name: String)
+  Goodbye(name: String)
+
+  static fun from(s: String) -> Greeting {
+    match s {
+      "Hello" -> Self.Hello(name: "World")
+      _ -> Self.Goodbye(name: "World")
+    }
+  }
+}
+
+let greet = Greeting.from("Hello")
+```
+
+- `static fun` = no `self`, called as `Type.method(...)`
+- `Self` refers to the enclosing type inside methods and associated functions
 
 ### Tags Block (Go struct tags)
 
