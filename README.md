@@ -25,7 +25,7 @@ fun main() {
 
 Go has a great ecosystem, fast compilation, and simple deployment. But its type system lacks algebraic data types, pattern matching, and Result types — making it hard to express domain logic safely.
 
-Arca adds ML-level type safety on top of Go. You get Go's runtime, ecosystem, and single-binary deployment with proper ADTs, exhaustive pattern matching, and type-safe error handling.
+Arca adds the expressiveness Go is missing. You get Go's runtime, ecosystem, and single-binary deployment with proper ADTs, exhaustive pattern matching, and type-safe error handling.
 
 ## Install
 
