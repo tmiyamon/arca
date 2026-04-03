@@ -779,6 +779,11 @@ func (cg *CodeGen) genStmt(stmt Stmt, indent string) {
 			cg.writeln(fmt.Sprintf("%s_ = %s", indent, cg.genExprStr(s.Value)))
 			return
 		}
+		// Constrained type constructor without ?: wrap in Result
+		if cg.isConstrainedConstructor(s.Value) {
+			cg.genConstrainedLetStmt(s.Name, s.Value, indent)
+			return
+		}
 		if s.Type != nil {
 			if ll, ok := s.Value.(ListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
 				// Empty list with type annotation: var users []User (zero value)
@@ -1054,7 +1059,7 @@ func (cg *CodeGen) genLambda(l Lambda) string {
 }
 
 func (cg *CodeGen) inferGoType(expr Expr) string {
-	switch expr.(type) {
+	switch e := expr.(type) {
 	case IntLit:
 		return "int"
 	case FloatLit:
@@ -1063,6 +1068,24 @@ func (cg *CodeGen) inferGoType(expr Expr) string {
 		return "string"
 	case BoolLit:
 		return "bool"
+	case ConstructorCall:
+		// Type alias constructor
+		if _, ok := cg.typeAliases[e.Name]; ok {
+			return e.Name
+		}
+		// Qualified constructor: Type.Ctor
+		typeName := e.TypeName
+		if typeName == "Self" && cg.currentTypeName != "" {
+			typeName = cg.currentTypeName
+		}
+		if typeName != "" {
+			return typeName
+		}
+		// Unqualified: look up in ctorTypes
+		if tn, ok := cg.ctorTypes[e.Name]; ok {
+			return tn
+		}
+		return e.Name
 	default:
 		return "interface{}"
 	}
@@ -1288,6 +1311,52 @@ func (cg *CodeGen) isTriCall(call FnCall) bool {
 		return true
 	}
 	return false
+}
+
+func (cg *CodeGen) isConstrainedConstructor(expr Expr) bool {
+	cc, ok := expr.(ConstructorCall)
+	if !ok {
+		return false
+	}
+	// Type alias with constraints: Email("test@example.com")
+	if alias, ok := cg.typeAliases[cc.Name]; ok {
+		if nt, ok := alias.Type.(NamedType); ok && len(nt.Constraints) > 0 {
+			return true
+		}
+	}
+	// ADT with constraints
+	typeName := cc.TypeName
+	if typeName == "Self" && cg.currentTypeName != "" {
+		typeName = cg.currentTypeName
+	}
+	if typeName != "" {
+		if td, ok := cg.types[typeName]; ok {
+			return cg.hasConstraints(td)
+		}
+	}
+	for _, td := range cg.types {
+		for _, ctor := range td.Constructors {
+			if ctor.Name == cc.Name {
+				return cg.hasConstraints(td)
+			}
+		}
+	}
+	return false
+}
+
+func (cg *CodeGen) genConstrainedLetStmt(name string, expr Expr, indent string) {
+	cg.usedBuiltins["result"] = true
+	cg.tmpCounter++
+	tmpVal := fmt.Sprintf("__cval%d", cg.tmpCounter)
+	tmpErr := fmt.Sprintf("__cerr%d", cg.tmpCounter)
+	goType := cg.inferGoType(expr)
+	cg.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, cg.genExprStr(expr)))
+	cg.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, snakeToCamel(name), goType))
+	cg.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
+	cg.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, snakeToCamel(name), goType, tmpErr))
+	cg.writeln(fmt.Sprintf("%s} else {", indent))
+	cg.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, snakeToCamel(name), goType, tmpVal))
+	cg.writeln(fmt.Sprintf("%s}", indent))
 }
 
 func (cg *CodeGen) genTryLetStmt(name string, expr Expr, indent string) {

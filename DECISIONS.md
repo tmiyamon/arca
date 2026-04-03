@@ -4,6 +4,19 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: Constrained type constructor returns Result without ?
+
+**Context:** `let email = Email("a@b.c")` with a constrained type generated broken Go code — `NewEmail()` returns `(Email, error)` but codegen assigned it to a single variable.
+
+**Decision:** Constrained type constructors without `?` automatically wrap the result in `Result[T, error]`.
+
+- `Email("a@b.c")?` → propagates error, binds `Email` on success
+- `Email("a@b.c")` → returns `Result[Email, error]`, handle with `match`
+
+**Codegen:** Generates temp vars for the `(T, error)` return, then wraps in `Ok_` / `Err_`. Also improved `inferGoType` to resolve `ConstructorCall` types (was falling back to `interface{}`).
+
+---
+
 ## 2026-04-04: Builtin println/print
 
 **Context:** `import go "fmt"` + `fmt.Println(...)` was required for Hello World. First impression of the language forces Go FFI knowledge.

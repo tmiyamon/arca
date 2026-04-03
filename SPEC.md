@@ -314,8 +314,15 @@ type Email = String{pattern: ".+@.+", max_length: 255}
 // Custom validation
 type EvenInt = Int{validate: isEven}
 
-// Constructor returns Result (validation may fail)
+// Constructor with ? — propagates error
 let user = User(id: 1, name: "Alice", email: "a@b.com")?
+
+// Constructor without ? — returns Result for pattern matching
+let result = Email("test@example.com")
+match result {
+  Ok(email) -> println("valid: ${email}")
+  Error(err) -> println("invalid: ${err}")
+}
 
 // Constraint compatibility: stricter type passable where wider type expected
 type Age = Int{min: 0, max: 150}
