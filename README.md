@@ -1,6 +1,6 @@
 # Arca
 
-A statically typed language with ML-level type safety that compiles to Go.
+An expressive language that compiles to Go.
 
 ```
 type Greeting {
