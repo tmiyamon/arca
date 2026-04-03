@@ -4,6 +4,21 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: Constrained field auto-construction (future)
+
+**Context:** A type with constrained fields like `type User(email: Email)` requires manual construction of `Email` before `User`. This leads to boilerplate factory functions (`static fun from(...)`).
+
+**Idea:** `User(email: "b@b.com")` could automatically construct `Email` from `String`, chaining validation. If any constrained field fails, the whole constructor returns `Result[User, error]`.
+
+**Open questions:**
+- Should pre-validated values (`let e = Email(...)?; User(email: e)`) skip re-validation?
+- Multi-level newtypes: `type CorporateEmail = Email{pattern: ".+@corp\\.com"}` — how deep does auto-construction go?
+- Type composition (`A & B`, intersection types) may be needed to express combined constraints cleanly.
+
+**Status:** Not implemented. Requires deeper type system design. Current approach: manual factory functions with `static fun`.
+
+---
+
 ## 2026-04-04: Variable shadowing in codegen
 
 **Context:** `let email = Email(email)?` inside a function with parameter `email` generated invalid Go — `email := __try_val1` re-declared the parameter in the same scope.
