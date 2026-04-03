@@ -1,0 +1,16 @@
+type Greeting {
+  Hello(name: String)
+  Goodbye(name: String)
+}
+
+fun message(g: Greeting) -> String {
+  match g {
+    Hello(name) -> "Hello, ${name}!"
+    Goodbye(name) -> "Goodbye, ${name}!"
+  }
+}
+
+fun main() {
+  let greet = Greeting.Hello(name: "World")
+  println(message(greet))
+}
