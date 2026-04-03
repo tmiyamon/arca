@@ -7,8 +7,8 @@ if exists("b:current_syntax")
 endif
 
 " Keywords
-syntax keyword arcaKeyword fun type let match import pub assert defer for in
-syntax keyword arcaKeyword go
+syntax keyword arcaKeyword fun type let match import pub assert defer for in static
+syntax keyword arcaKeyword go tags
 
 " Built-in types
 syntax keyword arcaType Int Float String Bool List Option Result Unit
@@ -19,8 +19,8 @@ syntax keyword arcaConstant True False None Unit
 " Built-in constructors
 syntax keyword arcaBuiltin Ok Error Some
 
-" self
-syntax keyword arcaSelf self
+" self / Self
+syntax keyword arcaSelf self Self
 
 " Operators
 syntax match arcaOperator "|>"
