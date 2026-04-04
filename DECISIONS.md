@@ -4,6 +4,41 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-04: IR (intermediate representation) introduction
+
+**Context:** Current architecture is AST → Go codegen directly. Every new feature (constrained types, shadowing, Self, qualified constructors, etc.) requires handling in multiple codegen paths (let statements, expressions, match arms, function returns). Features leak across concerns, causing missed cases and bugs.
+
+**Problem:** Bottom-up feature addition without structural guarantees. Each codegen path must independently check "is this a constrained constructor?", "is this shadowed?", "is this Self?". No mechanism to ensure all cases are covered.
+
+**Decision: Introduce IR between AST and Go output.**
+
+```
+Source → AST → IR (normalized) → Go output
+```
+
+**IR responsibilities (each as a separate pass):**
+1. **Name resolution** — resolve `Self` to concrete type, resolve module-qualified names, variable shadowing (rename to unique Go-safe names)
+2. **Constructor resolution** — qualified constructors (`Greeting.Hello`) resolved to concrete Go struct names, constrained constructors wrapped in Result
+3. **Error propagation** — `?` operator expanded to try/error pattern
+4. **Type resolution** — all expressions annotated with resolved types (needed for codegen type args, and future LSP)
+
+**Go output becomes simple:** Walk IR and emit Go. No special cases, no feature-specific branching. Each IR node directly maps to a Go construct.
+
+**Benefits:**
+- Missing cases become structurally visible (if IR doesn't handle it, it fails clearly)
+- LSP gets type information for free from the IR
+- New features are added as IR passes, not scattered across codegen
+- Testing: each pass can be tested independently
+
+**Why now:** Codebase is still small (~1500 lines of codegen). Delaying increases migration cost as more features are added.
+
+**IR node design (initial):**
+- Should be close to Go's structure (statements, expressions, declarations) but with Arca's semantics resolved
+- Carries type information on every expression node
+- All names are Go-safe (no further renaming needed in output)
+
+---
+
 ## 2026-04-04: Constrained field auto-construction (future)
 
 **Context:** A type with constrained fields like `type User(email: Email)` requires manual construction of `Email` before `User`. This leads to boilerplate factory functions (`static fun from(...)`).
