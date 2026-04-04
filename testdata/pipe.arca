@@ -1,0 +1,12 @@
+import go "fmt"
+
+fun add(x: Int, y: Int) -> Int { x + y }
+fun double(x: Int) -> Int { x * 2 }
+
+fun main() {
+  let result = [1, 2, 3]
+    |> map((x: Int) -> Int => x * 2)
+    |> filter((x: Int) -> Bool => x > 2)
+    |> fold(0, (acc: Int, x: Int) -> Int => acc + x)
+  fmt.Println(result)
+}

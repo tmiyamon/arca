@@ -1,0 +1,20 @@
+import go "fmt"
+
+type Animal {
+  Dog(name: String)
+  Cat(name: String)
+
+  fun speak() -> String {
+    match self {
+      Dog(name) -> "${name} says woof"
+      Cat(name) -> "${name} says meow"
+    }
+  }
+}
+
+fun main() {
+  let dog = Animal.Dog(name: "Rex")
+  let cat = Animal.Cat(name: "Luna")
+  fmt.Println(dog.speak())
+  fmt.Println(cat.speak())
+}

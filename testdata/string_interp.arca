@@ -1,0 +1,7 @@
+import go "fmt"
+
+fun main() {
+  let name = "World"
+  let age = 30
+  fmt.Println("Hello ${name}, you are ${age}!")
+}

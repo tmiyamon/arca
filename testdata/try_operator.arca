@@ -1,0 +1,14 @@
+import go "strconv"
+
+fun parseAndDouble(s: String) -> Result[Int, error] {
+  let n = strconv.Atoi(s)?
+  Ok(n * 2)
+}
+
+fun main() {
+  let result = parseAndDouble("21")
+  match result {
+    Ok(n) -> println(n)
+    Error(err) -> println(err)
+  }
+}

@@ -1,0 +1,15 @@
+import go "fmt"
+
+type Greeting {
+  Hello(name: String)
+  Goodbye(name: String)
+
+  static fun create(s: String) -> Greeting {
+    Self.Hello(name: s)
+  }
+}
+
+fun main() {
+  let g = Greeting.create("World")
+  fmt.Println(g)
+}

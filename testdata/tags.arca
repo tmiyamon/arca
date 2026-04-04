@@ -1,0 +1,6 @@
+type User(id: Int, userName: String) {
+  tags {
+    json
+    db(snake)
+  }
+}

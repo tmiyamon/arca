@@ -1,0 +1,9 @@
+import go "fmt"
+
+fun main() {
+  let double = (x: Int) -> Int => x * 2
+  let nums = [10, 20, 30]
+  let doubled = map(nums, double)
+  fmt.Println(doubled)
+  fmt.Println(map([1, 2, 3], (x: Int) -> Int => x + 1))
+}

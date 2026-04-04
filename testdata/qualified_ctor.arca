@@ -1,0 +1,19 @@
+import go "fmt"
+
+type Color {
+  Red
+  Green
+  Blue
+}
+
+type Shape {
+  Circle(radius: Float)
+  Square(side: Float)
+}
+
+fun main() {
+  let c = Color.Red
+  let s = Shape.Circle(radius: 3.14)
+  fmt.Println(c)
+  fmt.Println(s)
+}

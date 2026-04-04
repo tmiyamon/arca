@@ -1,0 +1,6 @@
+fun main() {
+  let x = "hello"
+  println(x)
+  let x = 42
+  println(x)
+}

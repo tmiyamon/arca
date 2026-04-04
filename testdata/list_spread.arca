@@ -1,0 +1,7 @@
+import go "fmt"
+
+fun main() {
+  let a = [1, 2, 3]
+  let b = [0, ..a]
+  fmt.Println(b)
+}
