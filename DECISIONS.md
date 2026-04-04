@@ -56,6 +56,36 @@ Source → AST → IR (normalized) → Go output
 
 ---
 
+## 2026-04-04: Move type checking to IR
+
+**Context:** Checker runs on AST before lowering. This means type checking and IR type resolution are separate systems with duplicated logic. Adding Go FFI type checking to the checker requires threading TypeResolver through it — but the lowerer already has TypeResolver.
+
+**Problem:** The current `parse → check → lower → emit` pipeline means:
+- Checker infers types on AST independently from IR type resolution
+- Go FFI type info is only available in the lowerer
+- Adding Phase 3/4 (method/field resolution) to the checker duplicates what the lowerer already does
+- LSP hover reads from checker symbols, but IR has richer type info
+
+**Decision: Move validation from AST checker to IR-based validation.**
+
+New pipeline: `parse → lower (error-tolerant) → validate IR → emit`
+
+The IR already provides:
+- Structurally exhaustive match (IRResultMatch requires both arms)
+- Resolved types on every expression
+- TypeResolver for Go FFI
+- Resolved names (shadowing, Self, constructors)
+
+**Steps:**
+1. Make lowerer error-tolerant (don't panic on invalid input)
+2. Build IR validator that walks IR nodes and checks types
+3. Migrate checker logic to IR validator
+4. Remove old AST checker
+
+**Why now:** IR is mature enough. Doing this before Phase 3/4 avoids building Go FFI type checking twice.
+
+---
+
 ## 2026-04-04: LSP server implementation
 
 **Context:** Editing Arca without IDE support is painful. Errors only appear at compile time. No hover, no go-to-definition, no completion.

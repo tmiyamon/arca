@@ -146,17 +146,27 @@ func collectDiagnostics(source string) []protocol.Diagnostic {
 		return diagnostics
 	}
 
-	// Type check
-	checker := NewChecker()
-	if errs := checker.Check(prog); len(errs) > 0 {
-		for _, e := range errs {
-			diagnostics = append(diagnostics, protocol.Diagnostic{
-				Range:    posToRange(e.Pos),
-				Severity: &severity,
-				Source:   strPtr(lspName),
-				Message:  e.Message,
-			})
-		}
+	// Lower → validate
+	lowerer := NewLowerer(prog, "", nil)
+	irProg := lowerer.Lower(prog, "main", false)
+
+	for _, e := range lowerer.Errors() {
+		diagnostics = append(diagnostics, protocol.Diagnostic{
+			Range:    posToRange(e.Pos),
+			Severity: &severity,
+			Source:   strPtr(lspName),
+			Message:  e.Message,
+		})
+	}
+
+	validator := NewIRValidation(lowerer)
+	for _, e := range validator.Validate(irProg) {
+		diagnostics = append(diagnostics, protocol.Diagnostic{
+			Range:    posToRange(e.Pos),
+			Severity: &severity,
+			Source:   strPtr(lspName),
+			Message:  e.Message,
+		})
 	}
 
 	return diagnostics
@@ -188,7 +198,7 @@ func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover,
 }
 
 func getHoverInfo(source string, line, col int) string {
-	// Parse and check to get type info
+	// Parse and lower to get type info
 	lexer := NewLexer(source)
 	tokens, err := lexer.Tokenize()
 	if err != nil {
@@ -201,8 +211,8 @@ func getHoverInfo(source string, line, col int) string {
 		return ""
 	}
 
-	checker := NewChecker()
-	checker.Check(prog)
+	lowerer := NewLowerer(prog, "", nil)
+	lowerer.Lower(prog, "main", false)
 
 	// Find the token at the given position
 	word := getWordAt(source, line, col)
@@ -211,17 +221,19 @@ func getHoverInfo(source string, line, col int) string {
 	}
 
 	// Look up local variables and parameters
-	if sym := checker.LookupSymbol(word); sym != nil {
+	if sym := lowerer.LookupSymbol(word); sym != nil {
 		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeName(sym.Type))
 	}
 
-	// Look up in checker's scope: functions
-	if fn, ok := checker.functions[word]; ok {
+	// Look up functions
+	functions := lowerer.Functions()
+	if fn, ok := functions[word]; ok {
 		return formatFnHover(fn)
 	}
 
 	// Look up methods (including static fun) in all types
-	for _, td := range checker.types {
+	types := lowerer.Types()
+	for _, td := range types {
 		for _, m := range td.Methods {
 			if m.Name == word {
 				return formatMethodHover(td.Name, m)
@@ -230,12 +242,13 @@ func getHoverInfo(source string, line, col int) string {
 	}
 
 	// Look up types
-	if td, ok := checker.types[word]; ok {
+	if td, ok := types[word]; ok {
 		return formatTypeHover(td)
 	}
 
 	// Look up type aliases
-	if ta, ok := checker.typeAliases[word]; ok {
+	typeAliases := lowerer.TypeAliases()
+	if ta, ok := typeAliases[word]; ok {
 		return formatTypeAliasHover(ta)
 	}
 

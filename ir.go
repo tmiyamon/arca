@@ -130,6 +130,18 @@ func (IRStructDecl) irTypeDeclNode()    {}
 func (IRSumTypeDecl) irTypeDeclNode()   {}
 func (IRTypeAliasDecl) irTypeDeclNode() {}
 
+// --- Source Info ---
+
+// SourceInfo carries original Arca source information for error messages and validation.
+// Not part of the resolved IR — purely for display and checking.
+type SourceInfo struct {
+	Pos        Pos
+	Name       string // Arca name (function name, constructor name, field name, variable name)
+	TypeName   string // owning type name (for constructors: "Greeting" in Greeting.Hello)
+	Type       Type   // Arca AST type (for params, idents)
+	ReturnType Type   // Arca return type (for functions)
+}
+
 // --- Function Declarations ---
 
 type IRFuncDecl struct {
@@ -138,6 +150,7 @@ type IRFuncDecl struct {
 	Params     []IRParamDecl
 	ReturnType IRType // nil for void
 	Body       IRExpr
+	Source     SourceInfo
 }
 
 type IRReceiver struct {
@@ -148,6 +161,7 @@ type IRReceiver struct {
 type IRParamDecl struct {
 	GoName string
 	Type   IRType
+	Source SourceInfo
 }
 
 // --- Expressions ---
@@ -183,6 +197,7 @@ type IRBoolLit struct {
 type IRIdent struct {
 	GoName string // "email_2", "fmt.Println", etc.
 	Type   IRType
+	Source SourceInfo
 }
 
 // String interpolation — resolved to fmt.Sprintf
@@ -194,9 +209,10 @@ type IRStringInterp struct {
 
 // Function call
 type IRFnCall struct {
-	Func string   // "fmt.Println", "message", "userFrom", etc.
-	Args []IRExpr
-	Type IRType
+	Func   string   // "fmt.Println", "message", "userFrom", etc.
+	Args   []IRExpr
+	Type   IRType
+	Source SourceInfo
 }
 
 // Method call: expr.Method(args)
@@ -228,11 +244,13 @@ type IRConstructorCall struct {
 	TypeArgs      string // "[int, string]" for generics, empty otherwise
 	ReturnsResult bool   // true if constrained (NewType returns (T, error))
 	Type          IRType
+	Source        SourceInfo // Name = ctor name, TypeName = type name
 }
 
 type IRFieldValue struct {
 	GoName string // "Name" (capitalized), empty for positional
 	Value  IRExpr
+	Source SourceInfo // Name = original Arca field name
 }
 
 // Builtin constructors

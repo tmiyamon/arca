@@ -21,6 +21,7 @@ type Lowerer struct {
 	// Per-function state
 	declaredVars    map[string]int
 	varNames        map[string]string
+	varArcaTypes    map[string]Type // arca name → AST type for validation
 	currentRetType  Type
 	currentReceiver string
 	currentTypeName string
@@ -30,6 +31,7 @@ type Lowerer struct {
 	builtins   map[string]bool
 	tmpCounter int
 	errors     []LowerError
+	symbols    []SymbolInfo // all symbols with positions, for LSP
 }
 
 type LowerError struct {
@@ -40,6 +42,29 @@ type LowerError struct {
 func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
 	l.errors = append(l.errors, LowerError{Pos: pos, Message: fmt.Sprintf(format, args...)})
 }
+
+func (l *Lowerer) recordSymbol(name string, t Type, kind string) {
+	l.symbols = append(l.symbols, SymbolInfo{Name: name, Type: t, Kind: kind})
+}
+
+// LookupSymbol finds a symbol by name (last defined wins, for shadowing).
+func (l *Lowerer) LookupSymbol(name string) *SymbolInfo {
+	for i := len(l.symbols) - 1; i >= 0; i-- {
+		if l.symbols[i].Name == name {
+			return &l.symbols[i]
+		}
+	}
+	return nil
+}
+
+// Types returns the collected type declarations.
+func (l *Lowerer) Types() map[string]TypeDecl { return l.types }
+
+// TypeAliases returns the collected type alias declarations.
+func (l *Lowerer) TypeAliases() map[string]TypeAliasDecl { return l.typeAliases }
+
+// Functions returns the collected function declarations.
+func (l *Lowerer) Functions() map[string]FnDecl { return l.functions }
 
 func (l *Lowerer) Errors() []LowerError {
 	return l.errors
@@ -401,12 +426,14 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	l.currentRetType = nil
 	l.declaredVars = nil
 	l.varNames = nil
+	l.varArcaTypes = nil
 
 	return IRFuncDecl{
 		GoName:     name,
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -444,6 +471,7 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	l.currentRetType = nil
 	l.declaredVars = nil
 	l.varNames = nil
+	l.varArcaTypes = nil
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -454,6 +482,7 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}}
 }
 
@@ -538,6 +567,7 @@ func (l *Lowerer) lowerSumTypeMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 			Params:     params,
 			ReturnType: retType,
 			Body:       finalBody,
+			Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 		})
 	}
 	return funcs
@@ -584,12 +614,14 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 	l.currentRetType = nil
 	l.declaredVars = nil
 	l.varNames = nil
+	l.varArcaTypes = nil
 
 	return IRFuncDecl{
 		GoName:     funcName,
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -599,6 +631,7 @@ func (l *Lowerer) lowerParams(params []FnParam) []IRParamDecl {
 		result[i] = IRParamDecl{
 			GoName: snakeToCamel(p.Name),
 			Type:   l.lowerType(p.Type),
+			Source: SourceInfo{Type: p.Type},
 		}
 	}
 	return result
@@ -627,13 +660,22 @@ func (l *Lowerer) declareVar(name string) string {
 	return goName
 }
 
+func (l *Lowerer) setVarArcaType(name string, t Type) {
+	if l.varArcaTypes != nil {
+		l.varArcaTypes[name] = t
+	}
+}
+
 func (l *Lowerer) initFnScope(params []FnParam) {
 	l.declaredVars = make(map[string]int)
 	l.varNames = make(map[string]string)
+	l.varArcaTypes = make(map[string]Type)
 	for _, p := range params {
 		goName := snakeToCamel(p.Name)
 		l.declaredVars[goName] = 1
 		l.varNames[goName] = goName
+		l.varArcaTypes[p.Name] = p.Type
+		l.recordSymbol(p.Name, p.Type, SymParameter)
 	}
 }
 
@@ -873,7 +915,11 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	}
 	// Variable resolution with shadowing
 	goName := l.resolveVar(e.Name)
-	return IRIdent{GoName: goName, Type: IRInterfaceType{}}
+	var arcaType Type
+	if l.varArcaTypes != nil {
+		arcaType = l.varArcaTypes[e.Name]
+	}
+	return IRIdent{GoName: goName, Type: IRInterfaceType{}, Source: SourceInfo{Type: arcaType}}
 }
 
 func (l *Lowerer) lowerStringInterp(si StringInterp) IRExpr {
@@ -925,7 +971,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 						return result
 					}
 				} else {
-					return IRFnCall{Func: def.GoFunc, Args: args, Type: IRInterfaceType{}}
+					return IRFnCall{Func: def.GoFunc, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
 				}
 			}
 		}
@@ -939,7 +985,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
 				retType := l.resolveGoCall(goCallName, args, e.Pos)
-				return IRFnCall{Func: goCallName, Args: args, Type: retType}
+				return IRFnCall{Func: goCallName, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -951,12 +997,13 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			args := l.lowerCallArgs(e)
 			if l.goModule != "" {
 				return IRFnCall{
-					Func: ident.Name + "." + fnName,
-					Args: args,
-					Type: IRInterfaceType{},
+					Func:   ident.Name + "." + fnName,
+					Args:   args,
+					Type:   IRInterfaceType{},
+					Source: SourceInfo{Pos: e.Pos, Name: fa.Field},
 				}
 			}
-			return IRFnCall{Func: fnName, Args: args, Type: IRInterfaceType{}}
+			return IRFnCall{Func: fnName, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos, Name: fa.Field}}
 		}
 		// Regular method call: obj.method(args)
 		methodName := l.resolveMethodName(fa.Field)
@@ -972,11 +1019,15 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 	args := l.lowerCallArgs(e)
 	fnExpr := l.lowerExpr(e.Fn)
 	if ident, ok := fnExpr.(IRIdent); ok {
+		arcaName := ""
+		if id, ok := e.Fn.(Ident); ok {
+			arcaName = id.Name
+		}
 		retType := l.resolveGoCall(ident.GoName, args, e.Pos)
-		return IRFnCall{Func: ident.GoName, Args: args, Type: retType}
+		return IRFnCall{Func: ident.GoName, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
-	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}}
+	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
 }
 
 // resolveGoCall validates a Go FFI function call and returns the resolved return type.
@@ -1254,6 +1305,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 				Fields:        fields,
 				ReturnsResult: true,
 				Type:          IRNamedType{GoName: goName},
+				Source:        SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: typeName},
 			}
 		}
 
@@ -1271,6 +1323,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			Fields:   fields,
 			TypeArgs: typeArgs,
 			Type:     IRNamedType{GoName: typeName},
+			Source:   SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: typeName},
 		}
 	}
 
@@ -1284,6 +1337,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 				Fields:        fields,
 				ReturnsResult: true,
 				Type:          IRNamedType{GoName: cc.Name},
+				Source:        SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: cc.Name},
 			}
 		}
 		// Unconstrained alias: simple type conversion
@@ -1291,6 +1345,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			GoName: cc.Name,
 			Fields: fields,
 			Type:   IRNamedType{GoName: cc.Name},
+			Source: SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: cc.Name},
 		}
 	}
 
@@ -1299,6 +1354,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 		GoName: cc.Name,
 		Fields: l.lowerFieldValues(cc.Fields),
 		Type:   IRInterfaceType{},
+		Source: SourceInfo{Pos: cc.Pos, Name: cc.Name},
 	}
 }
 
@@ -1312,6 +1368,7 @@ func (l *Lowerer) lowerFieldValues(fields []FieldValue) []IRFieldValue {
 		result[i] = IRFieldValue{
 			GoName: goName,
 			Value:  l.lowerExpr(f.Value),
+			Source: SourceInfo{Name: f.Name},
 		}
 	}
 	return result
@@ -1461,6 +1518,10 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 			goVarName := "_"
 			if s.Name != "_" {
 				goVarName = l.declareVar(s.Name)
+				if t := l.inferASTType(call.Args[0]); t != nil {
+					l.recordSymbol(s.Name, t, SymVariable)
+					l.setVarArcaType(s.Name, t)
+				}
 			}
 			var retType IRType
 			if l.currentRetType != nil {
@@ -1489,6 +1550,10 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 		goType := l.inferGoType(s.Value)
 		loweredExpr := l.lowerExpr(s.Value)
 		goVarName := l.declareVar(s.Name)
+		if t := l.inferASTType(s.Value); t != nil {
+			l.recordSymbol(s.Name, t, SymVariable)
+			l.setVarArcaType(s.Name, t)
+		}
 		return []IRStmt{IRConstrainedLetStmt{
 			GoName:   goVarName,
 			CallExpr: loweredExpr,
@@ -1502,12 +1567,60 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 		loweredType = l.lowerType(s.Type)
 	}
 	goVarName := l.declareVar(s.Name)
+	if s.Type != nil {
+		l.recordSymbol(s.Name, s.Type, SymVariable)
+		l.setVarArcaType(s.Name, s.Type)
+	} else if t := l.inferASTType(s.Value); t != nil {
+		l.recordSymbol(s.Name, t, SymVariable)
+		l.setVarArcaType(s.Name, t)
+	}
 
 	return []IRStmt{IRLetStmt{
 		GoName: goVarName,
 		Value:  loweredValue,
 		Type:   loweredType,
 	}}
+}
+
+// inferASTType infers the Arca AST type of an expression (for symbol recording).
+func (l *Lowerer) inferASTType(expr Expr) Type {
+	switch e := expr.(type) {
+	case IntLit:
+		return NamedType{Name: "Int"}
+	case FloatLit:
+		return NamedType{Name: "Float"}
+	case StringLit:
+		return NamedType{Name: "String"}
+	case StringInterp:
+		return NamedType{Name: "String"}
+	case BoolLit:
+		return NamedType{Name: "Bool"}
+	case ConstructorCall:
+		if e.TypeName != "" {
+			return NamedType{Name: e.TypeName}
+		}
+		if typeName, ok := l.ctorTypes[e.Name]; ok {
+			return NamedType{Name: typeName}
+		}
+		if _, ok := l.typeAliases[e.Name]; ok {
+			return NamedType{Name: e.Name}
+		}
+	case FnCall:
+		if ident, ok := e.Fn.(Ident); ok {
+			if fn, ok := l.functions[ident.Name]; ok {
+				return fn.ReturnType
+			}
+		}
+	case ListLit:
+		if len(e.Elements) > 0 {
+			elemType := l.inferASTType(e.Elements[0])
+			if elemType != nil {
+				return NamedType{Name: "List", Params: []Type{elemType}}
+			}
+		}
+		return NamedType{Name: "List"}
+	}
+	return nil
 }
 
 func (l *Lowerer) lowerLetDestructure(pat Pattern, value Expr) []IRStmt {
@@ -1861,13 +1974,11 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 	var wildcard *IRSumTypeWildcard
 
 	for _, arm := range me.Arms {
-		body := l.lowerExpr(arm.Body)
 		switch pat := arm.Pattern.(type) {
 		case ConstructorPattern:
 			typeName := l.findTypeName(pat.Name)
 			variantName := typeName + pat.Name
 
-			usedVars := collectUsedIdents(arm.Body)
 			var ctorFields []Field
 			if td, ok := l.types[typeName]; ok {
 				for _, c := range td.Constructors {
@@ -1877,6 +1988,16 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 					}
 				}
 			}
+
+			// Register pattern binding types before lowering body
+			for i, fp := range pat.Fields {
+				if i < len(ctorFields) {
+					l.setVarArcaType(fp.Binding, ctorFields[i].Type)
+				}
+			}
+
+			body := l.lowerExpr(arm.Body)
+			usedVars := collectUsedIdents(arm.Body)
 
 			var bindings []IRBinding
 			for i, fp := range pat.Fields {
@@ -1898,8 +2019,10 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 				Body:     body,
 			})
 		case WildcardPattern:
+			body := l.lowerExpr(arm.Body)
 			wildcard = &IRSumTypeWildcard{Body: body}
 		case BindPattern:
+			body := l.lowerExpr(arm.Body)
 			wildcard = &IRSumTypeWildcard{
 				Binding: &IRBinding{GoName: snakeToCamel(pat.Name)},
 				Body:    body,

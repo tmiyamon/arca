@@ -412,7 +412,7 @@ func transpile(inputPath string) (*transpileResult, error) {
 	sameDirFiles := map[string]*Program{} // same-directory .arca files
 	collectAllModules(dir, mainProg, subModules, sameDirFiles, map[string]bool{inputPath: true})
 
-	// Flat merge for checker
+	// Flat merge for validation
 	loaded := map[string]bool{inputPath: true}
 	mergedProg, err := resolveImports(inputPath, mainProg, loaded)
 	if err != nil {
@@ -421,17 +421,6 @@ func transpile(inputPath string) (*transpileResult, error) {
 	timing.parse = time.Since(t0)
 
 	t1 := time.Now()
-	checker := NewChecker()
-	if errs := checker.Check(mergedProg); len(errs) > 0 {
-		var msgs []string
-		for _, e := range errs {
-			msgs = append(msgs, formatError(inputPath, e.Pos, e.Message))
-		}
-		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
-	}
-	timing.check = time.Since(t1)
-
-	t2 := time.Now()
 	goModule := "arcabuild"
 	emitter := &Emitter{}
 	resolver := NewGoTypeResolver()
@@ -457,15 +446,25 @@ func transpile(inputPath string) (*transpileResult, error) {
 	mainLowerer := NewLowerer(mergedProg, goModule, resolver)
 	irProg := mainLowerer.Lower(mainProg, "main", false)
 
-	// Check for lowering errors (Go FFI type checking)
-	if errs := mainLowerer.Errors(); len(errs) > 0 {
-		var msgs []string
-		for _, e := range errs {
-			msgs = append(msgs, formatError(inputPath, e.Pos, e.Message))
-		}
-		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
+	// Collect lowering errors + validation errors
+	var allErrors []string
+	for _, e := range mainLowerer.Errors() {
+		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message))
 	}
 
+	validator := NewIRValidation(mainLowerer)
+	if validErrs := validator.Validate(irProg); len(validErrs) > 0 {
+		for _, e := range validErrs {
+			allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message))
+		}
+	}
+
+	if len(allErrors) > 0 {
+		return nil, fmt.Errorf("%s", strings.Join(allErrors, "\n"))
+	}
+	timing.check = time.Since(t1)
+
+	t2 := time.Now()
 	// Add sub-module imports
 	for modName := range subModules {
 		irProg.Imports = append(irProg.Imports, IRImport{Path: goModule + "/" + modName})
