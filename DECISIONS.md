@@ -56,6 +56,26 @@ Source → AST → IR (normalized) → Go output
 
 ---
 
+## 2026-04-04: LSP server implementation
+
+**Context:** Editing Arca without IDE support is painful. Errors only appear at compile time. No hover, no go-to-definition, no completion.
+
+**Decision: Implement LSP server using `github.com/tliron/glsp`.**
+
+- Command: `arca lsp` (stdio transport)
+- Works with VS Code and Neovim out of the box
+
+**Phases:**
+- Phase A: Diagnostics — parse/type errors shown in editor on save/change
+- Phase B: Hover — show type info at cursor position
+- Phase C: Go FFI type tracking (Phase 3/4) — method/field resolution for Go types, integrated into hover and diagnostics
+
+**Why glsp:** Go library that handles JSON-RPC and LSP protocol dispatch. Avoids writing ~500 lines of protocol boilerplate. LSP spec is stable so dependency risk is low.
+
+**Architecture:** LSP server reuses existing pipeline (parse → check → lower). IR carries type info for hover. TypeResolver provides Go FFI type info.
+
+---
+
 ## 2026-04-04: Go type integration via go/types
 
 **Context:** Arca currently has no knowledge of Go's type system. Go FFI calls (`fmt.Println`, `http.HandleFunc`, etc.) are passed through without type checking. Errors are only caught when Go compiles the generated output, producing Go error messages that point to generated code — confusing for Arca users.

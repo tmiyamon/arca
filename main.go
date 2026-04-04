@@ -85,6 +85,8 @@ func main() {
 			name = os.Args[2]
 		}
 		os.Exit(initCmd(name))
+	case "lsp":
+		os.Exit(lspCmd())
 	case "health":
 		os.Exit(healthCmd())
 	default:
