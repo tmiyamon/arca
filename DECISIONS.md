@@ -4,6 +4,18 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
+## 2026-04-05: Go package availability detection (open problem)
+
+**Context:** `examples/todo.arca` imports `github.com/labstack/echo/v5`. The package was not `go get`-ed for the current project, but existed in the Go module cache (`~/go/pkg/mod/`) from another project. `GoTypeResolver` (via `go/packages.Load`) resolved the package from cache and returned type information successfully — but `go build` failed because the package was not in `go.mod`.
+
+**Problem:** TypeResolver succeeding does not mean the build will succeed. The module cache makes it impossible to distinguish "package is properly in go.mod" from "package happens to be cached".
+
+**Attempted fix:** Added `PackageAvailable` check to detect whether a package is in `go.mod`. Reverted because the cache made the detection unreliable.
+
+**Status:** Open. Needs a different approach — possibly checking `go.mod` directly, or running `go get` as part of the transpile pipeline.
+
+---
+
 ## 2026-04-04: IR (intermediate representation) introduction
 
 **Context:** Current architecture is AST → Go codegen directly. Every new feature (constrained types, shadowing, Self, qualified constructors, etc.) requires handling in multiple codegen paths (let statements, expressions, match arms, function returns). Features leak across concerns, causing missed cases and bugs.
@@ -245,18 +257,26 @@ This is the idiomatic Go pattern for interface + variant structs.
 
 **Context:** Go FFI calls returning `error` or `(T, error)` need to be wrapped in `Result[Unit, error]` or `Result[T, error]`. Current approach uses ad-hoc detection (`isErrorOnlyCall`, `isConstrainedConstructor`) in `lowerLetStmt` — prone to missed cases (e.g. method calls on let-bound variables).
 
-**Decision: Move Result wrapping to IR FnCall level, not let statement level.**
+**Decision: Treat Go multi-return as tuple, then mechanically convert to Arca type.**
 
-Go FFI return patterns map mechanically:
-- `error` → receive as `err := f()` → wrap to `Result[Unit, error]`
-- `(T, error)` → receive as `val, err := f()` → wrap to `Result[T, error]`
-- `T` → receive as `val := f()` → pass through as `T`
+Go returns are conceptually received as tuples, then converted based on shape:
+```
+error      → (error)      → Result[Unit, error]
+(T, error) → (T, error)   → Result[T, error]
+(T, bool)  → (T, bool)    → Option[T]
+T          → (T)          → T
+(T1, T2)   → (T1, T2)     → (T1, T2)  // Tuple pass-through
+```
 
-The wrapping should happen when the IR FnCall/MethodCall is created (in lower.go), not when the let statement assigns it. This makes it structural — every Go FFI call that returns error gets wrapped, regardless of context (let, expression, match subject, etc.).
+This conversion happens in `goFuncReturnType` — a single function that maps Go return signatures to Arca IR types. No ad-hoc detection (`isErrorOnlyCall`) needed; the Go function's type signature deterministically decides the Arca type.
+
+**Implementation: Move Result wrapping to IR FnCall level, not let statement level.**
+
+The wrapping should happen when the IR FnCall/MethodCall is created (in lower.go), not when the let statement assigns it. `goFuncReturnType` returns `IRResultType` for error-returning Go calls, `IROptionType` for bool-returning calls. The IR expression carries the correct Arca type from creation. Consumption sites (let, match, expr stmt) just use the type — no special-case detection.
 
 **Design principle: prefer top-down structural design over bottom-up special-case detection.** When a behavior should apply to all instances of a pattern (e.g. "all Go FFI calls returning error"), encode it at the source (FnCall creation) not at consumption sites (let stmt, match, expr stmt). This prevents missed cases as new consumption sites are added.
 
-**Status:** Not yet implemented.
+**Status:** Implemented. `IRConstrainedLetStmt`, `isErrorOnlyCall`, `isConstrainedConstructor` eliminated. `GoMultiReturn` flag on IR call nodes + `goFuncReturnType` returns `goReturnInfo` with full mapping.
 
 ---
 

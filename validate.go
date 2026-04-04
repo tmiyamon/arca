@@ -289,8 +289,6 @@ func (v *IRValidation) validateStmt(stmt IRStmt) {
 	switch s := stmt.(type) {
 	case IRLetStmt:
 		v.validateExpr(s.Value)
-	case IRConstrainedLetStmt:
-		v.validateExpr(s.CallExpr)
 	case IRTryLetStmt:
 		v.validateExpr(s.CallExpr)
 	case IRExprStmt:

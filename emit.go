@@ -351,7 +351,7 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 }
 
 func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
-	if cc.ReturnsResult {
+	if cc.GoMultiReturn {
 		// Constrained constructor: NewType(args...)
 		args := make([]string, len(cc.Fields))
 		for i, f := range cc.Fields {
@@ -506,8 +506,6 @@ func (em *Emitter) emitStmt(s IRStmt, indent string) {
 	switch stmt := s.(type) {
 	case IRLetStmt:
 		em.emitLetStmt(stmt, indent)
-	case IRConstrainedLetStmt:
-		em.emitConstrainedLetStmt(stmt, indent)
 	case IRTryLetStmt:
 		em.emitTryLetStmt(stmt, indent)
 	case IRExprStmt:
@@ -529,6 +527,11 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt, indent string) {
 		em.writeln(fmt.Sprintf("%s_ = %s", indent, em.emitExpr(stmt.Value)))
 		return
 	}
+	// GoMultiReturn: Go func returns multiple values, wrap into Result/Option
+	if isGoMultiReturn(stmt.Value) {
+		em.emitGoMultiReturnLet(stmt.GoName, stmt.Value, indent)
+		return
+	}
 	if stmt.Type != nil {
 		// Check for empty list: var x []Type
 		if ll, ok := stmt.Value.(IRListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
@@ -541,37 +544,75 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt, indent string) {
 	em.writeln(fmt.Sprintf("%s%s := %s", indent, stmt.GoName, em.emitExpr(stmt.Value)))
 }
 
-func (em *Emitter) emitConstrainedLetStmt(stmt IRConstrainedLetStmt, indent string) {
-	em.tmpCounter++
-	tmpErr := fmt.Sprintf("__cerr%d", em.tmpCounter)
 
-	if stmt.ErrorOnly {
-		// Go func returns error only: err := f()
-		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
-		em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, stmt.GoName, stmt.GoType))
-		em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-		em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpErr))
-		em.writeln(fmt.Sprintf("%s} else {", indent))
-		em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s{})", indent, stmt.GoName, stmt.GoType, stmt.GoType))
+// emitGoMultiReturnLet emits a let statement for a Go call that returns multiple values.
+// The call's IRType determines the wrapping: IRResultType → Result, IROptionType → Option.
+func (em *Emitter) emitGoMultiReturnLet(goName string, callExpr IRExpr, indent string) {
+	em.tmpCounter++
+	callStr := em.emitExpr(callExpr)
+	irType := callExpr.irType()
+
+	switch rt := irType.(type) {
+	case IRResultType:
+		tmpErr := fmt.Sprintf("__cerr%d", em.tmpCounter)
+		okType := em.irTypeStr(rt.Ok)
+		isErrorOnly := isUnitType(rt.Ok)
+		if isErrorOnly {
+			// Go func returns error only: err := f()
+			em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, callStr))
+			em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, goName, okType))
+			em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
+			em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, goName, okType, tmpErr))
+			em.writeln(fmt.Sprintf("%s} else {", indent))
+			em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s{})", indent, goName, okType, okType))
+			em.writeln(fmt.Sprintf("%s}", indent))
+		} else {
+			// Go func returns (T, error): val, err := f()
+			tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
+			em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, callStr))
+			em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, goName, okType))
+			em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
+			em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, goName, okType, tmpErr))
+			em.writeln(fmt.Sprintf("%s} else {", indent))
+			em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, goName, okType, tmpVal))
+			em.writeln(fmt.Sprintf("%s}", indent))
+		}
+	case IROptionType:
+		tmpVal := fmt.Sprintf("__oval%d", em.tmpCounter)
+		tmpOk := fmt.Sprintf("__ook%d", em.tmpCounter)
+		innerType := em.irTypeStr(rt.Inner)
+		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpOk, callStr))
+		em.writeln(fmt.Sprintf("%svar %s Option_[%s]", indent, goName, innerType))
+		em.writeln(fmt.Sprintf("%sif %s {", indent, tmpOk))
+		em.writeln(fmt.Sprintf("%s\t%s = Some_[%s](%s)", indent, goName, innerType, tmpVal))
 		em.writeln(fmt.Sprintf("%s}", indent))
-	} else {
-		// Go func returns (T, error): val, err := f()
-		tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
-		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
-		em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, stmt.GoName, stmt.GoType))
-		em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-		em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpErr))
-		em.writeln(fmt.Sprintf("%s} else {", indent))
-		em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpVal))
-		em.writeln(fmt.Sprintf("%s}", indent))
+	default:
+		// Tuple or unknown: plain multi-value assignment
+		em.writeln(fmt.Sprintf("%s%s := %s", indent, goName, callStr))
 	}
+}
+
+// isUnitType checks if an IRType is the Unit type (struct{}).
+func isUnitType(t IRType) bool {
+	if named, ok := t.(IRNamedType); ok {
+		return named.GoName == "struct{}"
+	}
+	return false
 }
 
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
 	em.tmpCounter++
 	tmpErr := fmt.Sprintf("__try_err%d", em.tmpCounter)
 
-	if stmt.ErrorOnly {
+	// Derive ErrorOnly from the call expression's type
+	errorOnly := false
+	if isGoMultiReturn(stmt.CallExpr) {
+		if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
+			errorOnly = isUnitType(rt.Ok)
+		}
+	}
+
+	if errorOnly {
 		// Go func returns error only: err := f()
 		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
 	} else {

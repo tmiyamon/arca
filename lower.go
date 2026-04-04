@@ -996,8 +996,8 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
-				retType := l.resolveGoCall(goCallName, args, e.Pos)
-				return IRFnCall{Func: goCallName, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
+				ret := l.resolveGoCall(goCallName, args, e.Pos)
+				return IRFnCall{Func: goCallName, Args: args, Type: ret.Type, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -1021,12 +1021,13 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		methodName := l.resolveMethodName(fa.Field)
 		args := l.lowerCallArgs(e)
 		receiver := l.lowerExpr(fa.Expr)
-		retType := l.resolveMethodReturnType(receiver, fa.Field)
+		ret := l.resolveMethodReturnType(receiver, fa.Field)
 		return IRMethodCall{
-			Receiver: receiver,
-			Method:   methodName,
-			Args:     args,
-			Type:     retType,
+			Receiver:      receiver,
+			Method:        methodName,
+			Args:          args,
+			Type:          ret.Type,
+			GoMultiReturn: ret.GoMultiReturn,
 		}
 	}
 
@@ -1037,18 +1038,18 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		if id, ok := e.Fn.(Ident); ok {
 			arcaName = id.Name
 		}
-		retType := l.resolveGoCall(ident.GoName, args, e.Pos)
-		return IRFnCall{Func: ident.GoName, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		ret := l.resolveGoCall(ident.GoName, args, e.Pos)
+		return IRFnCall{Func: ident.GoName, Args: args, Type: ret.Type, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
 }
 
-// resolveGoCall validates a Go FFI function call and returns the resolved return type.
+// resolveGoCall validates a Go FFI function call and returns the resolved return info.
 // Checks argument count and types against the Go function signature.
-func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) IRType {
+func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnInfo {
 	if !strings.Contains(goName, ".") {
-		return IRInterfaceType{}
+		return goReturnInfo{Type: IRInterfaceType{}}
 	}
 	parts := strings.SplitN(goName, ".", 2)
 	pkgShort := parts[0]
@@ -1056,12 +1057,12 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) IRType {
 
 	pkgPath, ok := l.goPackages[pkgShort]
 	if !ok {
-		return IRInterfaceType{}
+		return goReturnInfo{Type: IRInterfaceType{}}
 	}
 
 	info := l.typeResolver.ResolveFunc(pkgPath, funcName)
 	if info == nil {
-		return IRInterfaceType{}
+		return goReturnInfo{Type: IRInterfaceType{}}
 	}
 
 	// Validate argument count
@@ -1147,16 +1148,58 @@ func goTypesCompatible(arcaType, goParam string) bool {
 	return false
 }
 
-// goFuncReturnType converts a FuncInfo's return types to an IRType.
-func (l *Lowerer) goFuncReturnType(info *FuncInfo) IRType {
+// goReturnInfo holds the resolved Arca type and whether the Go function returns multiple values.
+type goReturnInfo struct {
+	Type          IRType
+	GoMultiReturn bool // true if Go func returns multiple values (needs multi-value receive)
+}
+
+// goFuncReturnType converts a FuncInfo's return types to an Arca IR type.
+// Go multi-return is mechanically mapped:
+//
+//	()           → Unit
+//	(T)          → T
+//	(error)      → Result[Unit, error]
+//	(T, error)   → Result[T, error]
+//	(T, bool)    → Option[T]
+//	(T1, T2)     → (T1, T2)
+//	(T1, T2, T3) → (T1, T2, T3)
+func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 	if len(info.Results) == 0 {
-		return IRNamedType{GoName: "struct{}"}
+		return goReturnInfo{Type: IRNamedType{GoName: "struct{}"}}
 	}
 	if len(info.Results) == 1 {
-		return IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}
+		if info.Results[0].Type == "error" {
+			return goReturnInfo{
+				Type:          IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRNamedType{GoName: "error"}},
+				GoMultiReturn: true,
+			}
+		}
+		return goReturnInfo{Type: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}}
 	}
-	// (T, error) → keep as-is for now, handled by ? operator
-	return IRInterfaceType{}
+	if len(info.Results) == 2 {
+		if info.Results[1].Type == "error" {
+			return goReturnInfo{
+				Type:          IRResultType{Ok: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}, Err: IRNamedType{GoName: "error"}},
+				GoMultiReturn: true,
+			}
+		}
+		if info.Results[1].Type == "bool" {
+			return goReturnInfo{
+				Type:          IROptionType{Inner: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}},
+				GoMultiReturn: true,
+			}
+		}
+	}
+	// 2+ non-special or 3+ returns → Tuple
+	elems := make([]IRType, len(info.Results))
+	for i, r := range info.Results {
+		elems[i] = IRNamedType{GoName: goTypeToIRName(r.Type)}
+	}
+	return goReturnInfo{
+		Type:          IRTupleType{Elements: elems},
+		GoMultiReturn: true,
+	}
 }
 
 // goTypeToIRName converts a go/types type string to a short Go type name.
@@ -1167,42 +1210,6 @@ func goTypeToIRName(goType string) string {
 		return goType[idx+1:]
 	}
 	return goType
-}
-
-// isErrorOnlyCall checks if an AST expression is a Go FFI call that returns error only (not (T, error)).
-func (l *Lowerer) isErrorOnlyCall(expr Expr) bool {
-	// Check FnCall with dotted ident: fmt.Println(...)
-	if call, ok := expr.(FnCall); ok {
-		if ident, ok := call.Fn.(Ident); ok && strings.Contains(ident.Name, ".") {
-			parts := strings.SplitN(ident.Name, ".", 2)
-			if pkgPath, ok := l.goPackages[parts[0]]; ok {
-				if info := l.typeResolver.ResolveFunc(pkgPath, parts[1]); info != nil {
-					return len(info.Results) == 1 && info.Results[0].Type == "error"
-				}
-			}
-		}
-		// Check FieldAccess-based call: obj.method(...)
-		if fa, ok := call.Fn.(FieldAccess); ok {
-			if ident, ok := fa.Expr.(Ident); ok {
-				if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
-					if pkgPath, ok := l.goPackages[ident.Name]; ok {
-						if info := l.typeResolver.ResolveFunc(pkgPath, fa.Field); info != nil {
-							return len(info.Results) == 1 && info.Results[0].Type == "error"
-						}
-					}
-				}
-			}
-			// Method call on typed receiver
-			loweredReceiver := l.lowerExpr(fa.Expr)
-			pkg, typ, ok := l.resolveReceiverGoType(loweredReceiver)
-			if ok {
-				if info := l.typeResolver.ResolveMethod(pkg, typ, fa.Field); info != nil {
-					return len(info.Results) == 1 && info.Results[0].Type == "error"
-				}
-			}
-		}
-	}
-	return false
 }
 
 // resolveReceiverGoType extracts the Go package and type name from an IR expression's type.
@@ -1231,7 +1238,7 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 }
 
 // resolveMethodReturnType resolves the return type of a method call on a Go or Arca type.
-func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) IRType {
+func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goReturnInfo {
 	// Try Go FFI type first
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
 	if ok {
@@ -1248,15 +1255,15 @@ func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) IRType
 			for _, m := range td.Methods {
 				if m.Name == method || snakeToCamel(m.Name) == method || snakeToPascal(m.Name) == method {
 					if m.ReturnType != nil {
-						return l.lowerType(m.ReturnType)
+						return goReturnInfo{Type: l.lowerType(m.ReturnType)}
 					}
-					return IRNamedType{GoName: "struct{}"}
+					return goReturnInfo{Type: IRNamedType{GoName: "struct{}"}}
 				}
 			}
 		}
 	}
 
-	return IRInterfaceType{}
+	return goReturnInfo{Type: IRInterfaceType{}}
 }
 
 // resolveFieldType resolves the type of a field access on a Go or Arca type.
@@ -1449,15 +1456,15 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			goName = typeName + cc.Name
 		}
 
-		// Constrained type constructor
+		// Constrained type constructor: NewType returns (T, error)
 		if l.hasConstraints(td) {
 			l.builtins["fmt"] = true
 			fields := l.lowerFieldValues(cc.Fields)
 			return IRConstructorCall{
 				GoName:        "New" + goName,
 				Fields:        fields,
-				ReturnsResult: true,
-				Type:          IRNamedType{GoName: goName},
+				GoMultiReturn: true,
+				Type:          IRResultType{Ok: IRNamedType{GoName: goName}, Err: IRNamedType{GoName: "error"}},
 				Source:        SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: typeName},
 			}
 		}
@@ -1488,8 +1495,8 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			return IRConstructorCall{
 				GoName:        "New" + cc.Name,
 				Fields:        fields,
-				ReturnsResult: true,
-				Type:          IRNamedType{GoName: cc.Name},
+				GoMultiReturn: true,
+				Type:          IRResultType{Ok: IRNamedType{GoName: cc.Name}, Err: IRNamedType{GoName: "error"}},
 				Source:        SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: cc.Name},
 			}
 		}
@@ -1680,11 +1687,13 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 			if l.currentRetType != nil {
 				retType = l.lowerType(l.currentRetType)
 			}
+			if isIRResultType(retType) {
+				l.builtins["result"] = true
+			}
 			return []IRStmt{IRTryLetStmt{
 				GoName:     goVarName,
 				CallExpr:   loweredExpr,
 				ReturnType: retType,
-				ErrorOnly:  l.isErrorOnlyCall(call.Args[0]),
 			}}
 		}
 	}
@@ -1698,38 +1707,17 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	}
 
 	// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
-	// Constrained constructor without ?: wrap in Result
-	if l.isConstrainedConstructor(s.Value) {
-		l.builtins["result"] = true
-		goType := l.inferGoType(s.Value)
-		loweredExpr := l.lowerExpr(s.Value)
-		goVarName := l.declareVar(s.Name)
-		if t := l.inferASTType(s.Value); t != nil {
-			l.recordSymbol(s.Name, t, SymVariable)
-			l.setVarArcaType(s.Name, t)
-		}
-		return []IRStmt{IRConstrainedLetStmt{
-			GoName:   goVarName,
-			CallExpr: loweredExpr,
-			GoType:   goType,
-		}}
-	}
-
-	// Go FFI call returning error only (without ?): wrap in Result[Unit, error]
-	if l.isErrorOnlyCall(s.Value) {
-		l.builtins["result"] = true
-		loweredExpr := l.lowerExpr(s.Value)
-		goVarName := l.declareVar(s.Name)
-		l.recordSymbol(s.Name, NamedType{Name: "Result", Params: []Type{NamedType{Name: "Unit"}, NamedType{Name: "error"}}}, SymVariable)
-		return []IRStmt{IRConstrainedLetStmt{
-			GoName:    goVarName,
-			CallExpr:  loweredExpr,
-			GoType:    "struct{}",
-			ErrorOnly: true,
-		}}
-	}
-
 	loweredValue := l.lowerExpr(s.Value)
+
+	// GoMultiReturn calls that return Result need builtins
+	if isGoMultiReturn(loweredValue) {
+		if _, ok := loweredValue.irType().(IRResultType); ok {
+			l.builtins["result"] = true
+		}
+		if _, ok := loweredValue.irType().(IROptionType); ok {
+			l.builtins["option"] = true
+		}
+	}
 	var loweredType IRType
 	if s.Type != nil {
 		loweredType = l.lowerType(s.Type)
@@ -2262,35 +2250,6 @@ func (l *Lowerer) resolveMethodName(name string) string {
 		}
 	}
 	return capitalize(name)
-}
-
-func (l *Lowerer) isConstrainedConstructor(expr Expr) bool {
-	cc, ok := expr.(ConstructorCall)
-	if !ok {
-		return false
-	}
-	if alias, ok := l.typeAliases[cc.Name]; ok {
-		if nt, ok := alias.Type.(NamedType); ok && len(nt.Constraints) > 0 {
-			return true
-		}
-	}
-	typeName := cc.TypeName
-	if typeName == "Self" && l.currentTypeName != "" {
-		typeName = l.currentTypeName
-	}
-	if typeName != "" {
-		if td, ok := l.types[typeName]; ok {
-			return l.hasConstraints(td)
-		}
-	}
-	for _, td := range l.types {
-		for _, ctor := range td.Constructors {
-			if ctor.Name == cc.Name {
-				return l.hasConstraints(td)
-			}
-		}
-	}
-	return false
 }
 
 func (l *Lowerer) inferGoType(expr Expr) string {

@@ -209,18 +209,20 @@ type IRStringInterp struct {
 
 // Function call
 type IRFnCall struct {
-	Func   string   // "fmt.Println", "message", "userFrom", etc.
-	Args   []IRExpr
-	Type   IRType
-	Source SourceInfo
+	Func          string   // "fmt.Println", "message", "userFrom", etc.
+	Args          []IRExpr
+	Type          IRType
+	Source        SourceInfo
+	GoMultiReturn bool // true if Go func returns multiple values (needs multi-value receive)
 }
 
 // Method call: expr.Method(args)
 type IRMethodCall struct {
-	Receiver IRExpr
-	Method   string
-	Args     []IRExpr
-	Type     IRType
+	Receiver      IRExpr
+	Method        string
+	Args          []IRExpr
+	Type          IRType
+	GoMultiReturn bool // true if Go method returns multiple values (needs multi-value receive)
 }
 
 // Field access: expr.Field
@@ -242,7 +244,7 @@ type IRConstructorCall struct {
 	GoName        string // "GreetingHello", "User"
 	Fields        []IRFieldValue
 	TypeArgs      string // "[int, string]" for generics, empty otherwise
-	ReturnsResult bool   // true if constrained (NewType returns (T, error))
+	GoMultiReturn bool   // true if constrained (NewType returns (T, error))
 	Type          IRType
 	Source        SourceInfo // Name = ctor name, TypeName = type name
 }
@@ -436,20 +438,11 @@ type IRLetStmt struct {
 	Type   IRType
 }
 
-// Let with constrained constructor: generates Result wrapping
-type IRConstrainedLetStmt struct {
-	GoName    string
-	CallExpr  IRExpr // the constructor call expression
-	GoType    string // "Email"
-	ErrorOnly bool   // true if Go func returns error only
-}
-
 // Try let: let x = expr? — error propagation
 type IRTryLetStmt struct {
 	GoName     string // "_" for discard
 	CallExpr   IRExpr
 	ReturnType IRType // enclosing function's return type, for Err_ type args
-	ErrorOnly  bool   // true if Go func returns error only (not (T, error))
 }
 
 type IRExprStmt struct {
@@ -485,9 +478,8 @@ type IRDestructureBinding struct {
 	Slice  bool   // true for rest binding (list[N:])
 }
 
-func (IRLetStmt) irStmtNode()            {}
-func (IRConstrainedLetStmt) irStmtNode() {}
-func (IRTryLetStmt) irStmtNode()         {}
+func (IRLetStmt) irStmtNode()    {}
+func (IRTryLetStmt) irStmtNode() {}
 func (IRExprStmt) irStmtNode()           {}
 func (IRDeferStmt) irStmtNode()          {}
 func (IRAssertStmt) irStmtNode()         {}
@@ -551,3 +543,16 @@ func (e IRListMatch) irExprNode()       {}
 func (e IRListMatch) irType() IRType    { return e.Type }
 func (e IRLiteralMatch) irExprNode()    {}
 func (e IRLiteralMatch) irType() IRType { return e.Type }
+
+// isGoMultiReturn checks if an IR expression is a call with GoMultiReturn set.
+func isGoMultiReturn(e IRExpr) bool {
+	switch expr := e.(type) {
+	case IRFnCall:
+		return expr.GoMultiReturn
+	case IRMethodCall:
+		return expr.GoMultiReturn
+	case IRConstructorCall:
+		return expr.GoMultiReturn
+	}
+	return false
+}
