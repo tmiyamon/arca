@@ -1336,6 +1336,10 @@ func (p *Parser) parseListPattern() (Pattern, error) {
 }
 
 func (p *Parser) parseFieldPattern() (FieldPattern, error) {
+	if p.peek().Kind == TkUnderscore {
+		p.advance()
+		return FieldPattern{Name: "_", Binding: "_"}, nil
+	}
 	name, err := p.expect(TkIdent)
 	if err != nil {
 		return FieldPattern{}, err
