@@ -39,6 +39,23 @@ Source → AST → IR (normalized) → Go output
 
 ---
 
+## 2026-04-04: IR implementation (AST → IR → Go)
+
+**Context:** Decided to introduce IR between AST and Go output to structurally prevent missed cases and separate concerns (see earlier decision entry).
+
+**Implementation:** Three new files:
+- `ir.go` — IR node definitions. Match expressions are structurally exhaustive (e.g. `IRResultMatch` requires both `OkArm` and `ErrorArm`). All expressions carry resolved types. All names are Go-safe.
+- `lower.go` — AST → IR conversion. Resolves names (Self, self, shadowing, builtins, constructors), classifies match expressions, tracks imports.
+- `emit.go` — IR → Go string output. Mechanical walk of IR nodes, no feature-specific branching.
+
+**Key design: value-before-declare for shadowing.** In `let email = Email(email)?`, the RHS must be lowered before declaring the new `email` variable, otherwise the parameter reference gets incorrectly mapped to the shadowed name.
+
+**Verification:** `arca emit-ir` command added for parallel comparison. All testdata files produce semantically identical output to the existing `arca emit`. Performance is equivalent (sub-millisecond).
+
+**Status:** New pipeline works in parallel. Next step: switch `arca emit/run/build` to use the IR pipeline and remove old codegen.
+
+---
+
 ## 2026-04-04: Constrained field auto-construction (future)
 
 **Context:** A type with constrained fields like `type User(email: Email)` requires manual construction of `Email` before `User`. This leads to boilerplate factory functions (`static fun from(...)`).
