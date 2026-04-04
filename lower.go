@@ -883,35 +883,24 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			if len(e.Args) == 1 {
 				return l.lowerExpr(e.Args[0])
 			}
-		case "println":
-			l.builtins["fmt"] = true
-			args := l.lowerExprs(e.Args)
-			return IRFnCall{Func: "fmt.Println", Args: args, Type: IRNamedType{GoName: "struct{}"}}
-		case "print":
-			l.builtins["fmt"] = true
-			args := l.lowerExprs(e.Args)
-			return IRFnCall{Func: "fmt.Print", Args: args, Type: IRNamedType{GoName: "struct{}"}}
-		case "toBytes":
-			if len(e.Args) == 1 {
-				// []byte(expr) — modeled as a function call
-				return IRFnCall{
-					Func: "[]byte",
-					Args: []IRExpr{l.lowerExpr(e.Args[0])},
-					Type: IRListType{Elem: IRNamedType{GoName: "byte"}},
+		default:
+			// Check prelude builtins
+			if def, ok := prelude[ident.Name]; ok {
+				args := l.lowerExprs(e.Args)
+				if def.Import != "" {
+					l.builtins[def.Import] = true
+				}
+				if def.Builtin != "" {
+					l.builtins[def.Builtin] = true
+				}
+				if def.Lower != nil {
+					if result := def.Lower(args); result != nil {
+						return result
+					}
+				} else {
+					return IRFnCall{Func: def.GoFunc, Args: args, Type: IRInterfaceType{}}
 				}
 			}
-		case "map":
-			l.builtins["map"] = true
-			args := l.lowerExprs(e.Args)
-			return IRFnCall{Func: "Map_", Args: args, Type: IRInterfaceType{}}
-		case "filter":
-			l.builtins["filter"] = true
-			args := l.lowerExprs(e.Args)
-			return IRFnCall{Func: "Filter_", Args: args, Type: IRInterfaceType{}}
-		case "fold":
-			l.builtins["fold"] = true
-			args := l.lowerExprs(e.Args)
-			return IRFnCall{Func: "Fold_", Args: args, Type: IRInterfaceType{}}
 		}
 	}
 

@@ -103,11 +103,21 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - Decision deferred — `?` works for now, final syntax TBD
 - `?` has the downside that the error point is at end of line, easy to miss
 
-## Built-in Functions
+## Prelude (Built-in Functions)
 
-`println` and `print` are available without import. They map to `fmt.Println` and `fmt.Print` in generated Go, with `fmt` auto-imported when used.
+Built-in functions are defined in `prelude.go` as a map of Arca names to Go translations:
 
-These are hardcoded builtins, not yet part of a prelude system. When a prelude is added, they will move there.
+```go
+var prelude = map[string]BuiltinDef{
+    "println": {GoFunc: "fmt.Println", Import: "fmt"},
+    "toBytes": {GoFunc: "[]byte", Lower: customFunc},
+    "map":     {GoFunc: "Map_", Builtin: "map"},
+}
+```
+
+Each entry specifies the Go function name, required imports, helper generation flags, and an optional custom `Lower` function for complex transformations. Adding a new builtin is one line in the map.
+
+The lowerer checks the prelude map for any unrecognized function call. No hardcoded switch cases in lower.go.
 
 ## Error Messages
 
