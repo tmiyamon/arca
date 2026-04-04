@@ -556,12 +556,25 @@ func (em *Emitter) emitConstrainedLetStmt(stmt IRConstrainedLetStmt, indent stri
 
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
 	em.tmpCounter++
-	tmpVal := "_"
-	if stmt.GoName != "_" {
-		tmpVal = fmt.Sprintf("__try_val%d", em.tmpCounter)
-	}
 	tmpErr := fmt.Sprintf("__try_err%d", em.tmpCounter)
-	em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
+
+	if stmt.ErrorOnly {
+		// Go func returns error only: err := f()
+		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
+	} else {
+		// Go func returns (T, error): val, err := f()
+		tmpVal := "_"
+		if stmt.GoName != "_" {
+			tmpVal = fmt.Sprintf("__try_val%d", em.tmpCounter)
+		}
+		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
+		defer func() {
+			if stmt.GoName != "_" {
+				em.writeln(fmt.Sprintf("%s%s := %s", indent, stmt.GoName, tmpVal))
+			}
+		}()
+	}
+
 	em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
 	if isIRResultType(stmt.ReturnType) {
 		typeArgs := irResultTypeArgs(stmt.ReturnType)
@@ -570,9 +583,6 @@ func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
 		em.writeln(fmt.Sprintf("%s\tpanic(%s)", indent, tmpErr))
 	}
 	em.writeln(fmt.Sprintf("%s}", indent))
-	if stmt.GoName != "_" {
-		em.writeln(fmt.Sprintf("%s%s := %s", indent, stmt.GoName, tmpVal))
-	}
 }
 
 func (em *Emitter) emitExprStmt(stmt IRExprStmt, indent string) {

@@ -448,6 +448,7 @@ type IRTryLetStmt struct {
 	GoName     string // "_" for discard
 	CallExpr   IRExpr
 	ReturnType IRType // enclosing function's return type, for Err_ type args
+	ErrorOnly  bool   // true if Go func returns error only (not (T, error))
 }
 
 type IRExprStmt struct {

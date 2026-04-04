@@ -1157,6 +1157,42 @@ func goTypeToIRName(goType string) string {
 	return goType
 }
 
+// isErrorOnlyCall checks if an AST expression is a Go FFI call that returns error only (not (T, error)).
+func (l *Lowerer) isErrorOnlyCall(expr Expr) bool {
+	// Check FnCall with dotted ident: fmt.Println(...)
+	if call, ok := expr.(FnCall); ok {
+		if ident, ok := call.Fn.(Ident); ok && strings.Contains(ident.Name, ".") {
+			parts := strings.SplitN(ident.Name, ".", 2)
+			if pkgPath, ok := l.goPackages[parts[0]]; ok {
+				if info := l.typeResolver.ResolveFunc(pkgPath, parts[1]); info != nil {
+					return len(info.Results) == 1 && info.Results[0].Type == "error"
+				}
+			}
+		}
+		// Check FieldAccess-based call: obj.method(...)
+		if fa, ok := call.Fn.(FieldAccess); ok {
+			if ident, ok := fa.Expr.(Ident); ok {
+				if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
+					if pkgPath, ok := l.goPackages[ident.Name]; ok {
+						if info := l.typeResolver.ResolveFunc(pkgPath, fa.Field); info != nil {
+							return len(info.Results) == 1 && info.Results[0].Type == "error"
+						}
+					}
+				}
+			}
+			// Method call on typed receiver
+			loweredReceiver := l.lowerExpr(fa.Expr)
+			pkg, typ, ok := l.resolveReceiverGoType(loweredReceiver)
+			if ok {
+				if info := l.typeResolver.ResolveMethod(pkg, typ, fa.Field); info != nil {
+					return len(info.Results) == 1 && info.Results[0].Type == "error"
+				}
+			}
+		}
+	}
+	return false
+}
+
 // resolveReceiverGoType extracts the Go package and type name from an IR expression's type.
 func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) {
 	irType := expr.irType()
@@ -1636,6 +1672,7 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 				GoName:     goVarName,
 				CallExpr:   loweredExpr,
 				ReturnType: retType,
+				ErrorOnly:  l.isErrorOnlyCall(call.Args[0]),
 			}}
 		}
 	}
