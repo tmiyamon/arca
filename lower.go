@@ -1182,35 +1182,80 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 	return "", "", false
 }
 
-// resolveMethodReturnType resolves the return type of a method call on a Go type.
+// resolveMethodReturnType resolves the return type of a method call on a Go or Arca type.
 func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) IRType {
+	// Try Go FFI type first
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
-	if !ok {
-		return IRInterfaceType{}
-	}
-	info := l.typeResolver.ResolveMethod(pkg, typ, method)
-	if info == nil {
-		return IRInterfaceType{}
-	}
-	return l.goFuncReturnType(info)
-}
-
-// resolveFieldType resolves the type of a field access on a Go type.
-func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
-	pkg, typ, ok := l.resolveReceiverGoType(receiver)
-	if !ok {
-		return IRInterfaceType{}
-	}
-	typeInfo := l.typeResolver.ResolveType(pkg, typ)
-	if typeInfo == nil {
-		return IRInterfaceType{}
-	}
-	for _, f := range typeInfo.Fields {
-		if f.Name == field {
-			return IRNamedType{GoName: goTypeToIRName(f.Type)}
+	if ok {
+		info := l.typeResolver.ResolveMethod(pkg, typ, method)
+		if info != nil {
+			return l.goFuncReturnType(info)
 		}
 	}
+
+	// Try Arca type
+	arcaTypeName := l.resolveReceiverArcaType(receiver)
+	if arcaTypeName != "" {
+		if td, ok := l.types[arcaTypeName]; ok {
+			for _, m := range td.Methods {
+				if m.Name == method || snakeToCamel(m.Name) == method || snakeToPascal(m.Name) == method {
+					if m.ReturnType != nil {
+						return l.lowerType(m.ReturnType)
+					}
+					return IRNamedType{GoName: "struct{}"}
+				}
+			}
+		}
+	}
+
 	return IRInterfaceType{}
+}
+
+// resolveFieldType resolves the type of a field access on a Go or Arca type.
+func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
+	// Try Go FFI type first
+	pkg, typ, ok := l.resolveReceiverGoType(receiver)
+	if ok {
+		typeInfo := l.typeResolver.ResolveType(pkg, typ)
+		if typeInfo != nil {
+			for _, f := range typeInfo.Fields {
+				if f.Name == field {
+					return IRNamedType{GoName: goTypeToIRName(f.Type)}
+				}
+			}
+		}
+	}
+
+	// Try Arca type
+	arcaTypeName := l.resolveReceiverArcaType(receiver)
+	if arcaTypeName != "" {
+		if td, ok := l.types[arcaTypeName]; ok {
+			// field is capitalized Go name, findField uses Arca name
+			for _, ctor := range td.Constructors {
+				for i, f := range ctor.Fields {
+					if capitalize(f.Name) == field {
+						return l.lowerType(ctor.Fields[i].Type)
+					}
+				}
+			}
+		}
+	}
+
+	return IRInterfaceType{}
+}
+
+// resolveReceiverArcaType extracts the Arca type name from an IR expression.
+func (l *Lowerer) resolveReceiverArcaType(expr IRExpr) string {
+	irType := expr.irType()
+	if irType == nil {
+		return ""
+	}
+	if named, ok := irType.(IRNamedType); ok {
+		if !strings.Contains(named.GoName, ".") {
+			return named.GoName
+		}
+	}
+	return ""
 }
 
 // lowerCallArgs lowers function call arguments with context-aware type coercion.

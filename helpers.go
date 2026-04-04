@@ -54,6 +54,18 @@ func camelToKebab(s string) string {
 	return string(result)
 }
 
+// findField looks up a field by name across all constructors of a type.
+func findField(td TypeDecl, name string) *Field {
+	for _, ctor := range td.Constructors {
+		for i, f := range ctor.Fields {
+			if f.Name == name {
+				return &ctor.Fields[i]
+			}
+		}
+	}
+	return nil
+}
+
 func isEnum(td TypeDecl) bool {
 	for _, c := range td.Constructors {
 		if len(c.Fields) > 0 {

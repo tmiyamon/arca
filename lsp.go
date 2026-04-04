@@ -220,6 +220,16 @@ func getHoverInfo(source string, line, col int) string {
 		return ""
 	}
 
+	// Check if this is a field access: receiver.field
+	receiver := getReceiverAt(source, line, col)
+	if receiver != "" {
+		if sym := lowerer.LookupSymbol(receiver); sym != nil {
+			if fieldType := lookupFieldType(lowerer.Types(), sym.Type, word); fieldType != nil {
+				return fmt.Sprintf("```arca\n%s: %s\n```", word, typeName(fieldType))
+			}
+		}
+	}
+
 	// Look up local variables and parameters
 	if sym := lowerer.LookupSymbol(word); sym != nil {
 		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeName(sym.Type))
@@ -307,6 +317,56 @@ func formatTypeAliasHover(ta TypeAliasDecl) string {
 }
 
 // --- Helpers ---
+
+// getReceiverAt returns the identifier before a dot if the cursor is on a field/method name.
+// e.g. for "user.email" with cursor on "email", returns "user".
+func getReceiverAt(source string, line, col int) string {
+	lines := strings.Split(source, "\n")
+	if line < 1 || line > len(lines) {
+		return ""
+	}
+	lineText := lines[line-1]
+
+	// Find the start of the current word
+	start := col - 1
+	for start > 0 && isIdentChar(lineText[start-1]) {
+		start--
+	}
+	// Check if there's a dot before
+	if start < 1 || lineText[start-1] != '.' {
+		return ""
+	}
+	// Find the receiver word before the dot
+	dotPos := start - 1
+	end := dotPos
+	recStart := end
+	for recStart > 0 && isIdentChar(lineText[recStart-1]) {
+		recStart--
+	}
+	if recStart == end {
+		return ""
+	}
+	return lineText[recStart:end]
+}
+
+// lookupFieldType finds a field's type in an Arca type definition.
+func lookupFieldType(types map[string]TypeDecl, ownerType Type, fieldName string) Type {
+	if ownerType == nil {
+		return nil
+	}
+	nt, ok := ownerType.(NamedType)
+	if !ok {
+		return nil
+	}
+	td, ok := types[nt.Name]
+	if !ok {
+		return nil
+	}
+	if f := findField(td, fieldName); f != nil {
+		return f.Type
+	}
+	return nil
+}
 
 func getWordAt(source string, line, col int) string {
 	lines := strings.Split(source, "\n")
