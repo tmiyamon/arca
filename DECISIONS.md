@@ -203,6 +203,26 @@ This is the idiomatic Go pattern for interface + variant structs.
 
 ---
 
+## 2026-04-04: JSON serialize/deserialize (idea)
+
+**Context:** Types with `tags { json }` should get automatic JSON support. Constrained types guarantee that deserialized data is valid.
+
+**Design sketch:**
+- `user.toJson()` — `User → String` (serialize, auto-generated when json tag present)
+- `User.fromJson(str)` — `String → Result[User, error]` (deserialize + validate)
+- Deserialization runs constrained type validation — invalid JSON fields produce typed errors
+- Go codegen uses `encoding/json` under the hood
+
+**Open questions:**
+- Input type: `String` is sufficient for most web cases. `Bytes` may be needed later.
+- Method generation: auto-generated when json tag is present? Or explicit opt-in?
+- Nested types: `User` has `Email` field — deserialize must validate Email too
+- Error reporting: which field failed? Structured error vs string?
+
+**Status:** Just an idea.
+
+---
+
 ## 2026-04-04: Record copy/spread (idea)
 
 **Context:** Immutable types need a way to create modified copies. Writing out all fields manually is verbose.
