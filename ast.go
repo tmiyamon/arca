@@ -195,6 +195,7 @@ type Stmt interface {
 }
 
 type LetStmt struct {
+	Pos     Pos
 	Name    string  // simple binding
 	Pattern Pattern // nil for simple, non-nil for destructuring
 	Type    Type    // optional

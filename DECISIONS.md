@@ -66,13 +66,24 @@ Source → AST → IR (normalized) → Go output
 - Works with VS Code and Neovim out of the box
 
 **Phases:**
-- Phase A: Diagnostics — parse/type errors shown in editor on save/change
-- Phase B: Hover — show type info at cursor position
-- Phase C: Go FFI type tracking (Phase 3/4) — method/field resolution for Go types, integrated into hover and diagnostics
+- Phase A: Diagnostics — parse/type errors shown in editor on save/change ✅
+- Phase B: Hover — show type info at cursor position ✅
+- Phase C: Go FFI type tracking (Phase 3/4) — method/field resolution for Go types — not yet
 
 **Why glsp:** Go library that handles JSON-RPC and LSP protocol dispatch. Avoids writing ~500 lines of protocol boilerplate. LSP spec is stable so dependency risk is low.
 
 **Architecture:** LSP server reuses existing pipeline (parse → check → lower). IR carries type info for hover. TypeResolver provides Go FFI type info.
+
+**Symbol recording:** Initially symbols were recorded manually at each binding site (`recordSymbol` calls). This was error-prone — Lambda params, ForExpr bindings, etc. were missed. Refactored to use `Scope.onDefine` callback: any `scope.Define()` call automatically records the symbol for LSP. New binding points are covered automatically.
+
+**Hover coverage:**
+- Functions, types, type aliases — from checker's global maps
+- Methods and associated functions — from type declaration method lists
+- Local variables, parameters — from Scope.onDefine callback
+- Match pattern bindings (Ok/Error/Some/constructor fields) — from Scope.onDefine
+- `Result[T]` treated as `Result[T, error]` for Error pattern binding
+
+**Status:** Phase A+B complete. Phase C (Go FFI method/field resolution in hover) not yet done.
 
 ---
 
@@ -100,8 +111,8 @@ Source → AST → IR (normalized) → Go output
 **Scope (incremental):**
 - Phase 1: Load packages, resolve return types, validate argument count ✅
 - Phase 2: Validate argument types (Arca type → Go type mapping) ✅
-- Phase 3: Method resolution on Go types (`w.Header().Set(...)`)
-- Phase 4: Struct field access validation
+- Phase 3: Method resolution on Go types (`w.Header().Set(...)`) — not yet
+- Phase 4: Struct field access validation — not yet
 
 **Why now:** IR is in place. Type info goes into IR nodes during lowering. Emit doesn't need to change. Without IR, this would have required threading type info through the string-building codegen — impractical.
 

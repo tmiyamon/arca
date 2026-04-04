@@ -139,16 +139,24 @@ func (e CheckError) Error() string {
 // --- Scope ---
 
 type Scope struct {
-	parent *Scope
-	vars   map[string]Type
+	parent   *Scope
+	vars     map[string]Type
+	onDefine func(name string, t Type) // callback for symbol recording
 }
 
 func NewScope(parent *Scope) *Scope {
-	return &Scope{parent: parent, vars: make(map[string]Type)}
+	s := &Scope{parent: parent, vars: make(map[string]Type)}
+	if parent != nil {
+		s.onDefine = parent.onDefine // inherit callback
+	}
+	return s
 }
 
 func (s *Scope) Define(name string, t Type) {
 	s.vars[name] = t
+	if s.onDefine != nil {
+		s.onDefine(name, t)
+	}
 }
 
 func (s *Scope) Lookup(name string) (Type, bool) {
@@ -163,6 +171,20 @@ func (s *Scope) Lookup(name string) (Type, bool) {
 
 // --- Checker ---
 
+// Symbol kinds
+const (
+	SymVariable    = "variable"
+	SymParameter   = "parameter"
+)
+
+// SymbolInfo records type info for a symbol at a specific position.
+type SymbolInfo struct {
+	Name string
+	Type Type
+	Pos  Pos
+	Kind string
+}
+
 type Checker struct {
 	types           map[string]TypeDecl
 	typeAliases     map[string]TypeAliasDecl
@@ -173,16 +195,22 @@ type Checker struct {
 	currentFn       *FnDecl
 	currentTypeName string // set inside type methods for Self resolution
 	typeParams      map[string]bool // currently in-scope type parameters
+	symbols         []SymbolInfo // all symbols with positions, for LSP
 }
 
 func NewChecker() *Checker {
-	return &Checker{
+	c := &Checker{
 		types:       make(map[string]TypeDecl),
 		typeAliases: make(map[string]TypeAliasDecl),
 		ctorTypes:   make(map[string]string),
 		functions:   make(map[string]FnDecl),
-		scope:       NewScope(nil),
 	}
+	root := NewScope(nil)
+	root.onDefine = func(name string, t Type) {
+		c.symbols = append(c.symbols, SymbolInfo{Name: name, Type: t, Kind: SymVariable})
+	}
+	c.scope = root
+	return c
 }
 
 func (c *Checker) Check(prog *Program) []CheckError {
@@ -214,6 +242,17 @@ func (c *Checker) Check(prog *Program) []CheckError {
 	}
 
 	return c.errors
+}
+
+// LookupSymbol finds a symbol by name (last defined wins, for shadowing).
+func (c *Checker) LookupSymbol(name string) *SymbolInfo {
+	// Search backwards for the most recent definition
+	for i := len(c.symbols) - 1; i >= 0; i-- {
+		if c.symbols[i].Name == name {
+			return &c.symbols[i]
+		}
+	}
+	return nil
 }
 
 func (c *Checker) addErrorAt(pos Pos, format string, args ...interface{}) {
@@ -468,6 +507,29 @@ func (c *Checker) inferType(expr Expr) Type {
 			if fn, ok := c.functions[ident.Name]; ok {
 				return fn.ReturnType
 			}
+			// Type.method() — look up associated functions/methods
+			if strings.Contains(ident.Name, ".") {
+				parts := strings.SplitN(ident.Name, ".", 2)
+				if td, ok := c.types[parts[0]]; ok {
+					for _, m := range td.Methods {
+						if m.Name == parts[1] {
+							return m.ReturnType
+						}
+					}
+				}
+			}
+		}
+		// FieldAccess-based call: obj.method(args)
+		if fa, ok := e.Fn.(FieldAccess); ok {
+			if ident, ok := fa.Expr.(Ident); ok {
+				if td, ok := c.types[ident.Name]; ok {
+					for _, m := range td.Methods {
+						if m.Name == fa.Field {
+							return m.ReturnType
+						}
+					}
+				}
+			}
 		}
 		return nil
 	case MatchExpr:
@@ -535,6 +597,7 @@ func (c *Checker) checkMethodDecl(td TypeDecl, fd FnDecl) {
 	c.scope.Define("self", NamedType{Name: td.Name})
 	for _, param := range fd.Params {
 		c.scope.Define(param.Name, param.Type)
+
 	}
 	c.checkExpr(fd.Body)
 	c.currentFn = nil
@@ -600,6 +663,7 @@ func (c *Checker) checkFnDecl(fd FnDecl) {
 	c.currentFn = &fd
 	for _, param := range fd.Params {
 		c.scope.Define(param.Name, param.Type)
+
 	}
 
 	// Check body and verify return type
@@ -661,6 +725,7 @@ func (c *Checker) checkExpr(expr Expr) {
 		for _, p := range e.Params {
 			if p.Type != nil {
 				c.scope.Define(p.Name, p.Type)
+	
 			}
 		}
 		c.checkExpr(e.Body)
@@ -703,11 +768,13 @@ func (c *Checker) checkStmt(stmt Stmt) {
 		} else if s.Type != nil {
 			// Explicit type annotation: let name: Type = expr
 			c.scope.Define(s.Name, s.Type)
+
 		} else {
 			// Simple binding — infer from value
 			t := c.inferType(s.Value)
 			if t != nil {
 				c.scope.Define(s.Name, t)
+
 			}
 		}
 	case DeferStmt:
@@ -928,14 +995,22 @@ func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 			if subjectType != nil {
 				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Result" && len(nt.Params) > 0 {
 					c.scope.Define(p.Fields[0].Binding, nt.Params[0])
+	
 				}
 			}
 			return
 		}
 		if p.Name == "Error" && len(p.Fields) > 0 {
 			if subjectType != nil {
-				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Result" && len(nt.Params) > 1 {
-					c.scope.Define(p.Fields[0].Binding, nt.Params[1])
+				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Result" {
+					var errType Type
+					if len(nt.Params) > 1 {
+						errType = nt.Params[1]
+					} else {
+						errType = NamedType{Name: "error"} // Result[T] implies Result[T, error]
+					}
+					c.scope.Define(p.Fields[0].Binding, errType)
+	
 				}
 			}
 			return
@@ -944,6 +1019,7 @@ func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 			if subjectType != nil {
 				if nt, ok := subjectType.(NamedType); ok && nt.Name == "Option" && len(nt.Params) > 0 {
 					c.scope.Define(p.Fields[0].Binding, nt.Params[0])
+	
 				}
 			}
 			return
@@ -966,6 +1042,7 @@ func (c *Checker) bindPatternVars(pat Pattern, subjectType Type) {
 		for i, fp := range p.Fields {
 			if i < len(ctor.Fields) {
 				c.scope.Define(fp.Binding, ctor.Fields[i].Type)
+	
 			}
 		}
 	case BindPattern:

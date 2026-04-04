@@ -210,6 +210,11 @@ func getHoverInfo(source string, line, col int) string {
 		return ""
 	}
 
+	// Look up local variables and parameters
+	if sym := checker.LookupSymbol(word); sym != nil {
+		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeName(sym.Type))
+	}
+
 	// Look up in checker's scope: functions
 	if fn, ok := checker.functions[word]; ok {
 		return formatFnHover(fn)
