@@ -543,15 +543,28 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt, indent string) {
 
 func (em *Emitter) emitConstrainedLetStmt(stmt IRConstrainedLetStmt, indent string) {
 	em.tmpCounter++
-	tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
 	tmpErr := fmt.Sprintf("__cerr%d", em.tmpCounter)
-	em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
-	em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, stmt.GoName, stmt.GoType))
-	em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-	em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpErr))
-	em.writeln(fmt.Sprintf("%s} else {", indent))
-	em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpVal))
-	em.writeln(fmt.Sprintf("%s}", indent))
+
+	if stmt.ErrorOnly {
+		// Go func returns error only: err := f()
+		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
+		em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, stmt.GoName, stmt.GoType))
+		em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
+		em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpErr))
+		em.writeln(fmt.Sprintf("%s} else {", indent))
+		em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s{})", indent, stmt.GoName, stmt.GoType, stmt.GoType))
+		em.writeln(fmt.Sprintf("%s}", indent))
+	} else {
+		// Go func returns (T, error): val, err := f()
+		tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
+		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
+		em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, stmt.GoName, stmt.GoType))
+		em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
+		em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpErr))
+		em.writeln(fmt.Sprintf("%s} else {", indent))
+		em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, stmt.GoName, stmt.GoType, tmpVal))
+		em.writeln(fmt.Sprintf("%s}", indent))
+	}
 }
 
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {

@@ -438,9 +438,10 @@ type IRLetStmt struct {
 
 // Let with constrained constructor: generates Result wrapping
 type IRConstrainedLetStmt struct {
-	GoName   string
-	CallExpr IRExpr // the constructor call expression
-	GoType   string // "Email"
+	GoName    string
+	CallExpr  IRExpr // the constructor call expression
+	GoType    string // "Email"
+	ErrorOnly bool   // true if Go func returns error only
 }
 
 // Try let: let x = expr? — error propagation

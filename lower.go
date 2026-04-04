@@ -21,7 +21,8 @@ type Lowerer struct {
 	// Per-function state
 	declaredVars    map[string]int
 	varNames        map[string]string
-	varArcaTypes    map[string]Type // arca name → AST type for validation
+	varArcaTypes    map[string]Type   // arca name → AST type for validation
+	varIRTypes      map[string]IRType // arca name → IR type for Go FFI resolution
 	currentRetType  Type
 	currentReceiver string
 	currentTypeName string
@@ -427,6 +428,7 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	l.declaredVars = nil
 	l.varNames = nil
 	l.varArcaTypes = nil
+	l.varIRTypes = nil
 
 	return IRFuncDecl{
 		GoName:     name,
@@ -472,6 +474,7 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	l.declaredVars = nil
 	l.varNames = nil
 	l.varArcaTypes = nil
+	l.varIRTypes = nil
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -615,6 +618,7 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 	l.declaredVars = nil
 	l.varNames = nil
 	l.varArcaTypes = nil
+	l.varIRTypes = nil
 
 	return IRFuncDecl{
 		GoName:     funcName,
@@ -670,11 +674,13 @@ func (l *Lowerer) initFnScope(params []FnParam) {
 	l.declaredVars = make(map[string]int)
 	l.varNames = make(map[string]string)
 	l.varArcaTypes = make(map[string]Type)
+	l.varIRTypes = make(map[string]IRType)
 	for _, p := range params {
 		goName := snakeToCamel(p.Name)
 		l.declaredVars[goName] = 1
 		l.varNames[goName] = goName
 		l.varArcaTypes[p.Name] = p.Type
+		l.varIRTypes[p.Name] = l.lowerType(p.Type)
 		l.recordSymbol(p.Name, p.Type, SymParameter)
 	}
 }
@@ -919,7 +925,13 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	if l.varArcaTypes != nil {
 		arcaType = l.varArcaTypes[e.Name]
 	}
-	return IRIdent{GoName: goName, Type: IRInterfaceType{}, Source: SourceInfo{Type: arcaType}}
+	irType := IRType(IRInterfaceType{})
+	if l.varIRTypes != nil {
+		if t, ok := l.varIRTypes[e.Name]; ok {
+			irType = t
+		}
+	}
+	return IRIdent{GoName: goName, Type: irType, Source: SourceInfo{Type: arcaType}}
 }
 
 func (l *Lowerer) lowerStringInterp(si StringInterp) IRExpr {
@@ -1703,6 +1715,20 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 		}}
 	}
 
+	// Go FFI call returning error only (without ?): wrap in Result[Unit, error]
+	if l.isErrorOnlyCall(s.Value) {
+		l.builtins["result"] = true
+		loweredExpr := l.lowerExpr(s.Value)
+		goVarName := l.declareVar(s.Name)
+		l.recordSymbol(s.Name, NamedType{Name: "Result", Params: []Type{NamedType{Name: "Unit"}, NamedType{Name: "error"}}}, SymVariable)
+		return []IRStmt{IRConstrainedLetStmt{
+			GoName:    goVarName,
+			CallExpr:  loweredExpr,
+			GoType:    "struct{}",
+			ErrorOnly: true,
+		}}
+	}
+
 	loweredValue := l.lowerExpr(s.Value)
 	var loweredType IRType
 	if s.Type != nil {
@@ -1715,6 +1741,14 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	} else if t := l.inferASTType(s.Value); t != nil {
 		l.recordSymbol(s.Name, t, SymVariable)
 		l.setVarArcaType(s.Name, t)
+	}
+	// Record IR type for Go FFI resolution on subsequent method/field access
+	if l.varIRTypes != nil {
+		if irT := loweredValue.irType(); irT != nil {
+			if _, isInterface := irT.(IRInterfaceType); !isInterface {
+				l.varIRTypes[s.Name] = irT
+			}
+		}
 	}
 
 	return []IRStmt{IRLetStmt{
