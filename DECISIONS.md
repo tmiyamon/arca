@@ -113,7 +113,7 @@ The IR already provides:
 - Match pattern bindings (Ok/Error/Some/constructor fields) — from Scope.onDefine
 - `Result[T]` treated as `Result[T, error]` for Error pattern binding
 
-**Status:** Phase A+B complete. Phase C (Go FFI method/field resolution in hover) not yet done.
+**Status:** Phase A+B complete. Phase C enabled by Phase 3/4 (method/field type resolution in IR).
 
 ---
 
@@ -141,8 +141,8 @@ The IR already provides:
 **Scope (incremental):**
 - Phase 1: Load packages, resolve return types, validate argument count ✅
 - Phase 2: Validate argument types (Arca type → Go type mapping) ✅
-- Phase 3: Method resolution on Go types (`w.Header().Set(...)`) — not yet
-- Phase 4: Struct field access validation — not yet
+- Phase 3: Method resolution on Go types (`w.Header().Set(...)`) ✅
+- Phase 4: Struct field access type resolution (`r.URL.Path`) ✅
 
 **Why now:** IR is in place. Type info goes into IR nodes during lowering. Emit doesn't need to change. Without IR, this would have required threading type info through the string-building codegen — impractical.
 

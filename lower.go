@@ -1008,11 +1008,13 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		// Regular method call: obj.method(args)
 		methodName := l.resolveMethodName(fa.Field)
 		args := l.lowerCallArgs(e)
+		receiver := l.lowerExpr(fa.Expr)
+		retType := l.resolveMethodReturnType(receiver, fa.Field)
 		return IRMethodCall{
-			Receiver: l.lowerExpr(fa.Expr),
+			Receiver: receiver,
 			Method:   methodName,
 			Args:     args,
-			Type:     IRInterfaceType{}, // TODO: resolve via typeResolver.ResolveMethod
+			Type:     retType,
 		}
 	}
 
@@ -1155,6 +1157,62 @@ func goTypeToIRName(goType string) string {
 	return goType
 }
 
+// resolveReceiverGoType extracts the Go package and type name from an IR expression's type.
+func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) {
+	irType := expr.irType()
+	if irType == nil {
+		return "", "", false
+	}
+	named, isNamed := irType.(IRNamedType)
+	if !isNamed {
+		if ptr, isPtr := irType.(IRPointerType); isPtr {
+			if inner, isInner := ptr.Inner.(IRNamedType); isInner {
+				named = inner
+				isNamed = true
+			}
+		}
+	}
+	if !isNamed || !strings.Contains(named.GoName, ".") {
+		return "", "", false
+	}
+	parts := strings.SplitN(named.GoName, ".", 2)
+	if fullPkg, exists := l.goPackages[parts[0]]; exists {
+		return fullPkg, parts[1], true
+	}
+	return "", "", false
+}
+
+// resolveMethodReturnType resolves the return type of a method call on a Go type.
+func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) IRType {
+	pkg, typ, ok := l.resolveReceiverGoType(receiver)
+	if !ok {
+		return IRInterfaceType{}
+	}
+	info := l.typeResolver.ResolveMethod(pkg, typ, method)
+	if info == nil {
+		return IRInterfaceType{}
+	}
+	return l.goFuncReturnType(info)
+}
+
+// resolveFieldType resolves the type of a field access on a Go type.
+func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
+	pkg, typ, ok := l.resolveReceiverGoType(receiver)
+	if !ok {
+		return IRInterfaceType{}
+	}
+	typeInfo := l.typeResolver.ResolveType(pkg, typ)
+	if typeInfo == nil {
+		return IRInterfaceType{}
+	}
+	for _, f := range typeInfo.Fields {
+		if f.Name == field {
+			return IRNamedType{GoName: goTypeToIRName(f.Type)}
+		}
+	}
+	return IRInterfaceType{}
+}
+
 // lowerCallArgs lowers function call arguments with context-aware type coercion.
 func (l *Lowerer) lowerCallArgs(e FnCall) []IRExpr {
 	args := make([]IRExpr, len(e.Args))
@@ -1220,10 +1278,12 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 }
 
 func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
+	receiver := l.lowerExpr(e.Expr)
+	fieldType := l.resolveFieldType(receiver, capitalize(e.Field))
 	return IRFieldAccess{
-		Expr:  l.lowerExpr(e.Expr),
+		Expr:  receiver,
 		Field: capitalize(e.Field),
-		Type:  IRInterfaceType{},
+		Type:  fieldType,
 	}
 }
 
