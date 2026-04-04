@@ -6,9 +6,23 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
+var showTimings bool
+
 func main() {
+	// Extract --timings flag from args
+	var filteredArgs []string
+	for _, a := range os.Args[1:] {
+		if a == "--timings" {
+			showTimings = true
+		} else {
+			filteredArgs = append(filteredArgs, a)
+		}
+	}
+	os.Args = append([]string{os.Args[0]}, filteredArgs...)
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -361,7 +375,27 @@ type transpileResult struct {
 	goModule    string          // go module path (e.g. "arcabuild")
 }
 
+type timings struct {
+	parse   time.Duration
+	check   time.Duration
+	codegen time.Duration
+	goBuild time.Duration
+}
+
+func (t timings) print() {
+	fmt.Fprintf(os.Stderr, "  parse:     %s\n", t.parse)
+	fmt.Fprintf(os.Stderr, "  check:     %s\n", t.check)
+	fmt.Fprintf(os.Stderr, "  codegen:   %s\n", t.codegen)
+	if t.goBuild > 0 {
+		fmt.Fprintf(os.Stderr, "  go build:  %s\n", t.goBuild)
+	}
+	fmt.Fprintf(os.Stderr, "  total:     %s\n", t.parse+t.check+t.codegen+t.goBuild)
+}
+
+var timing timings
+
 func transpile(inputPath string) (*transpileResult, error) {
+	t0 := time.Now()
 	mainProg, err := parseFile(inputPath)
 	if err != nil {
 		return nil, err
@@ -382,7 +416,9 @@ func transpile(inputPath string) (*transpileResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	timing.parse = time.Since(t0)
 
+	t1 := time.Now()
 	checker := NewChecker()
 	if errs := checker.Check(mergedProg); len(errs) > 0 {
 		var msgs []string
@@ -391,7 +427,9 @@ func transpile(inputPath string) (*transpileResult, error) {
 		}
 		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
 	}
+	timing.check = time.Since(t1)
 
+	t2 := time.Now()
 	goModule := "arcabuild"
 
 	// Generate per-file Go code for same-dir files
@@ -415,6 +453,7 @@ func transpile(inputPath string) (*transpileResult, error) {
 		mainCg.goModule = goModule
 	}
 	mainCode := mainCg.GenerateMain(mainProg, subModules)
+	timing.codegen = time.Since(t2)
 
 	return &transpileResult{
 		goCode:    mainCode,
@@ -702,6 +741,9 @@ func emitCmd(inputPath string) int {
 		return 1
 	}
 	fmt.Print(result.goCode)
+	if showTimings {
+		timing.print()
+	}
 	return 0
 }
 
@@ -734,6 +776,7 @@ func runCmd(inputPath string) int {
 		return 1
 	}
 
+	t0 := time.Now()
 	cmd := exec.Command("go", "run", ".")
 	cmd.Dir = buildDir
 	cmd.Stdout = os.Stdout
@@ -744,6 +787,10 @@ func runCmd(inputPath string) int {
 		}
 		fmt.Fprintf(os.Stderr, "error running: %v\n", err)
 		return 1
+	}
+	timing.goBuild = time.Since(t0)
+	if showTimings {
+		timing.print()
 	}
 	return 0
 }
@@ -772,6 +819,7 @@ func buildCmd(inputPath string, outputPath string) int {
 		return 1
 	}
 
+	t0 := time.Now()
 	cmd := exec.Command("go", "build", "-o", absOutput, ".")
 	cmd.Dir = buildDir
 	cmd.Stdout = os.Stdout
@@ -783,6 +831,10 @@ func buildCmd(inputPath string, outputPath string) int {
 		fmt.Fprintf(os.Stderr, "error building: %v\n", err)
 		return 1
 	}
+	timing.goBuild = time.Since(t0)
 	fmt.Fprintf(os.Stderr, "Built: %s\n", outputPath)
+	if showTimings {
+		timing.print()
+	}
 	return 0
 }
