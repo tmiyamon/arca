@@ -454,6 +454,16 @@ func transpile(inputPath string) (*transpileResult, error) {
 	// Generate main file
 	mainLowerer := NewLowerer(mergedProg, goModule, resolver)
 	irProg := mainLowerer.Lower(mainProg, "main", false)
+
+	// Check for lowering errors (Go FFI type checking)
+	if errs := mainLowerer.Errors(); len(errs) > 0 {
+		var msgs []string
+		for _, e := range errs {
+			msgs = append(msgs, formatError(inputPath, e.Pos, e.Message))
+		}
+		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
+	}
+
 	// Add sub-module imports
 	for modName := range subModules {
 		irProg.Imports = append(irProg.Imports, IRImport{Path: goModule + "/" + modName})

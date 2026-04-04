@@ -29,6 +29,20 @@ type Lowerer struct {
 	imports    []IRImport
 	builtins   map[string]bool
 	tmpCounter int
+	errors     []LowerError
+}
+
+type LowerError struct {
+	Pos     Pos
+	Message string
+}
+
+func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
+	l.errors = append(l.errors, LowerError{Pos: pos, Message: fmt.Sprintf(format, args...)})
+}
+
+func (l *Lowerer) Errors() []LowerError {
+	return l.errors
 }
 
 func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer {
@@ -917,8 +931,18 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		}
 	}
 
-	// Module-qualified call: module.fn(args)
+	// Go FFI or module-qualified call
 	if fa, ok := e.Fn.(FieldAccess); ok {
+		// Go FFI call: strconv.Itoa(...), http.HandleFunc(...)
+		if ident, ok := fa.Expr.(Ident); ok {
+			if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
+				goCallName := ident.Name + "." + fa.Field
+				args := l.lowerCallArgs(e)
+				retType := l.resolveGoCall(goCallName, args, e.Pos)
+				return IRFnCall{Func: goCallName, Args: args, Type: retType}
+			}
+		}
+		// Arca module-qualified call
 		if ident, ok := fa.Expr.(Ident); ok && l.moduleNames[ident.Name] {
 			fnName := fa.Field
 			if goName, ok := l.fnNames[fnName]; ok {
@@ -948,17 +972,16 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 	args := l.lowerCallArgs(e)
 	fnExpr := l.lowerExpr(e.Fn)
 	if ident, ok := fnExpr.(IRIdent); ok {
-		retType := l.resolveGoCallType(ident.GoName, args)
+		retType := l.resolveGoCall(ident.GoName, args, e.Pos)
 		return IRFnCall{Func: ident.GoName, Args: args, Type: retType}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}}
 }
 
-// resolveGoCallType uses the TypeResolver to determine the return type of a Go FFI call.
-// For "pkg.Func" names, it looks up the function signature and returns the resolved IR type.
-// Falls back to IRInterfaceType{} if unknown.
-func (l *Lowerer) resolveGoCallType(goName string, args []IRExpr) IRType {
+// resolveGoCall validates a Go FFI function call and returns the resolved return type.
+// Checks argument count and types against the Go function signature.
+func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) IRType {
 	if !strings.Contains(goName, ".") {
 		return IRInterfaceType{}
 	}
@@ -976,7 +999,87 @@ func (l *Lowerer) resolveGoCallType(goName string, args []IRExpr) IRType {
 		return IRInterfaceType{}
 	}
 
+	// Validate argument count
+	minArgs := len(info.Params)
+	if info.Variadic {
+		minArgs-- // last param is variadic, not required
+	}
+	if !info.Variadic && len(args) != len(info.Params) {
+		l.addError(pos, "'%s' expects %d arguments, got %d", goName, len(info.Params), len(args))
+	} else if info.Variadic && len(args) < minArgs {
+		l.addError(pos, "'%s' expects at least %d arguments, got %d", goName, minArgs, len(args))
+	}
+
+	// Validate argument types (Phase 2)
+	for i, arg := range args {
+		argType := irTypeToGoString(arg.irType())
+		if argType == "" {
+			continue // unknown type — skip
+		}
+
+		var paramType string
+		if i < len(info.Params) {
+			paramType = info.Params[i].Type
+		}
+
+		// Variadic: args beyond param count check against the variadic element type
+		if info.Variadic && i >= len(info.Params)-1 {
+			variadicSliceType := info.Params[len(info.Params)-1].Type
+			// "[]string" → "string", "[]any" → "any"
+			if strings.HasPrefix(variadicSliceType, "[]") {
+				paramType = variadicSliceType[2:]
+			}
+		}
+
+		if paramType != "" && !goTypesCompatible(argType, paramType) {
+			l.addError(pos, "argument %d of '%s' expects %s, got %s", i+1, goName, paramType, argType)
+		}
+	}
+
 	return l.goFuncReturnType(info)
+}
+
+// irTypeToGoString converts an IRType to a Go type string for comparison.
+// Returns "" if the type is unknown/interface{}.
+func irTypeToGoString(t IRType) string {
+	if t == nil {
+		return ""
+	}
+	switch tt := t.(type) {
+	case IRNamedType:
+		switch tt.GoName {
+		case "int", "float64", "string", "bool", "byte", "struct{}":
+			return tt.GoName
+		default:
+			return "" // user-defined or complex — skip check
+		}
+	case IRListType:
+		elem := irTypeToGoString(tt.Elem)
+		if elem != "" {
+			return "[]" + elem
+		}
+		return ""
+	case IRInterfaceType:
+		return "" // unknown — skip check
+	default:
+		return ""
+	}
+}
+
+// goTypesCompatible checks if an Arca-resolved Go type is compatible with a Go parameter type.
+func goTypesCompatible(arcaType, goParam string) bool {
+	if arcaType == goParam {
+		return true
+	}
+	// interface{}/any accepts everything
+	if goParam == "any" || goParam == "interface{}" {
+		return true
+	}
+	// Variadic slice: []any, []interface{}, []string etc.
+	if strings.HasPrefix(goParam, "[]") && strings.HasPrefix(arcaType, "[]") {
+		return goTypesCompatible(arcaType[2:], goParam[2:])
+	}
+	return false
 }
 
 // goFuncReturnType converts a FuncInfo's return types to an IRType.
