@@ -87,6 +87,23 @@ Source → AST → IR (normalized) → Go output
 
 **Dependency:** Adds `golang.org/x/tools/go/packages` to go.mod.
 
+**Architecture: Arca/Go boundary as interface.**
+Arca's type world and Go's type world are fundamentally separate. The lowerer must not depend on `go/types` directly. Instead, a `TypeResolver` interface abstracts the boundary:
+
+```go
+type TypeResolver interface {
+    ResolveFunc(pkg, name string) *FuncInfo
+    ResolveType(pkg, name string) *TypeInfo
+    ResolveMethod(typ, method string) *FuncInfo
+}
+```
+
+Implementations:
+- `GoTypeResolver` — uses `go/types` via `golang.org/x/tools/go/packages`
+- `NullTypeResolver` — returns nil for everything (current behavior, tests)
+
+This keeps lower.go free of `go/types` imports. The Arca→Go type mapping rules are concentrated in `GoTypeResolver`, not scattered across the codebase. If Go's type system changes or a non-Go backend is added, only the resolver implementation changes.
+
 ---
 
 ## 2026-04-04: Sum type methods — per-variant expansion
