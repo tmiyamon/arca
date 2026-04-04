@@ -21,6 +21,7 @@ func checkSource(source string) []CheckError {
 }
 
 func TestCheckerUnknownType(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Order {
   Order(id: Int, status: Unknown)
@@ -35,6 +36,7 @@ type Order {
 }
 
 func TestCheckerUnknownConstructor(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun make() -> String {
   Bogus(id: 1)
@@ -49,6 +51,7 @@ fun make() -> String {
 }
 
 func TestCheckerWrongFieldCount(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Point {
   Point(x: Int, y: Int)
@@ -67,6 +70,7 @@ fun make() -> Point {
 }
 
 func TestCheckerWrongFieldName(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Point {
   Point(x: Int, y: Int)
@@ -85,6 +89,7 @@ fun make() -> Point {
 }
 
 func TestCheckerNonExhaustiveMatch(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Color {
   Red
@@ -108,6 +113,7 @@ fun name(c: Color) -> String {
 }
 
 func TestCheckerExhaustiveMatchOk(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Color {
   Red
@@ -129,6 +135,7 @@ fun name(c: Color) -> String {
 }
 
 func TestCheckerWildcardMatchOk(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Color {
   Red
@@ -149,6 +156,7 @@ fun name(c: Color) -> String {
 }
 
 func TestCheckerUnknownReturnType(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun make() -> Bogus {
   42
@@ -163,6 +171,7 @@ fun make() -> Bogus {
 }
 
 func TestCheckerValidCodeNoErrors(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Status {
   Active
@@ -186,6 +195,7 @@ pub fun is_active(u: User) -> Bool {
 }
 
 func TestCheckerWrongArgCount(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun add(a: Int, b: Int) -> Int {
   a + b
@@ -204,6 +214,7 @@ fun main() {
 }
 
 func TestCheckerWrongArgType(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun greet(name: String) -> String {
   name
@@ -222,6 +233,7 @@ fun main() {
 }
 
 func TestCheckerReturnTypeMismatch(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun get_name() -> String {
   42
@@ -236,6 +248,7 @@ fun get_name() -> String {
 }
 
 func TestCheckerConstructorFieldTypeMismatch(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Point {
   Point(x: Int, y: Int)
@@ -254,6 +267,7 @@ fun make() -> Point {
 }
 
 func TestCheckerLetInference(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 fun greet(name: String) -> String {
   name
@@ -273,6 +287,7 @@ fun main() {
 }
 
 func TestCheckerMatchPatternBindingType(t *testing.T) {
+	t.Parallel()
 	errs := checkSource(`
 type Wrapper {
   Wrap(value: Int)
@@ -297,6 +312,7 @@ fun use(w: Wrapper) -> String {
 }
 
 func TestCheckerConstraintCompatibility(t *testing.T) {
+	t.Parallel()
 	// AdultAge → Age: compatible (stricter range fits in wider range)
 	errs := checkSource(`
 type Age = Int{min: 0, max: 150}

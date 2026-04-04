@@ -23,7 +23,40 @@ func transpileSource(source string) (*transpileResult, error) {
 	return transpile(arcaFile)
 }
 
+// runE2E is a helper for E2E tests: transpile → go run → check output.
+func runE2E(t *testing.T, arcaFile string, expected string) {
+	t.Helper()
+	t.Parallel()
+
+	result, err := transpile(arcaFile)
+	if err != nil {
+		t.Fatalf("transpile error: %v", err)
+	}
+
+	dir, err := os.MkdirTemp("", "arca-e2e-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "run", goFile)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run failed:\n%s", output)
+	}
+
+	if string(output) != expected {
+		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
+	}
+}
+
 func TestCodegen(t *testing.T) {
+	t.Parallel()
 	entries, err := filepath.Glob("testdata/*.arca")
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +64,7 @@ func TestCodegen(t *testing.T) {
 	for _, arcaFile := range entries {
 		name := strings.TrimSuffix(filepath.Base(arcaFile), ".arca")
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			goFile := strings.TrimSuffix(arcaFile, ".arca") + ".go"
 			expected, err := os.ReadFile(goFile)
 			if err != nil {
@@ -50,6 +84,7 @@ func TestCodegen(t *testing.T) {
 }
 
 func TestGeneratedGoCompiles(t *testing.T) {
+	t.Parallel()
 	entries, err := filepath.Glob("testdata/*.arca")
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +96,7 @@ func TestGeneratedGoCompiles(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			result, err := transpile(arcaFile)
 			if err != nil {
 				t.Fatalf("transpile error: %v", err)
@@ -87,6 +123,7 @@ func TestGeneratedGoCompiles(t *testing.T) {
 }
 
 func TestE2EMultifile(t *testing.T) {
+	t.Parallel()
 	buildCmd := exec.Command("go", "build", "-o", "arca_test_bin", ".")
 	if err := buildCmd.Run(); err != nil {
 		t.Fatalf("failed to build arca: %v", err)
@@ -106,7 +143,7 @@ func TestE2EMultifile(t *testing.T) {
 }
 
 func TestE2ESubmodule(t *testing.T) {
-	// Build arca binary first
+	t.Parallel()
 	buildCmd := exec.Command("go", "build", "-o", "arca_test_bin", ".")
 	if err := buildCmd.Run(); err != nil {
 		t.Fatalf("failed to build arca: %v", err)
@@ -125,279 +162,51 @@ func TestE2ESubmodule(t *testing.T) {
 	}
 }
 
+func TestE2E(t *testing.T) {
+	runE2E(t, "testdata/hello.arca", "Hello from Arca!\nred\nblue\n")
+}
+
 func TestE2EPrintln(t *testing.T) {
-	arcaFile := "testdata/println.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-println-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "hello\nworld42\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/println.arca", "hello\nworld42\n")
 }
 
 func TestE2EConstrainedResult(t *testing.T) {
-	arcaFile := "testdata/constrained_result.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-constrained-result-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "test@example.com\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/constrained_result.arca", "test@example.com\n")
 }
 
 func TestE2ESumMethod(t *testing.T) {
-	arcaFile := "testdata/sum_method.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-sum-method-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "Rex says woof\nLuna says meow\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/sum_method.arca", "Rex says woof\nLuna says meow\n")
 }
 
 func TestE2ETryOperator(t *testing.T) {
-	arcaFile := "testdata/try_operator.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-try-operator-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "42\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/try_operator.arca", "42\n")
 }
 
 func TestE2EShadowing(t *testing.T) {
-	arcaFile := "testdata/shadowing.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-shadowing-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "hello\n42\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/shadowing.arca", "hello\n42\n")
 }
 
 func TestE2ELambda(t *testing.T) {
-	arcaFile := "testdata/lambda.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-lambda-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "[20 40 60]\n[2 3 4]\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/lambda.arca", "[20 40 60]\n[2 3 4]\n")
 }
 
 func TestE2EPipe(t *testing.T) {
-	arcaFile := "testdata/pipe.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-pipe-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "10\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/pipe.arca", "10\n")
 }
 
 func TestE2EListSpread(t *testing.T) {
-	arcaFile := "testdata/list_spread.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-list-spread-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "[0 1 2 3]\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/list_spread.arca", "[0 1 2 3]\n")
 }
 
 func TestE2EStringInterp(t *testing.T) {
-	arcaFile := "testdata/string_interp.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-string-interp-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "Hello World, you are 30!\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
+	runE2E(t, "testdata/string_interp.arca", "Hello World, you are 30!\n")
 }
 
 func TestGoFFITypeCheck(t *testing.T) {
-	// Test 1: Wrong argument count for a Go function
+	t.Parallel()
+
 	t.Run("wrong_arg_count", func(t *testing.T) {
+		t.Parallel()
 		_, err := transpileSource(`
 import go "strings"
 
@@ -413,8 +222,8 @@ fun main() {
 		}
 	})
 
-	// Test 2: Wrong argument type for a Go function
 	t.Run("wrong_arg_type", func(t *testing.T) {
+		t.Parallel()
 		_, err := transpileSource(`
 import go "strings"
 
@@ -430,8 +239,8 @@ fun main() {
 		}
 	})
 
-	// Test 3: Correct Go FFI call compiles fine
 	t.Run("correct_call", func(t *testing.T) {
+		t.Parallel()
 		_, err := transpileSource(`
 import go "strings"
 
@@ -443,34 +252,4 @@ fun main() {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
-}
-
-func TestE2E(t *testing.T) {
-	arcaFile := "testdata/hello.arca"
-	result, err := transpile(arcaFile)
-	if err != nil {
-		t.Fatalf("transpile error: %v", err)
-	}
-
-	dir, err := os.MkdirTemp("", "arca-e2e-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	goFile := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cmd := exec.Command("go", "run", goFile)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run failed:\n%s", output)
-	}
-
-	expected := "Hello from Arca!\nred\nblue\n"
-	if string(output) != expected {
-		t.Errorf("output mismatch\nexpected: %q\ngot:      %q", expected, string(output))
-	}
 }
