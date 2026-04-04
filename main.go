@@ -432,11 +432,12 @@ func transpile(inputPath string) (*transpileResult, error) {
 	t2 := time.Now()
 	goModule := "arcabuild"
 	emitter := &Emitter{}
+	resolver := NewGoTypeResolver()
 
 	// Generate per-file Go code for same-dir files
 	var modules []moduleCode
 	for fileName, fileProg := range sameDirFiles {
-		lowerer := NewLowerer(fileProg, "")
+		lowerer := NewLowerer(fileProg, "", resolver)
 		irProg := lowerer.Lower(fileProg, "main", true)
 		code := emitter.Emit(irProg)
 		modules = append(modules, moduleCode{packageName: fileName, goCode: code})
@@ -444,14 +445,14 @@ func transpile(inputPath string) (*transpileResult, error) {
 
 	// Generate sub-directory module Go code
 	for modName, modProg := range subModules {
-		lowerer := NewLowerer(modProg, "")
+		lowerer := NewLowerer(modProg, "", resolver)
 		irProg := lowerer.Lower(modProg, modName, true)
 		code := emitter.Emit(irProg)
 		modules = append(modules, moduleCode{packageName: modName, goCode: code, isSubDir: true})
 	}
 
 	// Generate main file
-	mainLowerer := NewLowerer(mergedProg, goModule)
+	mainLowerer := NewLowerer(mergedProg, goModule, resolver)
 	irProg := mainLowerer.Lower(mainProg, "main", false)
 	// Add sub-module imports
 	for modName := range subModules {

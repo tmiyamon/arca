@@ -78,7 +78,7 @@ Source → AST → IR (normalized) → Go output
 4. Report errors as Arca `file:line:col` messages
 
 **Scope (incremental):**
-- Phase 1: Load packages, validate function call argument count, resolve return types
+- Phase 1: Load packages, resolve return types on Go FFI calls ✅ (partial — return type resolution working, argument validation next)
 - Phase 2: Validate argument types (need Arca type ↔ Go type mapping)
 - Phase 3: Method resolution on Go types (`w.Header().Set(...)`)
 - Phase 4: Struct field access validation

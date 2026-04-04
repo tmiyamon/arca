@@ -8,13 +8,15 @@ import (
 // Lowerer converts an AST Program into an IR Program.
 // It resolves names, constructors, builtins, shadowing, and match kinds.
 type Lowerer struct {
-	types       map[string]TypeDecl
-	typeAliases map[string]TypeAliasDecl
-	ctorTypes   map[string]string // constructor name → type name
-	fnNames     map[string]string // arca name → Go name for pub functions
-	functions   map[string]FnDecl
-	moduleNames map[string]bool
-	goModule    string
+	types        map[string]TypeDecl
+	typeAliases  map[string]TypeAliasDecl
+	ctorTypes    map[string]string // constructor name → type name
+	fnNames      map[string]string // arca name → Go name for pub functions
+	functions    map[string]FnDecl
+	moduleNames  map[string]bool
+	goModule     string
+	typeResolver  TypeResolver
+	goPackages    map[string]string // short name → import path (e.g. "http" → "net/http")
 
 	// Per-function state
 	declaredVars    map[string]int
@@ -29,16 +31,20 @@ type Lowerer struct {
 	tmpCounter int
 }
 
-func NewLowerer(prog *Program, goModule string) *Lowerer {
+func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer {
+	if resolver == nil {
+		resolver = NullTypeResolver{}
+	}
 	l := &Lowerer{
-		types:       make(map[string]TypeDecl),
-		typeAliases: make(map[string]TypeAliasDecl),
-		ctorTypes:   make(map[string]string),
-		fnNames:     make(map[string]string),
-		functions:   make(map[string]FnDecl),
-		moduleNames: make(map[string]bool),
-		builtins:    make(map[string]bool),
-		goModule:    goModule,
+		types:        make(map[string]TypeDecl),
+		typeAliases:  make(map[string]TypeAliasDecl),
+		ctorTypes:    make(map[string]string),
+		fnNames:      make(map[string]string),
+		functions:    make(map[string]FnDecl),
+		moduleNames:  make(map[string]bool),
+		builtins:     make(map[string]bool),
+		goModule:     goModule,
+		typeResolver: resolver,
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -55,8 +61,15 @@ func NewLowerer(prog *Program, goModule string) *Lowerer {
 				l.moduleNames[parts[len(parts)-1]] = true
 			}
 			if strings.HasPrefix(d.Path, "go/") {
+				goPath := d.Path[3:]
+				pathParts := strings.Split(goPath, "/")
+				shortName := pathParts[len(pathParts)-1]
+				if l.goPackages == nil {
+					l.goPackages = make(map[string]string)
+				}
+				l.goPackages[shortName] = goPath
 				l.imports = append(l.imports, IRImport{
-					Path:       d.Path[3:],
+					Path:       goPath,
 					SideEffect: d.SideEffect,
 				})
 			}
@@ -928,17 +941,64 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			Receiver: l.lowerExpr(fa.Expr),
 			Method:   methodName,
 			Args:     args,
-			Type:     IRInterfaceType{},
+			Type:     IRInterfaceType{}, // TODO: resolve via typeResolver.ResolveMethod
 		}
 	}
 
 	args := l.lowerCallArgs(e)
 	fnExpr := l.lowerExpr(e.Fn)
 	if ident, ok := fnExpr.(IRIdent); ok {
-		return IRFnCall{Func: ident.GoName, Args: args, Type: IRInterfaceType{}}
+		retType := l.resolveGoCallType(ident.GoName, args)
+		return IRFnCall{Func: ident.GoName, Args: args, Type: retType}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}}
+}
+
+// resolveGoCallType uses the TypeResolver to determine the return type of a Go FFI call.
+// For "pkg.Func" names, it looks up the function signature and returns the resolved IR type.
+// Falls back to IRInterfaceType{} if unknown.
+func (l *Lowerer) resolveGoCallType(goName string, args []IRExpr) IRType {
+	if !strings.Contains(goName, ".") {
+		return IRInterfaceType{}
+	}
+	parts := strings.SplitN(goName, ".", 2)
+	pkgShort := parts[0]
+	funcName := parts[1]
+
+	pkgPath, ok := l.goPackages[pkgShort]
+	if !ok {
+		return IRInterfaceType{}
+	}
+
+	info := l.typeResolver.ResolveFunc(pkgPath, funcName)
+	if info == nil {
+		return IRInterfaceType{}
+	}
+
+	return l.goFuncReturnType(info)
+}
+
+// goFuncReturnType converts a FuncInfo's return types to an IRType.
+func (l *Lowerer) goFuncReturnType(info *FuncInfo) IRType {
+	if len(info.Results) == 0 {
+		return IRNamedType{GoName: "struct{}"}
+	}
+	if len(info.Results) == 1 {
+		return IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}
+	}
+	// (T, error) → keep as-is for now, handled by ? operator
+	return IRInterfaceType{}
+}
+
+// goTypeToIRName converts a go/types type string to a short Go type name.
+func goTypeToIRName(goType string) string {
+	// go/types returns fully qualified names like "net/http.ResponseWriter"
+	// We need just the short form "http.ResponseWriter"
+	if idx := strings.LastIndex(goType, "/"); idx >= 0 {
+		return goType[idx+1:]
+	}
+	return goType
 }
 
 // lowerCallArgs lowers function call arguments with context-aware type coercion.
