@@ -52,7 +52,7 @@ Source → AST → IR (normalized) → Go output
 
 **Verification:** `arca emit-ir` command added for parallel comparison. All testdata files produce semantically identical output to the existing `arca emit`. Performance is equivalent (sub-millisecond).
 
-**Status:** New pipeline works in parallel. Next step: switch `arca emit/run/build` to use the IR pipeline and remove old codegen.
+**Status:** Complete. All commands use the IR pipeline. Old codegen.go, codegen_match.go, codegen_builtins.go removed. Shared helpers moved to helpers.go.
 
 ---
 

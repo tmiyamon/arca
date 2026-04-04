@@ -67,12 +67,6 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(emitCmd(os.Args[2]))
-	case "emit-ir":
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "Usage: arca emit-ir <file.arca>")
-			os.Exit(1)
-		}
-		os.Exit(emitIRCmd(os.Args[2]))
 	case "fmt":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "Usage: arca fmt <file.arca>")
@@ -437,33 +431,44 @@ func transpile(inputPath string) (*transpileResult, error) {
 
 	t2 := time.Now()
 	goModule := "arcabuild"
+	emitter := &Emitter{}
 
 	// Generate per-file Go code for same-dir files
 	var modules []moduleCode
 	for fileName, fileProg := range sameDirFiles {
-		cg := NewCodeGen(fileProg)
-		code := cg.Generate(fileProg)
+		lowerer := NewLowerer(fileProg, "")
+		irProg := lowerer.Lower(fileProg, "main", true)
+		code := emitter.Emit(irProg)
 		modules = append(modules, moduleCode{packageName: fileName, goCode: code})
 	}
 
 	// Generate sub-directory module Go code
 	for modName, modProg := range subModules {
-		cg := NewCodeGen(modProg)
-		code := cg.GeneratePackage(modName, modProg)
+		lowerer := NewLowerer(modProg, "")
+		irProg := lowerer.Lower(modProg, modName, true)
+		code := emitter.Emit(irProg)
 		modules = append(modules, moduleCode{packageName: modName, goCode: code, isSubDir: true})
 	}
 
 	// Generate main file
-	mainCg := NewCodeGen(mergedProg)
-	if len(subModules) > 0 {
-		mainCg.goModule = goModule
+	mainLowerer := NewLowerer(mergedProg, goModule)
+	irProg := mainLowerer.Lower(mainProg, "main", false)
+	// Add sub-module imports
+	for modName := range subModules {
+		irProg.Imports = append(irProg.Imports, IRImport{Path: goModule + "/" + modName})
 	}
-	mainCode := mainCg.GenerateMain(mainProg, subModules)
+	mainCode := emitter.Emit(irProg)
 	timing.codegen = time.Since(t2)
+
+	// Convert IR imports to goImportEntry for build system
+	var goImports []goImportEntry
+	for _, imp := range mainLowerer.imports {
+		goImports = append(goImports, goImportEntry{path: imp.Path, sideEffect: imp.SideEffect})
+	}
 
 	return &transpileResult{
 		goCode:    mainCode,
-		goImports: mainCg.goImports,
+		goImports: goImports,
 		modules:   modules,
 		goModule:  goModule,
 	}, nil
@@ -747,48 +752,6 @@ func emitCmd(inputPath string) int {
 		return 1
 	}
 	fmt.Print(result.goCode)
-	if showTimings {
-		timing.print()
-	}
-	return 0
-}
-
-func emitIRCmd(inputPath string) int {
-	t0 := time.Now()
-	mainProg, err := parseFile(inputPath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	expandAliases(mainProg)
-	loaded := map[string]bool{inputPath: true}
-	mergedProg, err := resolveImports(inputPath, mainProg, loaded)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	timing.parse = time.Since(t0)
-
-	t1 := time.Now()
-	checker := NewChecker()
-	if errs := checker.Check(mergedProg); len(errs) > 0 {
-		var msgs []string
-		for _, e := range errs {
-			msgs = append(msgs, formatError(inputPath, e.Pos, e.Message))
-		}
-		fmt.Fprintln(os.Stderr, strings.Join(msgs, "\n"))
-		return 1
-	}
-	timing.check = time.Since(t1)
-
-	t2 := time.Now()
-	lowerer := NewLowerer(mergedProg, "")
-	irProg := lowerer.Lower(mainProg)
-	emitter := &Emitter{}
-	output := emitter.Emit(irProg)
-	timing.codegen = time.Since(t2)
-
-	fmt.Print(output)
 	if showTimings {
 		timing.print()
 	}

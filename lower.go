@@ -71,7 +71,9 @@ func NewLowerer(prog *Program, goModule string) *Lowerer {
 }
 
 // Lower converts the entire program.
-func (l *Lowerer) Lower(prog *Program) IRProgram {
+// pkgName is the Go package name ("main" for main files).
+// pubOnly limits function output to pub functions only (for same-dir module files).
+func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	var types []IRTypeDecl
 	var funcs []IRFuncDecl
 
@@ -86,6 +88,9 @@ func (l *Lowerer) Lower(prog *Program) IRProgram {
 			types = append(types, l.lowerTypeAliasDecl(d))
 		case FnDecl:
 			if d.ReceiverType == "" {
+				if pubOnly && !d.Public {
+					continue
+				}
 				funcs = append(funcs, l.lowerFnDecl(d))
 			}
 		}
@@ -108,6 +113,7 @@ func (l *Lowerer) Lower(prog *Program) IRProgram {
 	}
 
 	return IRProgram{
+		Package:  pkgName,
 		Imports:  imports,
 		Types:    types,
 		Funcs:    funcs,

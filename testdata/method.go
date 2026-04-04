@@ -8,6 +8,7 @@ type User struct {
 	Name string
 	Age int
 }
+
 func (u User) isAdult() bool {
 	return u.Age >= 18
 }
@@ -19,7 +20,6 @@ func (u User) ToJson() string {
 func (u User) greet(greeting string) string {
 	return fmt.Sprintf("%v, %v!", greeting, u.Name)
 }
-
 
 func main() {
 	user := User{Name: "Alice", Age: 30}
