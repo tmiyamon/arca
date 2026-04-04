@@ -891,7 +891,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			l.builtins["fmt"] = true
 			args := l.lowerExprs(e.Args)
 			return IRFnCall{Func: "fmt.Print", Args: args, Type: IRNamedType{GoName: "struct{}"}}
-		case "to_bytes":
+		case "toBytes":
 			if len(e.Args) == 1 {
 				// []byte(expr) — modeled as a function call
 				return IRFnCall{
