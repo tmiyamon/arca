@@ -56,6 +56,42 @@ Source → AST → IR (normalized) → Go output
 
 ---
 
+## 2026-04-04: Sum type methods — per-variant expansion
+
+**Context:** Methods on sum types (multi-constructor ADTs) generated `func (a ApiError) send(...)` in Go, which is invalid because `ApiError` is an interface. Go doesn't allow methods on interface types.
+
+**Decision:** Methods with `match self` on sum types are expanded into per-variant methods during IR lowering.
+
+Arca source:
+```arca
+type ApiError {
+  NotFound(message: String)
+  BadRequest(message: String)
+  fun send(w: http.ResponseWriter) {
+    match self {
+      NotFound(msg) -> sendJson(w, 404, msg)
+      BadRequest(msg) -> sendJson(w, 400, msg)
+    }
+  }
+}
+```
+
+Generated Go:
+```go
+type ApiError interface {
+    isApiError()
+    send(w http.ResponseWriter)  // method in interface
+}
+func (a ApiErrorNotFound) send(w http.ResponseWriter) { ... }
+func (a ApiErrorBadRequest) send(w http.ResponseWriter) { ... }
+```
+
+Each variant struct gets its own implementation with the corresponding match arm body. The interface definition includes the method signature so the method is callable on interface-typed values.
+
+This is the idiomatic Go pattern for interface + variant structs.
+
+---
+
 ## 2026-04-04: Constrained field auto-construction (future)
 
 **Context:** A type with constrained fields like `type User(email: Email)` requires manual construction of `Email` before `User`. This leads to boilerplate factory functions (`static fun from(...)`).

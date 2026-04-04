@@ -149,6 +149,17 @@ func (em *Emitter) emitSumTypeDecl(d IRSumTypeDecl) {
 	tp := em.goTypeParams(d.TypeParams)
 	em.writeln(fmt.Sprintf("type %s%s interface {", d.GoName, tp))
 	em.writeln(fmt.Sprintf("\tis%s()", d.GoName))
+	for _, m := range d.InterfaceMethods {
+		params := make([]string, len(m.Params))
+		for i, p := range m.Params {
+			params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
+		}
+		retStr := ""
+		if m.ReturnType != nil {
+			retStr = " " + em.irTypeStr(m.ReturnType)
+		}
+		em.writeln(fmt.Sprintf("\t%s(%s)%s", m.Name, strings.Join(params, ", "), retStr))
+	}
 	em.writeln("}")
 	em.writeln("")
 	for _, v := range d.Variants {

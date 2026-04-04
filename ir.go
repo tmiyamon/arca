@@ -83,9 +83,16 @@ type IRStructDecl struct {
 }
 
 type IRSumTypeDecl struct {
-	GoName     string
-	TypeParams []string
-	Variants   []IRVariantDecl
+	GoName           string
+	TypeParams       []string
+	Variants         []IRVariantDecl
+	InterfaceMethods []IRInterfaceMethod // methods that variants implement
+}
+
+type IRInterfaceMethod struct {
+	Name       string // Go method name
+	Params     []IRParamDecl
+	ReturnType IRType
 }
 
 type IRTypeAliasDecl struct {
