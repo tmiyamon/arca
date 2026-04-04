@@ -131,9 +131,9 @@ func TestE2EMultifile(t *testing.T) {
 	defer os.Remove("arca_test_bin")
 
 	cmd := exec.Command("./arca_test_bin", "run", "testdata/multifile/main.arca")
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("arca run failed:\n%s", output)
+		t.Fatalf("arca run failed: %v", err)
 	}
 
 	expected := "Alice\n"
@@ -151,9 +151,9 @@ func TestE2ESubmodule(t *testing.T) {
 	defer os.Remove("arca_test_bin")
 
 	cmd := exec.Command("./arca_test_bin", "run", "testdata/submod/main.arca")
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("arca run failed:\n%s", output)
+		t.Fatalf("arca run failed: %v", err)
 	}
 
 	expected := "3\n12\n"

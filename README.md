@@ -1,5 +1,7 @@
 # Arca
 
+[![Test](https://github.com/tmiyamon/arca/actions/workflows/test.yml/badge.svg)](https://github.com/tmiyamon/arca/actions/workflows/test.yml)
+
 An expressive language that compiles to Go.
 
 ```
