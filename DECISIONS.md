@@ -56,6 +56,39 @@ Source → AST → IR (normalized) → Go output
 
 ---
 
+## 2026-04-04: Go type integration via go/types
+
+**Context:** Arca currently has no knowledge of Go's type system. Go FFI calls (`fmt.Println`, `http.HandleFunc`, etc.) are passed through without type checking. Errors are only caught when Go compiles the generated output, producing Go error messages that point to generated code — confusing for Arca users.
+
+**Problem:** This is not just a "nice to have" — it's a structural gap. Without Go type information:
+- Type errors in Go FFI calls only appear at Go compile time with Go file:line references
+- Expression type inference falls back to `interface{}` for anything involving Go types
+- LSP can't provide hover/completion for Go FFI calls
+- No way to validate generated Go correctness before output
+
+**Decision: Integrate `go/types` via `golang.org/x/tools/go/packages` into the lowering phase.**
+
+**How it works:**
+1. When lowering encounters `import go "fmt"`, load `fmt`'s type info via `packages.Load`
+2. Cache loaded packages (most programs import the same packages)
+3. During lowering, when resolving `fmt.Println(x)`:
+   - Look up `Println` in `fmt`'s scope → get `*types.Func` → get signature
+   - Validate argument count and types against Arca's type info
+   - Set accurate return type on the IR node (instead of `interface{}`)
+4. Report errors as Arca `file:line:col` messages
+
+**Scope (incremental):**
+- Phase 1: Load packages, validate function call argument count, resolve return types
+- Phase 2: Validate argument types (need Arca type ↔ Go type mapping)
+- Phase 3: Method resolution on Go types (`w.Header().Set(...)`)
+- Phase 4: Struct field access validation
+
+**Why now:** IR is in place. Type info goes into IR nodes during lowering. Emit doesn't need to change. Without IR, this would have required threading type info through the string-building codegen — impractical.
+
+**Dependency:** Adds `golang.org/x/tools/go/packages` to go.mod.
+
+---
+
 ## 2026-04-04: Sum type methods — per-variant expansion
 
 **Context:** Methods on sum types (multi-constructor ADTs) generated `func (a ApiError) send(...)` in Go, which is invalid because `ApiError` is an interface. Go doesn't allow methods on interface types.
