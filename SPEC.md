@@ -445,6 +445,7 @@ assert x > 0
 
 ```
 myapp/
+├── go.mod                 // Go module (arca init creates, user manages with go get)
 ├── main.arca              // entry point
 ├── user.arca              // same package (same dir)
 ├── db.arca
@@ -460,7 +461,7 @@ myapp/
 Generated Go (1:1 file mapping):
 ```
 build/
-├── go.mod
+├── go.mod                 // copied from project root
 ├── main.go                // package main
 ├── user.go                // package main (same dir = same package)
 ├── db.go                  // package main
@@ -469,7 +470,7 @@ build/
 ```
 
 ```
-arca init myapp            // create new project
+arca init myapp            // create new project (with go.mod)
 arca build                 // build ./main.arca
 arca build cmd/server      // build cmd/server/main.arca
 arca run                   // run ./main.arca

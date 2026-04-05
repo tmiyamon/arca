@@ -44,6 +44,8 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **Sum type methods**: `match self` methods expanded to per-variant Go methods in lower.go.
 - **Prelude**: Built-in functions defined in one map. Adding a builtin = one line.
 - **TypeResolver boundary**: Lowerer never imports go/types directly.
+- **GoMultiReturn**: Go FFI calls carry `GoMultiReturn` flag + `IRResultType`/`IROptionType`. `goFuncReturnType` maps `(T, error)` → Result, `(T, bool)` → Option, 3+ → Tuple. Consumption sites read IR types, no ad-hoc detection.
+- **Project go.mod**: TypeResolver uses nearest go.mod (walked up from .arca file) for package resolution. `goModule` read from go.mod, not hardcoded.
 
 ## Adding a New Language Feature
 

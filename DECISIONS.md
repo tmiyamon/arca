@@ -4,7 +4,15 @@ Design discussions and their reasoning. Newest first.
 
 ---
 
-## 2026-04-05: Go package availability detection (open problem)
+## 2026-04-05: Dependency management — go.mod now, Arca packages later
+
+**Decision:** Use go.mod for dependency management. Arca projects are Go modules.
+
+**Future:** Arca will likely need its own package system. Use cases: transpiler plugins, tag system extensions, Arca-native libraries that need transpilation before use. These don't fit in go.mod because they have a different lifecycle (transpile → then compile). Format TBD (`arca.toml`, go.mod extension, etc.) — decide when the first Arca library is needed.
+
+---
+
+## 2026-04-05: Go package availability detection (open problem → solved by project structure)
 
 **Context:** `examples/todo.arca` imports `github.com/labstack/echo/v5`. The package was not `go get`-ed for the current project, but existed in the Go module cache (`~/go/pkg/mod/`) from another project. `GoTypeResolver` (via `go/packages.Load`) resolved the package from cache and returned type information successfully — but `go build` failed because the package was not in `go.mod`.
 
@@ -12,7 +20,55 @@ Design discussions and their reasoning. Newest first.
 
 **Attempted fix:** Added `PackageAvailable` check to detect whether a package is in `go.mod`. Reverted because the cache made the detection unreliable.
 
-**Status:** Open. Needs a different approach — possibly checking `go.mod` directly, or running `go get` as part of the transpile pipeline.
+**Root cause:** The real problem was that the pipeline ran `go get` AFTER TypeResolver (step 6 vs step 2). TypeResolver couldn't resolve packages that weren't yet available. The module cache masked this by sometimes resolving packages that weren't in the project's go.mod.
+
+**Solution:** Restructure so that go.mod exists at the project root BEFORE transpilation. TypeResolver uses the project's go.mod via `packages.Config.Dir`. User manages dependencies with `go get` upfront, like Go itself.
+
+---
+
+## 2026-04-05: Project structure and build pipeline
+
+**Context:** The transpiler pipeline generates go.mod in a temporary build/ directory and runs `go get` during build. This causes two problems: (1) TypeResolver runs before `go get`, so external packages can't be resolved — type info is missing, GoMultiReturn not set, wrong code generated. (2) Module cache can make TypeResolver succeed even without `go get`, causing inconsistent behavior.
+
+**Decision: Arca projects use go.mod at the project root. Go-standard dependency management.**
+
+Project structure:
+```
+myproject/
+  go.mod          ← arca init creates, user manages with go get
+  main.arca
+  build/          ← generated .go files + copied go.mod/go.sum
+    go.mod        ← copy of parent's go.mod
+    go.sum        ← copy of parent's go.sum
+    main.go
+```
+
+Pipeline:
+```
+1. parse
+2. Find go.mod by walking up from .arca file
+3. TypeResolver init (dir = go.mod directory)
+4. lower + validate
+5. emit
+6. write build/ (.go files + copy go.mod/go.sum)
+7. go build/run in build/
+```
+
+Key decisions:
+- **go.mod at project root**: user manages with `go get`, same as Go projects
+- **build/ inside project**: conventional (like Rust target/, TS dist/)
+- **build/go.mod**: copy of parent, not generated. Module name stays `arcabuild` for clean submodule import paths
+- **go get removed from pipeline**: user responsibility, like Go itself
+- **go.mod discovery**: walk up from .arca file to find nearest go.mod (same as Go toolchain)
+- **No go.mod = stdlib only**: TypeResolver initialized without dir, external packages produce error
+- **Missing package UX**: list all unresolvable packages, suggest `go get pkg1 pkg2 ...`
+- **arca init**: creates go.mod via `go mod init`
+- **examples/ with external deps**: separate project directories with own go.mod
+- **emit / LSP**: same pipeline, benefits automatically from TypeResolver improvements
+
+**Future:** Arca will likely need its own package system for transpiler plugins, tag extensions, Arca-native libraries. Format TBD — decide when the first Arca library is needed.
+
+**Status:** Not yet implemented.
 
 ---
 

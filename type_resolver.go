@@ -49,12 +49,17 @@ type TypeResolver interface {
 	// typ is the full qualified type (e.g. "http.ResponseWriter"), method is the method name.
 	// Returns nil if unknown.
 	ResolveMethod(pkg, typ, method string) *FuncInfo
+
+	// CanLoadPackage checks if a Go package can be loaded.
+	// Returns true if the package is resolvable (in go.mod or stdlib).
+	CanLoadPackage(pkg string) bool
 }
 
 // NullTypeResolver returns nil for all queries — preserves current behavior
 // where Go FFI types are not checked by Arca.
 type NullTypeResolver struct{}
 
-func (NullTypeResolver) ResolveFunc(pkg, name string) *FuncInfo              { return nil }
-func (NullTypeResolver) ResolveType(pkg, name string) *TypeInfo              { return nil }
-func (NullTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo     { return nil }
+func (NullTypeResolver) ResolveFunc(pkg, name string) *FuncInfo          { return nil }
+func (NullTypeResolver) ResolveType(pkg, name string) *TypeInfo          { return nil }
+func (NullTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo { return nil }
+func (NullTypeResolver) CanLoadPackage(pkg string) bool                  { return true }

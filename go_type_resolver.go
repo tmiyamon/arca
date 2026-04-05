@@ -12,11 +12,13 @@ import (
 type GoTypeResolver struct {
 	mu    sync.Mutex
 	cache map[string]*types.Package // import path → loaded package
+	dir   string                    // project directory (for go.mod resolution)
 }
 
-func NewGoTypeResolver() *GoTypeResolver {
+func NewGoTypeResolver(dir string) *GoTypeResolver {
 	return &GoTypeResolver{
 		cache: make(map[string]*types.Package),
+		dir:   dir,
 	}
 }
 
@@ -30,9 +32,10 @@ func (r *GoTypeResolver) loadPackage(pkg string) *types.Package {
 
 	cfg := &packages.Config{
 		Mode: packages.NeedTypes | packages.NeedName,
+		Dir:  r.dir,
 	}
 	pkgs, err := packages.Load(cfg, pkg)
-	if err != nil || len(pkgs) == 0 || pkgs[0].Types == nil {
+	if err != nil || len(pkgs) == 0 || pkgs[0].Types == nil || len(pkgs[0].Errors) > 0 {
 		r.cache[pkg] = nil
 		return nil
 	}
@@ -141,6 +144,10 @@ func (r *GoTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo {
 	}
 
 	return nil
+}
+
+func (r *GoTypeResolver) CanLoadPackage(pkg string) bool {
+	return r.loadPackage(pkg) != nil
 }
 
 func sigToFuncInfo(sig *types.Signature) *FuncInfo {

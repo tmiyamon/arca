@@ -112,6 +112,10 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 					Path:       goPath,
 					SideEffect: d.SideEffect,
 				})
+				// Check if the package can be loaded
+				if !isStdLib(goPath) && !l.typeResolver.CanLoadPackage(goPath) {
+					l.addError(Pos{}, "package %s not found. Run: go get %s", goPath, goPath)
+				}
 			}
 		case FnDecl:
 			l.functions[d.Name] = d

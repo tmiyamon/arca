@@ -421,9 +421,10 @@ func transpile(inputPath string) (*transpileResult, error) {
 	timing.parse = time.Since(t0)
 
 	t1 := time.Now()
-	goModule := "arcabuild"
 	emitter := &Emitter{}
-	resolver := NewGoTypeResolver()
+	goModDir := findGoModDir(filepath.Dir(inputPath))
+	goModule := readGoModuleName(goModDir)
+	resolver := NewGoTypeResolver(goModDir)
 
 	// Generate per-file Go code for same-dir files
 	var modules []moduleCode
@@ -548,6 +549,43 @@ func collectModulePrograms(dir string, prog *Program, modules map[string]*Progra
 	}
 }
 
+// findGoModDir walks up from dir to find the nearest directory containing go.mod.
+// Returns "" if no go.mod is found.
+func findGoModDir(dir string) string {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(absDir, "go.mod")); err == nil {
+			return absDir
+		}
+		parent := filepath.Dir(absDir)
+		if parent == absDir {
+			return "" // reached root
+		}
+		absDir = parent
+	}
+}
+
+// readGoModuleName reads the module name from go.mod in the given directory.
+// Returns "arcabuild" as fallback if go.mod is not found or unreadable.
+func readGoModuleName(dir string) string {
+	if dir == "" {
+		return "arcabuild"
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return "arcabuild"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return "arcabuild"
+}
+
 func isStdLib(pkg string) bool {
 	// Go standard library packages don't contain dots in the first segment
 	parts := strings.SplitN(pkg, "/", 2)
@@ -594,46 +632,27 @@ func writeBuildDir(inputPath string, result *transpileResult) (string, error) {
 		}
 	}
 
-	// Collect external dependencies
-	var externalDeps []string
-	for _, imp := range result.goImports {
-		if !isStdLib(imp.path) {
-			externalDeps = append(externalDeps, imp.path)
+	// Copy go.mod/go.sum from project root (if exists)
+	projectDir := findGoModDir(filepath.Dir(inputPath))
+	if projectDir != "" {
+		for _, name := range []string{"go.mod", "go.sum"} {
+			src := filepath.Join(projectDir, name)
+			if data, err := os.ReadFile(src); err == nil {
+				if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+					return "", fmt.Errorf("failed to copy %s: %w", name, err)
+				}
+			}
 		}
-	}
-
-	// Write go.mod
-	goModName := result.goModule
-	if goModName == "" {
-		goModName = "arcabuild"
-	}
-	modFile := filepath.Join(dir, "go.mod")
-	if _, err := os.Stat(modFile); os.IsNotExist(err) {
-		cmd := exec.Command("go", "mod", "init", goModName)
-		cmd.Dir = dir
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("go mod init failed: %w", err)
-		}
-	}
-
-	// Add external dependencies
-	for _, dep := range externalDeps {
-		cmd := exec.Command("go", "get", dep)
-		cmd.Dir = dir
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("go get %s failed: %w", dep, err)
-		}
-	}
-
-	// Tidy
-	if len(externalDeps) > 0 {
-		cmd := exec.Command("go", "mod", "tidy")
-		cmd.Dir = dir
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("go mod tidy failed: %w", err)
+	} else {
+		// No project go.mod: generate minimal go.mod for stdlib-only builds
+		modFile := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(modFile); os.IsNotExist(err) {
+			cmd := exec.Command("go", "mod", "init", "arcabuild")
+			cmd.Dir = dir
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return "", fmt.Errorf("go mod init failed: %w", err)
+			}
 		}
 	}
 
@@ -678,6 +697,15 @@ fun main() {
 	mainPath := filepath.Join(name, "main.arca")
 	if err := os.WriteFile(mainPath, []byte(mainArca), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing main.arca: %v\n", err)
+		return 1
+	}
+
+	// Initialize go.mod
+	cmd := exec.Command("go", "mod", "init", name)
+	cmd.Dir = name
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing go.mod: %v\n", err)
 		return 1
 	}
 

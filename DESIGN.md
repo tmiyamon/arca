@@ -64,12 +64,18 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 ## Go FFI
 
 - **Import syntax**: `import go.fmt` (dot separator, unified with Arca modules)
-- **Type checking**: Go FFI calls are **not type-checked** by Arca. Go compiler catches these.
+- **Type checking**: Go FFI argument count/types validated via `TypeResolver` (go/types)
+- **TypeResolver**: Uses project's `go.mod` for package resolution. `packages.Config.Dir` set to nearest go.mod directory (walked up from .arca file). Missing packages produce error with `go get` suggestion.
 - **Qualified types**: `http.ResponseWriter`, `*http.Request` are passed through as-is
-- **Return type mapping**:
-  - `(T, error)` → captured by `?` operator
-  - No automatic wrapping into Result struct
+- **Return type mapping** (mechanical, in `goFuncReturnType`):
+  - `(T, error)` → `Result[T, error]` (GoMultiReturn)
+  - `(T, bool)` → `Option[T]` (GoMultiReturn)
+  - `(error)` → `Result[Unit, error]` (GoMultiReturn)
+  - `(T)` → `T`
+  - `(T1, T2, ...)` → Tuple (GoMultiReturn)
+- **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection.
 - **Pointer types**: `*Type` syntax exists solely for Go FFI interop
+- **Project structure**: `go.mod` at project root, managed by user with `go get`. `build/go.mod` copied from parent.
 
 ## Pattern Matching
 

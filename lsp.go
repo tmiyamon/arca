@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tliron/commonlog"
@@ -108,7 +109,8 @@ func lspDidSave(ctx *glsp.Context, params *protocol.DidSaveTextDocumentParams) e
 // --- Diagnostics ---
 
 func lspDiagnose(ctx *glsp.Context, uri string, source string) error {
-	diagnostics := collectDiagnostics(source)
+	filePath := strings.TrimPrefix(string(uri), "file://")
+	diagnostics := collectDiagnostics(source, filePath)
 	ctx.Notify(protocol.ServerTextDocumentPublishDiagnostics, protocol.PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: diagnostics,
@@ -116,7 +118,7 @@ func lspDiagnose(ctx *glsp.Context, uri string, source string) error {
 	return nil
 }
 
-func collectDiagnostics(source string) []protocol.Diagnostic {
+func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 	diagnostics := []protocol.Diagnostic{} // must be empty slice, not nil (Neovim requires it)
 	severity := protocol.DiagnosticSeverityError
 
@@ -147,7 +149,9 @@ func collectDiagnostics(source string) []protocol.Diagnostic {
 	}
 
 	// Lower → validate
-	lowerer := NewLowerer(prog, "", nil)
+	goModDir := findGoModDir(filepath.Dir(filePath))
+	resolver := NewGoTypeResolver(goModDir)
+	lowerer := NewLowerer(prog, "", resolver)
 	irProg := lowerer.Lower(prog, "main", false)
 
 	for _, e := range lowerer.Errors() {
@@ -184,7 +188,8 @@ func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover,
 	line := int(params.Position.Line) + 1     // LSP is 0-based, Arca is 1-based
 	col := int(params.Position.Character) + 1
 
-	info := getHoverInfo(source, line, col)
+	filePath := strings.TrimPrefix(string(uri), "file://")
+	info := getHoverInfo(source, filePath, line, col)
 	if info == "" {
 		return nil, nil
 	}
@@ -197,7 +202,7 @@ func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover,
 	}, nil
 }
 
-func getHoverInfo(source string, line, col int) string {
+func getHoverInfo(source string, filePath string, line, col int) string {
 	// Parse and lower to get type info
 	lexer := NewLexer(source)
 	tokens, err := lexer.Tokenize()
@@ -211,7 +216,9 @@ func getHoverInfo(source string, line, col int) string {
 		return ""
 	}
 
-	lowerer := NewLowerer(prog, "", nil)
+	goModDir := findGoModDir(filepath.Dir(filePath))
+	resolver := NewGoTypeResolver(goModDir)
+	lowerer := NewLowerer(prog, "", resolver)
 	lowerer.Lower(prog, "main", false)
 
 	// Find the token at the given position

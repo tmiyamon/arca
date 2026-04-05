@@ -1,0 +1,29 @@
+//import go "time.Time"
+import go "github.com/labstack/echo/v5"
+import go "net/http"
+
+//type Todo (
+//  content: String { max_length: 255 }, 
+//  isFinished: Bool,
+//  createdAt: time.Time, 
+//  dueAt: time.Time
+//)
+
+fun listTodo(c: *echo.Context) -> error {
+  c.String(http.StatusOK, "Hello World!")
+}
+
+fun main() {
+  let e = echo.New()
+
+  e.GET("/", listTodo)
+
+  let result = e.Start(":8080")
+  match result {
+    Ok(_) -> Unit
+    Error(error) -> println("failed to start server", "error", error)
+  }
+}
+
+  
+  
