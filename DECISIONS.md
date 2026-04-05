@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-05
 
+- [Unit in void context](decisions/transpiler.md#2026-04-05-unit-in-void-context-generates-unused-value-open-bug) — `Ok(_) -> Unit` emits unused `struct{}{}`. Open bug
 - [Project structure and build pipeline](decisions/toolchain.md#2026-04-05-project-structure-and-build-pipeline) — go.mod at project root, build/ copies it, go get removed from pipeline
 - [Go package availability detection](decisions/toolchain.md#2026-04-05-go-package-availability-detection-open-problem--solved-by-project-structure) — module cache masked missing packages → solved by project-level go.mod
 - [Dependency management](decisions/toolchain.md#2026-04-05-dependency-management--gomod-now-arca-packages-later) — go.mod now, Arca package system later

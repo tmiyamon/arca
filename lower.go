@@ -16,7 +16,7 @@ type Lowerer struct {
 	moduleNames  map[string]bool
 	goModule     string
 	typeResolver  TypeResolver
-	goPackages    map[string]string // short name → import path (e.g. "http" → "net/http")
+	goPackages    map[string]*GoPackage // short name → Go package info
 
 	// Per-function state
 	declaredVars    map[string]int
@@ -101,20 +101,18 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 				l.moduleNames[parts[len(parts)-1]] = true
 			}
 			if strings.HasPrefix(d.Path, "go/") {
-				goPath := d.Path[3:]
-				pathParts := strings.Split(goPath, "/")
-				shortName := pathParts[len(pathParts)-1]
+				pkg := NewGoPackage(d.Path[3:])
 				if l.goPackages == nil {
-					l.goPackages = make(map[string]string)
+					l.goPackages = make(map[string]*GoPackage)
 				}
-				l.goPackages[shortName] = goPath
+				l.goPackages[pkg.ShortName] = pkg
 				l.imports = append(l.imports, IRImport{
-					Path:       goPath,
+					Path:       pkg.FullPath,
 					SideEffect: d.SideEffect,
 				})
 				// Check if the package can be loaded
-				if !isStdLib(goPath) && !l.typeResolver.CanLoadPackage(goPath) {
-					l.addError(Pos{}, "package %s not found. Run: go get %s", goPath, goPath)
+				if !isStdLib(pkg.FullPath) && !l.typeResolver.CanLoadPackage(pkg.FullPath) {
+					l.addError(Pos{}, "package %s not found. Run: go get %s", pkg.FullPath, pkg.FullPath)
 				}
 			}
 		case FnDecl:
@@ -1059,12 +1057,12 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 	pkgShort := parts[0]
 	funcName := parts[1]
 
-	pkgPath, ok := l.goPackages[pkgShort]
+	goPkg, ok := l.goPackages[pkgShort]
 	if !ok {
 		return goReturnInfo{Type: IRInterfaceType{}}
 	}
 
-	info := l.typeResolver.ResolveFunc(pkgPath, funcName)
+	info := l.typeResolver.ResolveFunc(goPkg.FullPath, funcName)
 	if info == nil {
 		return goReturnInfo{Type: IRInterfaceType{}}
 	}
@@ -1179,18 +1177,18 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 				GoMultiReturn: true,
 			}
 		}
-		return goReturnInfo{Type: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}}
+		return goReturnInfo{Type: goTypeToIR(info.Results[0].Type)}
 	}
 	if len(info.Results) == 2 {
 		if info.Results[1].Type == "error" {
 			return goReturnInfo{
-				Type:          IRResultType{Ok: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}, Err: IRNamedType{GoName: "error"}},
+				Type:          IRResultType{Ok: goTypeToIR(info.Results[0].Type), Err: IRNamedType{GoName: "error"}},
 				GoMultiReturn: true,
 			}
 		}
 		if info.Results[1].Type == "bool" {
 			return goReturnInfo{
-				Type:          IROptionType{Inner: IRNamedType{GoName: goTypeToIRName(info.Results[0].Type)}},
+				Type:          IROptionType{Inner: goTypeToIR(info.Results[0].Type)},
 				GoMultiReturn: true,
 			}
 		}
@@ -1198,7 +1196,7 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 	// 2+ non-special or 3+ returns → Tuple
 	elems := make([]IRType, len(info.Results))
 	for i, r := range info.Results {
-		elems[i] = IRNamedType{GoName: goTypeToIRName(r.Type)}
+		elems[i] = goTypeToIR(r.Type)
 	}
 	return goReturnInfo{
 		Type:          IRTupleType{Elements: elems},
@@ -1207,13 +1205,27 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 }
 
 // goTypeToIRName converts a go/types type string to a short Go type name.
-func goTypeToIRName(goType string) string {
-	// go/types returns fully qualified names like "net/http.ResponseWriter"
-	// We need just the short form "http.ResponseWriter"
-	if idx := strings.LastIndex(goType, "/"); idx >= 0 {
-		return goType[idx+1:]
+// goTypeToIR converts a go/types type string to an IRType, handling pointer types.
+func goTypeToIR(goType string) IRType {
+	if strings.HasPrefix(goType, "*") {
+		return IRPointerType{Inner: IRNamedType{GoName: goTypeToIRName(goType[1:])}}
 	}
-	return goType
+	return IRNamedType{GoName: goTypeToIRName(goType)}
+}
+
+// goTypeToIRName converts a go/types type string to a short Go type name.
+// "net/http.ResponseWriter" → "http.ResponseWriter"
+// "github.com/labstack/echo/v5.Echo" → "echo.Echo"
+// Pointer types should be handled by goTypeToIR before calling this.
+func goTypeToIRName(goType string) string {
+	dotIdx := strings.LastIndex(goType, ".")
+	if dotIdx < 0 {
+		return goType // no dot = primitive type ("int", "string", etc.)
+	}
+	pkgPath := goType[:dotIdx]
+	typeName := goType[dotIdx+1:]
+	shortPkg := NewGoPackage(pkgPath).ShortName
+	return shortPkg + "." + typeName
 }
 
 // resolveReceiverGoType extracts the Go package and type name from an IR expression's type.
@@ -1235,8 +1247,8 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 		return "", "", false
 	}
 	parts := strings.SplitN(named.GoName, ".", 2)
-	if fullPkg, exists := l.goPackages[parts[0]]; exists {
-		return fullPkg, parts[1], true
+	if goPkg, exists := l.goPackages[parts[0]]; exists {
+		return goPkg.FullPath, parts[1], true
 	}
 	return "", "", false
 }

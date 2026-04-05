@@ -7,6 +7,29 @@ type goImportEntry struct {
 	sideEffect bool
 }
 
+// GoPackage represents a Go package imported via FFI.
+// Centralizes import path parsing so version suffix logic is in one place.
+type GoPackage struct {
+	ShortName string // "echo", "http", "fmt"
+	FullPath  string // "github.com/labstack/echo/v5", "net/http", "fmt"
+}
+
+// NewGoPackage creates a GoPackage from a Go import path.
+// Handles version suffixes: "github.com/labstack/echo/v5" → ShortName "echo".
+func NewGoPackage(importPath string) *GoPackage {
+	parts := strings.Split(importPath, "/")
+	shortName := parts[len(parts)-1]
+	if len(parts) >= 2 && isVersionSuffix(shortName) {
+		shortName = parts[len(parts)-2]
+	}
+	return &GoPackage{ShortName: shortName, FullPath: importPath}
+}
+
+// isVersionSuffix checks if a path segment is a Go module version suffix (v2, v5, etc.).
+func isVersionSuffix(s string) bool {
+	return len(s) >= 2 && s[0] == 'v' && s[1] >= '0' && s[1] <= '9'
+}
+
 func capitalize(s string) string {
 	if len(s) == 0 {
 		return s

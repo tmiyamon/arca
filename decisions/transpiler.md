@@ -4,6 +4,16 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-05: Unit in void context generates unused value (open bug)
+
+**Problem:** `Ok(_) -> Unit` in a match arm emits `struct{}{}` in Go. Go rejects this as an unused value (`struct{}{} (value of type struct{}) is not used`).
+
+**Root cause:** Emitter doesn't distinguish between match arms that return a value and match arms in void context (expression statement). In void context, `Unit` should emit nothing or `_ = struct{}{}`.
+
+**Status:** Open.
+
+---
+
 ## 2026-04-04: Move type checking to IR
 
 **Context:** Checker runs on AST before lowering. This means type checking and IR type resolution are separate systems with duplicated logic. Adding Go FFI type checking to the checker requires threading TypeResolver through it — but the lowerer already has TypeResolver.

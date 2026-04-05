@@ -2,6 +2,9 @@ package main
 
 import (
 	"go/types"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"golang.org/x/tools/go/packages"
@@ -147,7 +150,49 @@ func (r *GoTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo {
 }
 
 func (r *GoTypeResolver) CanLoadPackage(pkg string) bool {
-	return r.loadPackage(pkg) != nil
+	if isStdLib(pkg) {
+		return r.loadPackage(pkg) != nil
+	}
+	// Non-stdlib: check go.mod require entries, not just module cache
+	return r.isInGoMod(pkg)
+}
+
+// isInGoMod checks if a package path is required in the project's go.mod.
+func (r *GoTypeResolver) isInGoMod(pkg string) bool {
+	if r.dir == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(r.dir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		// Match "require" lines: both single-line and block form
+		// Single: require github.com/foo/bar v1.0.0
+		// Block:  \tgithub.com/foo/bar v1.0.0
+		if strings.HasPrefix(line, "require ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 && isModuleMatch(pkg, parts[1]) {
+				return true
+			}
+		}
+		// Inside require block: lines start with module path
+		if strings.Contains(line, "/") && !strings.HasPrefix(line, "//") && !strings.HasPrefix(line, "module ") && !strings.HasPrefix(line, "go ") && !strings.HasPrefix(line, "require") && !strings.HasPrefix(line, ")") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 && isModuleMatch(pkg, parts[0]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isModuleMatch checks if a package import path belongs to a module.
+// e.g. "github.com/labstack/echo/v5" matches module "github.com/labstack/echo/v5"
+// and "github.com/labstack/echo/v5/middleware" also matches.
+func isModuleMatch(pkg, module string) bool {
+	return pkg == module || strings.HasPrefix(pkg, module+"/")
 }
 
 func sigToFuncInfo(sig *types.Signature) *FuncInfo {

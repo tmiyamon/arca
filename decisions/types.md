@@ -173,10 +173,10 @@ type User(name: String) {
 
 **Levels identified:**
 1. Construction validation ✅
-2. Constraint compatibility (Age vs AdultAge) — planned
+2. Constraint compatibility (Age vs AdultAge) ✅
 3. Condition narrowing (if age >= 18, treat as AdultAge) — future
 4. Go type optimization (Int{0,255} → uint8) — future
-5. JSON/OpenAPI/DB derivation — planned
+5. OpenAPI derivation ✅ / JSON, DB derivation — future (see ideas.md)
 6. Arithmetic propagation (SMT-solver level) — far future
 7. Structural constraints (NonEmptyList) — future
 

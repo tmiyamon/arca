@@ -46,6 +46,8 @@ Key decisions:
 
 **Future:** Arca will likely need its own package system for transpiler plugins, tag extensions, Arca-native libraries. Format TBD — decide when the first Arca library is needed.
 
+**Status:** Implemented. go.mod discovery, GoPackage struct, go.mod require check, build/ copies go.mod/go.sum.
+
 ---
 
 ## 2026-04-05: Go package availability detection (open problem → solved by project structure)
@@ -82,7 +84,7 @@ Key decisions:
 **Phases:**
 - Phase A: Diagnostics — parse/type errors shown in editor on save/change ✅
 - Phase B: Hover — show type info at cursor position ✅
-- Phase C: Go FFI type tracking (Phase 3/4) — method/field resolution for Go types — not yet
+- Phase C: Go FFI type tracking (Phase 3/4) — method/field resolution for Go types ✅ (TypeResolver now passed to LSP)
 
 **Why glsp:** Go library that handles JSON-RPC and LSP protocol dispatch. Avoids writing ~500 lines of protocol boilerplate. LSP spec is stable so dependency risk is low.
 
@@ -97,7 +99,7 @@ Key decisions:
 - Match pattern bindings (Ok/Error/Some/constructor fields) — from Scope.onDefine
 - `Result[T]` treated as `Result[T, error]` for Error pattern binding
 
-**Status:** Phase A+B complete. Phase C enabled by Phase 3/4 (method/field type resolution in IR).
+**Status:** Phase A+B+C complete. LSP uses GoTypeResolver with project go.mod for full Go FFI type resolution.
 
 ---
 

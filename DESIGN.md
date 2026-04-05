@@ -65,7 +65,8 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 - **Import syntax**: `import go.fmt` (dot separator, unified with Arca modules)
 - **Type checking**: Go FFI argument count/types validated via `TypeResolver` (go/types)
-- **TypeResolver**: Uses project's `go.mod` for package resolution. `packages.Config.Dir` set to nearest go.mod directory (walked up from .arca file). Missing packages produce error with `go get` suggestion.
+- **TypeResolver**: Uses project's `go.mod` for package resolution. `packages.Config.Dir` set to nearest go.mod directory (walked up from .arca file). `CanLoadPackage` checks go.mod `require` entries directly (not module cache). Missing packages produce error with `go get` suggestion.
+- **GoPackage struct**: Centralizes Go import path parsing. Handles version suffixes (`github.com/labstack/echo/v5` → ShortName `"echo"`). Used in import registration, type name resolution, and receiver type resolution.
 - **Qualified types**: `http.ResponseWriter`, `*http.Request` are passed through as-is
 - **Return type mapping** (mechanical, in `goFuncReturnType`):
   - `(T, error)` → `Result[T, error]` (GoMultiReturn)
