@@ -38,7 +38,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 ## Key Design Decisions
 
 - **IR abstraction**: New features go in `lower.go` or `prelude.go`. `emit.go` should rarely change.
-- **Structurally exhaustive match**: IR match types require all arms (e.g. IRResultMatch has OkArm + ErrorArm).
+- **Unified IRMatch**: Single `IRMatch` with typed `IRMatchPattern` for all match kinds. Exhaustiveness checked in validate, not structurally enforced by IR types.
 - **Scope.onDefine callback**: All scope.Define() calls auto-record symbols. No manual recording at each binding site.
 - **Variable shadowing**: Lower RHS before declaring variable name.
 - **Sum type methods**: `match self` methods expanded to per-variant Go methods in lower.go.

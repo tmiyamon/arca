@@ -220,43 +220,12 @@ func (v *IRValidation) validateExpr(expr IRExpr) {
 	case IRForEach:
 		v.validateExpr(e.Iter)
 		v.validateExpr(e.Body)
-	case IRResultMatch:
-		v.validateExpr(e.Subject)
-		v.validateExpr(e.OkArm.Body)
-		v.validateExpr(e.ErrorArm.Body)
-	case IROptionMatch:
-		v.validateExpr(e.Subject)
-		v.validateExpr(e.SomeArm.Body)
-		v.validateExpr(e.NoneArm)
-	case IREnumMatch:
+	case IRMatch:
 		v.validateExpr(e.Subject)
 		for _, arm := range e.Arms {
 			v.validateExpr(arm.Body)
 		}
-		if e.Wildcard != nil {
-			v.validateExpr(*e.Wildcard)
-		}
-	case IRSumTypeMatch:
-		v.validateExpr(e.Subject)
-		for _, arm := range e.Arms {
-			v.validateExpr(arm.Body)
-		}
-		if e.Wildcard != nil {
-			v.validateExpr(e.Wildcard.Body)
-		}
-	case IRListMatch:
-		v.validateExpr(e.Subject)
-		for _, arm := range e.Arms {
-			v.validateExpr(arm.Body)
-		}
-	case IRLiteralMatch:
-		v.validateExpr(e.Subject)
-		for _, arm := range e.Arms {
-			v.validateExpr(arm.Body)
-		}
-		if e.Default != nil {
-			v.validateExpr(*e.Default)
-		}
+		v.validateMatchExhaustiveness(e)
 	case IRStringInterp:
 		for _, arg := range e.Args {
 			v.validateExpr(arg)
@@ -515,22 +484,7 @@ func (v *IRValidation) inferExprType(expr IRExpr) Type {
 		return nil
 	case IRNoneExpr:
 		return nil
-	case IRResultMatch:
-		if e.OkArm.Body != nil {
-			return v.inferExprType(e.OkArm.Body)
-		}
-		return nil
-	case IROptionMatch:
-		if e.SomeArm.Body != nil {
-			return v.inferExprType(e.SomeArm.Body)
-		}
-		return nil
-	case IREnumMatch:
-		if len(e.Arms) > 0 {
-			return v.inferExprType(e.Arms[0].Body)
-		}
-		return nil
-	case IRSumTypeMatch:
+	case IRMatch:
 		if len(e.Arms) > 0 {
 			return v.inferExprType(e.Arms[0].Body)
 		}
@@ -708,4 +662,127 @@ func (v *IRValidation) resolveAlias(name string) (string, []Constraint) {
 		}
 	}
 	return name, nil
+}
+
+// --- Match Exhaustiveness ---
+
+func (v *IRValidation) validateMatchExhaustiveness(m IRMatch) {
+	if len(m.Arms) == 0 {
+		return
+	}
+	switch m.Arms[0].Pattern.(type) {
+	case IRResultOkPattern, IRResultErrorPattern:
+		v.checkResultExhaustiveness(m)
+	case IROptionSomePattern, IROptionNonePattern:
+		v.checkOptionExhaustiveness(m)
+	case IREnumPattern:
+		v.checkEnumExhaustiveness(m)
+	case IRSumTypePattern, IRSumTypeWildcardPattern:
+		v.checkSumTypeExhaustiveness(m)
+	}
+	// List and Literal matches don't require exhaustiveness (have default/wildcard patterns)
+}
+
+func (v *IRValidation) checkResultExhaustiveness(m IRMatch) {
+	hasOk, hasError := false, false
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IRResultOkPattern:
+			hasOk = true
+		case IRResultErrorPattern:
+			hasError = true
+		}
+	}
+	if !hasOk {
+		v.addError(m.Pos, "non-exhaustive match: missing Ok arm")
+	}
+	if !hasError {
+		v.addError(m.Pos, "non-exhaustive match: missing Error arm")
+	}
+}
+
+func (v *IRValidation) checkOptionExhaustiveness(m IRMatch) {
+	hasSome, hasNone := false, false
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IROptionSomePattern:
+			hasSome = true
+		case IROptionNonePattern:
+			hasNone = true
+		}
+	}
+	if !hasSome {
+		v.addError(m.Pos, "non-exhaustive match: missing Some arm")
+	}
+	if !hasNone {
+		v.addError(m.Pos, "non-exhaustive match: missing None arm")
+	}
+}
+
+func (v *IRValidation) checkEnumExhaustiveness(m IRMatch) {
+	hasWildcard := false
+	matched := make(map[string]bool)
+	for _, arm := range m.Arms {
+		switch p := arm.Pattern.(type) {
+		case IREnumPattern:
+			matched[p.GoValue] = true
+		case IRWildcardPattern:
+			hasWildcard = true
+		}
+	}
+	if hasWildcard {
+		return
+	}
+	// Find the enum type from the first variant
+	for _, td := range v.types {
+		if !isEnum(td) {
+			continue
+		}
+		for _, c := range td.Constructors {
+			goValue := td.Name + c.Name
+			if matched[goValue] {
+				// This is the right enum type — check all variants
+				for _, ctor := range td.Constructors {
+					if !matched[td.Name+ctor.Name] {
+						v.addError(m.Pos, "non-exhaustive match: missing %s variant", ctor.Name)
+					}
+				}
+				return
+			}
+		}
+	}
+}
+
+func (v *IRValidation) checkSumTypeExhaustiveness(m IRMatch) {
+	hasWildcard := false
+	matched := make(map[string]bool)
+	for _, arm := range m.Arms {
+		switch p := arm.Pattern.(type) {
+		case IRSumTypePattern:
+			matched[p.GoType] = true
+		case IRSumTypeWildcardPattern:
+			hasWildcard = true
+		}
+	}
+	if hasWildcard {
+		return
+	}
+	// Find the sum type from the first variant
+	for _, td := range v.types {
+		if isEnum(td) || len(td.Constructors) <= 1 {
+			continue
+		}
+		for _, c := range td.Constructors {
+			goType := td.Name + c.Name
+			if matched[goType] {
+				// This is the right sum type — check all variants
+				for _, ctor := range td.Constructors {
+					if !matched[td.Name+ctor.Name] {
+						v.addError(m.Pos, "non-exhaustive match: missing %s variant", ctor.Name)
+					}
+				}
+				return
+			}
+		}
+	}
 }

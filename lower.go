@@ -644,7 +644,27 @@ func (l *Lowerer) lowerParams(params []FnParam) []IRParamDecl {
 }
 
 func (l *Lowerer) lowerFnBody(body Expr, hasReturn bool) IRExpr {
-	return l.lowerExpr(body)
+	expr := l.lowerExpr(body)
+	if !hasReturn {
+		expr = l.markVoidContext(expr)
+	}
+	return expr
+}
+
+// markVoidContext replaces trailing Unit in match arms when the result is not used.
+// Applied to void function bodies and expression statements.
+func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
+	if m, ok := expr.(IRMatch); ok {
+		for i := range m.Arms {
+			m.Arms[i].Body = replaceTrailingUnit(m.Arms[i].Body)
+		}
+		return m
+	}
+	if block, ok := expr.(IRBlock); ok && block.Expr != nil {
+		block.Expr = l.markVoidContext(block.Expr)
+		return block
+	}
+	return expr
 }
 
 // --- Variable Scoping ---
@@ -1674,7 +1694,9 @@ func (l *Lowerer) lowerStmt(stmt Stmt) []IRStmt {
 		exprStr := l.exprToString(s.Expr)
 		return []IRStmt{IRAssertStmt{Expr: irExpr, ExprStr: exprStr}}
 	case ExprStmt:
-		return []IRStmt{IRExprStmt{Expr: l.lowerExpr(s.Expr)}}
+		expr := l.lowerExpr(s.Expr)
+		expr = l.markVoidContext(expr)
+		return []IRStmt{IRExprStmt{Expr: expr}}
 	default:
 		return nil
 	}
@@ -1886,8 +1908,7 @@ func (l *Lowerer) isResultMatch(me MatchExpr) bool {
 
 func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var okArm IRResultArm
-	var errorArm IRResultArm
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		cp, ok := arm.Pattern.(ConstructorPattern)
@@ -1906,7 +1927,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 					}
 				}
 			}
-			okArm = IRResultArm{Binding: binding, Body: body}
+			arms = append(arms, IRMatchArm{Pattern: IRResultOkPattern{Binding: binding}, Body: body})
 		}
 		if cp.Name == "Error" {
 			var binding *IRBinding
@@ -1918,16 +1939,11 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 					}
 				}
 			}
-			errorArm = IRResultArm{Binding: binding, Body: body}
+			arms = append(arms, IRMatchArm{Pattern: IRResultErrorPattern{Binding: binding}, Body: body})
 		}
 	}
 
-	return IRResultMatch{
-		Subject:  subject,
-		OkArm:    okArm,
-		ErrorArm: errorArm,
-		Type:     IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 func (l *Lowerer) isOptionMatch(me MatchExpr) bool {
@@ -1943,8 +1959,7 @@ func (l *Lowerer) isOptionMatch(me MatchExpr) bool {
 
 func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var someArm IROptionSomeArm
-	var noneBody IRExpr
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		cp, ok := arm.Pattern.(ConstructorPattern)
@@ -1960,19 +1975,14 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 					Source: ".Value",
 				}
 			}
-			someArm = IROptionSomeArm{Binding: binding, Body: body}
+			arms = append(arms, IRMatchArm{Pattern: IROptionSomePattern{Binding: binding}, Body: body})
 		}
 		if cp.Name == "None" {
-			noneBody = body
+			arms = append(arms, IRMatchArm{Pattern: IROptionNonePattern{}, Body: body})
 		}
 	}
 
-	return IROptionMatch{
-		Subject: subject,
-		SomeArm: someArm,
-		NoneArm: noneBody,
-		Type:    IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 func (l *Lowerer) isListMatch(me MatchExpr) bool {
@@ -1986,25 +1996,19 @@ func (l *Lowerer) isListMatch(me MatchExpr) bool {
 
 func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var arms []IRListArm
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		body := l.lowerExpr(arm.Body)
 		lp, ok := arm.Pattern.(ListPattern)
 		if !ok {
 			// Wildcard / bind default arm
-			arms = append(arms, IRListArm{
-				Kind: IRListDefault,
-				Body: body,
-			})
+			arms = append(arms, IRMatchArm{Pattern: IRListDefaultPattern{}, Body: body})
 			continue
 		}
 
 		if len(lp.Elements) == 0 && lp.Rest == "" {
-			arms = append(arms, IRListArm{
-				Kind: IRListEmpty,
-				Body: body,
-			})
+			arms = append(arms, IRMatchArm{Pattern: IRListEmptyPattern{}, Body: body})
 			continue
 		}
 
@@ -2031,25 +2035,20 @@ func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 			}
 		}
 
-		kind := IRListExact
 		if lp.Rest != "" {
-			kind = IRListCons
+			arms = append(arms, IRMatchArm{
+				Pattern: IRListConsPattern{Elements: bindings, Rest: rest, MinLen: len(lp.Elements)},
+				Body:    body,
+			})
+		} else {
+			arms = append(arms, IRMatchArm{
+				Pattern: IRListExactPattern{Elements: bindings, MinLen: len(lp.Elements)},
+				Body:    body,
+			})
 		}
-
-		arms = append(arms, IRListArm{
-			Kind:     kind,
-			Elements: bindings,
-			Rest:     rest,
-			MinLen:   len(lp.Elements),
-			Body:     body,
-		})
 	}
 
-	return IRListMatch{
-		Subject: subject,
-		Arms:    arms,
-		Type:    IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 func (l *Lowerer) isLiteralMatch(me MatchExpr) bool {
@@ -2063,32 +2062,21 @@ func (l *Lowerer) isLiteralMatch(me MatchExpr) bool {
 
 func (l *Lowerer) lowerLiteralMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var arms []IRLiteralArm
-	var defaultBody *IRExpr
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		body := l.lowerExpr(arm.Body)
 		switch p := arm.Pattern.(type) {
 		case LitPattern:
-			arms = append(arms, IRLiteralArm{
-				Value: l.litPatternGoStr(p),
-				Body:  body,
-			})
+			arms = append(arms, IRMatchArm{Pattern: IRLiteralPattern{Value: l.litPatternGoStr(p)}, Body: body})
 		case WildcardPattern:
-			b := body
-			defaultBody = &b
+			arms = append(arms, IRMatchArm{Pattern: IRLiteralDefaultPattern{}, Body: body})
 		case BindPattern:
-			b := body
-			defaultBody = &b
+			arms = append(arms, IRMatchArm{Pattern: IRLiteralDefaultPattern{}, Body: body})
 		}
 	}
 
-	return IRLiteralMatch{
-		Subject: subject,
-		Arms:    arms,
-		Default: defaultBody,
-		Type:    IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 func (l *Lowerer) litPatternGoStr(lp LitPattern) string {
@@ -2123,35 +2111,24 @@ func (l *Lowerer) isEnumMatch(me MatchExpr) bool {
 
 func (l *Lowerer) lowerEnumMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var arms []IREnumArm
-	var wildcard *IRExpr
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		body := l.lowerExpr(arm.Body)
 		if cp, ok := arm.Pattern.(ConstructorPattern); ok {
 			typeName := l.findTypeName(cp.Name)
-			arms = append(arms, IREnumArm{
-				GoValue: typeName + cp.Name,
-				Body:    body,
-			})
+			arms = append(arms, IRMatchArm{Pattern: IREnumPattern{GoValue: typeName + cp.Name}, Body: body})
 		} else {
-			b := body
-			wildcard = &b
+			arms = append(arms, IRMatchArm{Pattern: IRWildcardPattern{}, Body: body})
 		}
 	}
 
-	return IREnumMatch{
-		Subject:  subject,
-		Arms:     arms,
-		Wildcard: wildcard,
-		Type:     IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
-	var arms []IRSumTypeArm
-	var wildcard *IRSumTypeWildcard
+	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
 		switch pat := arm.Pattern.(type) {
@@ -2193,29 +2170,23 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 				}
 			}
 
-			arms = append(arms, IRSumTypeArm{
-				GoType:   variantName,
-				Bindings: bindings,
-				Body:     body,
+			arms = append(arms, IRMatchArm{
+				Pattern: IRSumTypePattern{GoType: variantName, Bindings: bindings},
+				Body:    body,
 			})
 		case WildcardPattern:
 			body := l.lowerExpr(arm.Body)
-			wildcard = &IRSumTypeWildcard{Body: body}
+			arms = append(arms, IRMatchArm{Pattern: IRSumTypeWildcardPattern{}, Body: body})
 		case BindPattern:
 			body := l.lowerExpr(arm.Body)
-			wildcard = &IRSumTypeWildcard{
-				Binding: &IRBinding{GoName: snakeToCamel(pat.Name)},
+			arms = append(arms, IRMatchArm{
+				Pattern: IRSumTypeWildcardPattern{Binding: &IRBinding{GoName: snakeToCamel(pat.Name)}},
 				Body:    body,
-			}
+			})
 		}
 	}
 
-	return IRSumTypeMatch{
-		Subject:  subject,
-		Arms:     arms,
-		Wildcard: wildcard,
-		Type:     IRInterfaceType{},
-	}
+	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
 }
 
 // --- Helpers ---

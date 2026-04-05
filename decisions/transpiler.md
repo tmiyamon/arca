@@ -4,13 +4,67 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-05: Unified IRMatch + IRMatchPattern design
+
+**Context:** Match expressions are 6 separate IR types (IRResultMatch, IROptionMatch, IREnumMatch, IRSumTypeMatch, IRListMatch, IRLiteralMatch). The "Unit in void context" bug requires void arm handling in all 6 emit functions. Also, binding structures are duplicated across match types.
+
+**Decision: Unify to single IRMatch with typed patterns.**
+
+```go
+type IRMatch struct {
+    Subject IRExpr
+    Arms    []IRMatchArm
+    Type    IRType
+}
+
+type IRMatchArm struct {
+    Pattern IRMatchPattern
+    Body    IRExpr
+}
+
+type IRMatchPattern interface { irMatchPatternNode() }
+
+// Pattern types express match kind + bindings
+type IRResultOkPattern struct { Binding *IRBinding }
+type IRResultErrorPattern struct { Binding *IRBinding }
+type IROptionSomePattern struct { Binding *IRBinding }
+type IROptionNonePattern struct {}
+type IREnumPattern struct { GoValue string }
+type IRSumTypePattern struct { GoType string; Bindings []IRBinding }
+type IRSumTypeWildcardPattern struct { Binding *IRBinding }
+type IRListEmptyPattern struct {}
+type IRListExactPattern struct { Elements []IRBinding }
+type IRListConsPattern struct { Elements []IRBinding; Rest *IRBinding; MinLen int }
+type IRListDefaultPattern struct { Binding *IRBinding }
+type IRLiteralPattern struct { Value string }
+type IRLiteralDefaultPattern struct {}
+type IRWildcardPattern struct {}
+```
+
+**Benefits:**
+- Void arm (IRVoidExpr) handling in one place
+- Bindings expressed in patterns, not duplicated across arm types
+- New patterns added without new IR node types
+- Exhaustiveness validation via pattern kind checking
+- Emit dispatches on pattern type, not match type
+
+**Exhaustiveness (validate):**
+- Result: must have OkPattern + ErrorPattern
+- Option: must have SomePattern + NonePattern
+- Enum: all variants or wildcard
+- Same guarantees, checked in validate instead of structurally enforced
+
+**Status:** Implemented. Legacy 6 match types removed. IRVoidExpr pending.
+
+---
+
 ## 2026-04-05: Unit in void context generates unused value (open bug)
 
 **Problem:** `Ok(_) -> Unit` in a match arm emits `struct{}{}` in Go. Go rejects this as an unused value (`struct{}{} (value of type struct{}) is not used`).
 
 **Root cause:** Emitter doesn't distinguish between match arms that return a value and match arms in void context (expression statement). In void context, `Unit` should emit nothing or `_ = struct{}{}`.
 
-**Status:** Open.
+**Status:** Implemented. IRVoidExpr + markVoidContext in lower, condition inversion in emit for Result/Option.
 
 ---
 

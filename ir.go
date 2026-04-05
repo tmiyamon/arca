@@ -330,96 +330,73 @@ type IRForEach struct {
 	Type    IRType
 }
 
-// --- Match Expressions (structurally exhaustive) ---
+// --- Unified Match Expression ---
 
-type IRResultMatch struct {
-	Subject  IRExpr
-	OkArm    IRResultArm
-	ErrorArm IRResultArm
-	Type     IRType
-}
-
-type IRResultArm struct {
-	Binding *IRBinding // nil if not bound
-	Body    IRExpr
-}
-
-type IROptionMatch struct {
+type IRMatch struct {
 	Subject IRExpr
-	SomeArm IROptionSomeArm
-	NoneArm IRExpr
+	Arms    []IRMatchArm
 	Type    IRType
+	Pos     Pos
 }
 
-type IROptionSomeArm struct {
-	Binding *IRBinding
+type IRMatchArm struct {
+	Pattern IRMatchPattern
 	Body    IRExpr
 }
 
-type IREnumMatch struct {
-	Subject  IRExpr
-	Arms     []IREnumArm // one per variant, ordered
-	Wildcard *IRExpr     // nil if all variants covered
-	Type     IRType
+// IRMatchPattern interface — each pattern type expresses a match kind + bindings
+type IRMatchPattern interface {
+	irMatchPatternNode()
 }
 
-type IREnumArm struct {
-	GoValue string // "ColorRed"
-	Body    IRExpr
-}
-
-type IRSumTypeMatch struct {
-	Subject  IRExpr
-	Arms     []IRSumTypeArm
-	Wildcard *IRSumTypeWildcard // nil if all variants covered
-	Type     IRType
-}
-
-type IRSumTypeArm struct {
-	GoType   string       // "GreetingHello"
+type IRResultOkPattern struct{ Binding *IRBinding }
+type IRResultErrorPattern struct{ Binding *IRBinding }
+type IROptionSomePattern struct{ Binding *IRBinding }
+type IROptionNonePattern struct{}
+type IREnumPattern struct{ GoValue string }
+type IRSumTypePattern struct {
+	GoType   string
 	Bindings []IRBinding
-	Body     IRExpr
 }
-
-type IRSumTypeWildcard struct {
-	Binding *IRBinding // nil for _, non-nil for named wildcard
-	Body    IRExpr
-}
-
-type IRListMatch struct {
-	Subject IRExpr
-	Arms    []IRListArm
-	Type    IRType
-}
-
-type IRListArm struct {
-	Kind     IRListArmKind
+type IRSumTypeWildcardPattern struct{ Binding *IRBinding }
+type IRListEmptyPattern struct{}
+type IRListExactPattern struct {
 	Elements []IRBinding
-	Rest     *IRBinding // nil if no rest
 	MinLen   int
-	Body     IRExpr
 }
-
-type IRListArmKind int
-
-const (
-	IRListEmpty   IRListArmKind = iota
-	IRListExact                         // [a, b] — exact length
-	IRListCons                          // [a, ..rest] — at least N elements
-	IRListDefault                       // _ or bind
-)
-
-type IRLiteralMatch struct {
-	Subject IRExpr
-	Arms    []IRLiteralArm
-	Default *IRExpr // nil if no default
-	Type    IRType
+type IRListConsPattern struct {
+	Elements []IRBinding
+	Rest     *IRBinding
+	MinLen   int
 }
+type IRListDefaultPattern struct{ Binding *IRBinding }
+type IRLiteralPattern struct{ Value string }
+type IRLiteralDefaultPattern struct{}
+type IRWildcardPattern struct{}
 
-type IRLiteralArm struct {
-	Value string // Go literal expression
-	Body  IRExpr
-}
+func (IRResultOkPattern) irMatchPatternNode()       {}
+func (IRResultErrorPattern) irMatchPatternNode()     {}
+func (IROptionSomePattern) irMatchPatternNode()      {}
+func (IROptionNonePattern) irMatchPatternNode()      {}
+func (IREnumPattern) irMatchPatternNode()            {}
+func (IRSumTypePattern) irMatchPatternNode()         {}
+func (IRSumTypeWildcardPattern) irMatchPatternNode() {}
+func (IRListEmptyPattern) irMatchPatternNode()       {}
+func (IRListExactPattern) irMatchPatternNode()       {}
+func (IRListConsPattern) irMatchPatternNode()        {}
+func (IRListDefaultPattern) irMatchPatternNode()     {}
+func (IRLiteralPattern) irMatchPatternNode()         {}
+func (IRLiteralDefaultPattern) irMatchPatternNode()  {}
+func (IRWildcardPattern) irMatchPatternNode()        {}
+
+// IRVoidExpr represents "no value" — used in void context (e.g. match arm that does nothing)
+type IRVoidExpr struct{}
+
+func (m IRMatch) irExprNode()     {}
+func (m IRMatch) irType() IRType  { return m.Type }
+func (IRVoidExpr) irExprNode()   {}
+func (IRVoidExpr) irType() IRType { return IRNamedType{GoName: "struct{}"} }
+
 
 type IRBinding struct {
 	GoName string // resolved Go variable name
@@ -531,18 +508,6 @@ func (e IRForRange) irExprNode()        {}
 func (e IRForRange) irType() IRType     { return e.Type }
 func (e IRForEach) irExprNode()         {}
 func (e IRForEach) irType() IRType      { return e.Type }
-func (e IRResultMatch) irExprNode()     {}
-func (e IRResultMatch) irType() IRType  { return e.Type }
-func (e IROptionMatch) irExprNode()     {}
-func (e IROptionMatch) irType() IRType  { return e.Type }
-func (e IREnumMatch) irExprNode()       {}
-func (e IREnumMatch) irType() IRType    { return e.Type }
-func (e IRSumTypeMatch) irExprNode()    {}
-func (e IRSumTypeMatch) irType() IRType { return e.Type }
-func (e IRListMatch) irExprNode()       {}
-func (e IRListMatch) irType() IRType    { return e.Type }
-func (e IRLiteralMatch) irExprNode()    {}
-func (e IRLiteralMatch) irType() IRType { return e.Type }
 
 // isGoMultiReturn checks if an IR expression is a call with GoMultiReturn set.
 func isGoMultiReturn(e IRExpr) bool {

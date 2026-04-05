@@ -442,18 +442,8 @@ func (em *Emitter) emitReturnExpr(e IRExpr, indent string) {
 		if expr.Expr != nil {
 			em.emitReturnExpr(expr.Expr, indent)
 		}
-	case IRResultMatch:
-		em.emitResultMatch(expr, indent, true)
-	case IROptionMatch:
-		em.emitOptionMatch(expr, indent, true)
-	case IREnumMatch:
-		em.emitEnumMatch(expr, indent, true)
-	case IRSumTypeMatch:
-		em.emitSumTypeMatch(expr, indent, true)
-	case IRListMatch:
-		em.emitListMatch(expr, indent, true)
-	case IRLiteralMatch:
-		em.emitLiteralMatch(expr, indent, true)
+	case IRMatch:
+		em.emitMatch(expr, indent, true)
 	default:
 		em.writeln(fmt.Sprintf("%sreturn %s", indent, em.emitExpr(e)))
 	}
@@ -464,6 +454,8 @@ func (em *Emitter) emitVoidBody(e IRExpr, indent string) {
 		return
 	}
 	switch expr := e.(type) {
+	case IRVoidExpr:
+		// nothing to emit
 	case IRBlock:
 		for _, stmt := range expr.Stmts {
 			em.emitStmt(stmt, indent)
@@ -471,18 +463,8 @@ func (em *Emitter) emitVoidBody(e IRExpr, indent string) {
 		if expr.Expr != nil {
 			em.emitVoidBody(expr.Expr, indent)
 		}
-	case IRResultMatch:
-		em.emitResultMatch(expr, indent, false)
-	case IROptionMatch:
-		em.emitOptionMatch(expr, indent, false)
-	case IREnumMatch:
-		em.emitEnumMatch(expr, indent, false)
-	case IRSumTypeMatch:
-		em.emitSumTypeMatch(expr, indent, false)
-	case IRListMatch:
-		em.emitListMatch(expr, indent, false)
-	case IRLiteralMatch:
-		em.emitLiteralMatch(expr, indent, false)
+	case IRMatch:
+		em.emitMatch(expr, indent, false)
 	case IRForRange:
 		em.emitForRange(expr, indent)
 	case IRForEach:
@@ -645,18 +627,8 @@ func (em *Emitter) emitExprStmt(stmt IRExprStmt, indent string) {
 		em.emitForRange(e, indent)
 	case IRForEach:
 		em.emitForEach(e, indent)
-	case IRResultMatch:
-		em.emitResultMatch(e, indent, false)
-	case IROptionMatch:
-		em.emitOptionMatch(e, indent, false)
-	case IREnumMatch:
-		em.emitEnumMatch(e, indent, false)
-	case IRSumTypeMatch:
-		em.emitSumTypeMatch(e, indent, false)
-	case IRListMatch:
-		em.emitListMatch(e, indent, false)
-	case IRLiteralMatch:
-		em.emitLiteralMatch(e, indent, false)
+	case IRMatch:
+		em.emitMatch(e, indent, false)
 	default:
 		em.writeln(fmt.Sprintf("%s%s", indent, em.emitExpr(stmt.Expr)))
 	}
@@ -701,108 +673,208 @@ func (em *Emitter) emitForEach(fe IRForEach, indent string) {
 	em.writeln(fmt.Sprintf("%s}", indent))
 }
 
-// --- Match Expressions ---
+// --- Match ---
 
-func (em *Emitter) emitResultMatch(m IRResultMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatch(m IRMatch, indent string, isReturn bool) {
+	if len(m.Arms) == 0 {
+		return
+	}
+	// Dispatch based on first arm's pattern type
+	switch m.Arms[0].Pattern.(type) {
+	case IRResultOkPattern, IRResultErrorPattern:
+		em.emitMatchResult(m, indent, isReturn)
+	case IROptionSomePattern, IROptionNonePattern:
+		em.emitMatchOption(m, indent, isReturn)
+	case IREnumPattern:
+		em.emitMatchEnum(m, indent, isReturn)
+	case IRSumTypePattern, IRSumTypeWildcardPattern:
+		em.emitMatchSumType(m, indent, isReturn)
+	case IRListEmptyPattern, IRListExactPattern, IRListConsPattern, IRListDefaultPattern:
+		em.emitMatchList(m, indent, isReturn)
+	case IRLiteralPattern, IRLiteralDefaultPattern:
+		em.emitMatchLiteral(m, indent, isReturn)
+	}
+}
+
+func (em *Emitter) emitMatchResult(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
+	var okArm, errorArm *IRMatchArm
+	for i := range m.Arms {
+		switch m.Arms[i].Pattern.(type) {
+		case IRResultOkPattern:
+			okArm = &m.Arms[i]
+		case IRResultErrorPattern:
+			errorArm = &m.Arms[i]
+		}
+	}
+	okVoid := okArm != nil && isVoidBody(okArm.Body)
+	errorVoid := errorArm != nil && isVoidBody(errorArm.Body)
+
+	if okVoid && errorVoid {
+		return // both void, nothing to emit
+	}
+	if okVoid {
+		// Only error arm: invert condition
+		em.writeln(fmt.Sprintf("%sif !%s.IsOk {", indent, subject))
+		if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(errorArm.Body, indent+"\t", isReturn)
+		em.writeln(fmt.Sprintf("%s}", indent))
+		return
+	}
+	if errorVoid {
+		// Only ok arm
+		em.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
+		if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(okArm.Body, indent+"\t", isReturn)
+		em.writeln(fmt.Sprintf("%s}", indent))
+		return
+	}
+	// Both arms have content
 	em.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
-	if m.OkArm.Binding != nil {
-		em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, m.OkArm.Binding.GoName, subject, m.OkArm.Binding.Source))
+	if okArm != nil {
+		if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(okArm.Body, indent+"\t", isReturn)
 	}
-	em.emitArmBody(m.OkArm.Body, indent+"\t", isReturn)
 	em.writeln(fmt.Sprintf("%s} else {", indent))
-	if m.ErrorArm.Binding != nil {
-		em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, m.ErrorArm.Binding.GoName, subject, m.ErrorArm.Binding.Source))
+	if errorArm != nil {
+		if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(errorArm.Body, indent+"\t", isReturn)
 	}
-	em.emitArmBody(m.ErrorArm.Body, indent+"\t", isReturn)
 	em.writeln(fmt.Sprintf("%s}", indent))
 }
 
-func (em *Emitter) emitOptionMatch(m IROptionMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchOption(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
-	em.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
-	if m.SomeArm.Binding != nil {
-		em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, m.SomeArm.Binding.GoName, subject, m.SomeArm.Binding.Source))
+	var someArm, noneArm *IRMatchArm
+	for i := range m.Arms {
+		switch m.Arms[i].Pattern.(type) {
+		case IROptionSomePattern:
+			someArm = &m.Arms[i]
+		case IROptionNonePattern:
+			noneArm = &m.Arms[i]
+		}
 	}
-	em.emitArmBody(m.SomeArm.Body, indent+"\t", isReturn)
+	someVoid := someArm != nil && isVoidBody(someArm.Body)
+	noneVoid := noneArm != nil && isVoidBody(noneArm.Body)
+
+	if someVoid && noneVoid {
+		return
+	}
+	if someVoid {
+		em.writeln(fmt.Sprintf("%sif !%s.Valid {", indent, subject))
+		em.emitArmBody(noneArm.Body, indent+"\t", isReturn)
+		em.writeln(fmt.Sprintf("%s}", indent))
+		return
+	}
+	if noneVoid {
+		em.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
+		if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(someArm.Body, indent+"\t", isReturn)
+		em.writeln(fmt.Sprintf("%s}", indent))
+		return
+	}
+	em.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
+	if someArm != nil {
+		if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
+			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+		}
+		em.emitArmBody(someArm.Body, indent+"\t", isReturn)
+	}
 	em.writeln(fmt.Sprintf("%s} else {", indent))
-	em.emitArmBody(m.NoneArm, indent+"\t", isReturn)
+	if noneArm != nil {
+		em.emitArmBody(noneArm.Body, indent+"\t", isReturn)
+	}
 	em.writeln(fmt.Sprintf("%s}", indent))
 }
 
-func (em *Emitter) emitEnumMatch(m IREnumMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchEnum(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
 	em.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
 	for _, arm := range m.Arms {
-		em.writeln(fmt.Sprintf("%scase %s:", indent, arm.GoValue))
-		em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		switch p := arm.Pattern.(type) {
+		case IREnumPattern:
+			em.writeln(fmt.Sprintf("%scase %s:", indent, p.GoValue))
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		case IRWildcardPattern:
+			em.writeln(fmt.Sprintf("%sdefault:", indent))
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		}
 	}
-	if m.Wildcard != nil {
-		em.writeln(fmt.Sprintf("%sdefault:", indent))
-		em.emitArmBody(*m.Wildcard, indent+"\t", isReturn)
-	} else if isReturn {
+	if isReturn && !em.hasWildcard(m) {
 		em.writeln(fmt.Sprintf("%sdefault:", indent))
 		em.writeln(fmt.Sprintf("%s\tpanic(\"unreachable\")", indent))
 	}
 	em.writeln(fmt.Sprintf("%s}", indent))
 }
 
-func (em *Emitter) emitSumTypeMatch(m IRSumTypeMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchSumType(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
 	em.writeln(fmt.Sprintf("%sswitch v := %s.(type) {", indent, subject))
 	for _, arm := range m.Arms {
-		em.writeln(fmt.Sprintf("%scase %s:", indent, arm.GoType))
-		for _, b := range arm.Bindings {
-			em.writeln(fmt.Sprintf("%s\t%s := v%s", indent, b.GoName, b.Source))
+		switch p := arm.Pattern.(type) {
+		case IRSumTypePattern:
+			em.writeln(fmt.Sprintf("%scase %s:", indent, p.GoType))
+			for _, b := range p.Bindings {
+				em.writeln(fmt.Sprintf("%s\t%s := v%s", indent, b.GoName, b.Source))
+			}
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		case IRSumTypeWildcardPattern:
+			em.writeln(fmt.Sprintf("%sdefault:", indent))
+			if p.Binding != nil {
+				em.writeln(fmt.Sprintf("%s\t%s := v", indent, p.Binding.GoName))
+			}
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
 		}
-		em.emitArmBody(arm.Body, indent+"\t", isReturn)
-	}
-	if m.Wildcard != nil {
-		em.writeln(fmt.Sprintf("%sdefault:", indent))
-		if m.Wildcard.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := v", indent, m.Wildcard.Binding.GoName))
-		}
-		em.emitArmBody(m.Wildcard.Body, indent+"\t", isReturn)
 	}
 	em.writeln(fmt.Sprintf("%s}", indent))
-	if isReturn && m.Wildcard == nil {
+	if isReturn && !em.hasWildcard(m) {
 		em.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
 	}
 }
 
-func (em *Emitter) emitListMatch(m IRListMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchList(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
 	first := true
 	for _, arm := range m.Arms {
-		switch arm.Kind {
-		case IRListEmpty:
+		switch p := arm.Pattern.(type) {
+		case IRListEmptyPattern:
 			keyword := "if"
 			if !first {
 				keyword = "} else if"
 			}
 			em.writeln(fmt.Sprintf("%s%s len(%s) == 0 {", indent, keyword, subject))
-		case IRListExact:
+		case IRListExactPattern:
 			keyword := "if"
 			if !first {
 				keyword = "} else if"
 			}
-			em.writeln(fmt.Sprintf("%s%s len(%s) == %d {", indent, keyword, subject, arm.MinLen))
-			for _, b := range arm.Elements {
+			em.writeln(fmt.Sprintf("%s%s len(%s) == %d {", indent, keyword, subject, p.MinLen))
+			for _, b := range p.Elements {
 				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, b.GoName, subject, b.Source))
 			}
-		case IRListCons:
+		case IRListConsPattern:
 			keyword := "if"
 			if !first {
 				keyword = "} else if"
 			}
-			em.writeln(fmt.Sprintf("%s%s len(%s) >= %d {", indent, keyword, subject, arm.MinLen))
-			for _, b := range arm.Elements {
+			em.writeln(fmt.Sprintf("%s%s len(%s) >= %d {", indent, keyword, subject, p.MinLen))
+			for _, b := range p.Elements {
 				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, b.GoName, subject, b.Source))
 			}
-			if arm.Rest != nil {
-				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, arm.Rest.GoName, subject, arm.Rest.Source))
+			if p.Rest != nil {
+				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Rest.GoName, subject, p.Rest.Source))
 			}
-		case IRListDefault:
+		case IRListDefaultPattern:
 			if first {
 				em.writeln(fmt.Sprintf("%s{", indent))
 			} else {
@@ -818,18 +890,42 @@ func (em *Emitter) emitListMatch(m IRListMatch, indent string, isReturn bool) {
 	}
 }
 
-func (em *Emitter) emitLiteralMatch(m IRLiteralMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchLiteral(m IRMatch, indent string, isReturn bool) {
 	subject := em.emitExpr(m.Subject)
 	em.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
 	for _, arm := range m.Arms {
-		em.writeln(fmt.Sprintf("%scase %s:", indent, arm.Value))
-		em.emitArmBody(arm.Body, indent+"\t", isReturn)
-	}
-	if m.Default != nil {
-		em.writeln(fmt.Sprintf("%sdefault:", indent))
-		em.emitArmBody(*m.Default, indent+"\t", isReturn)
+		switch p := arm.Pattern.(type) {
+		case IRLiteralPattern:
+			em.writeln(fmt.Sprintf("%scase %s:", indent, p.Value))
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		case IRLiteralDefaultPattern:
+			em.writeln(fmt.Sprintf("%sdefault:", indent))
+			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		}
 	}
 	em.writeln(fmt.Sprintf("%s}", indent))
+}
+
+func (em *Emitter) hasWildcard(m IRMatch) bool {
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IRWildcardPattern, IRSumTypeWildcardPattern:
+			return true
+		}
+	}
+	return false
+}
+
+func isVoidBody(expr IRExpr) bool {
+	if _, ok := expr.(IRVoidExpr); ok {
+		return true
+	}
+	if block, ok := expr.(IRBlock); ok && block.Expr != nil && len(block.Stmts) == 0 {
+		if _, ok := block.Expr.(IRVoidExpr); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Builtins ---

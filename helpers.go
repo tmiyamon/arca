@@ -111,6 +111,29 @@ func typeZeroValue(typeName string, goBase string) string {
 	}
 }
 
+// replaceTrailingUnit replaces Unit (struct{}{}) at the end of an expression with IRVoidExpr.
+// Handles blocks: if the block's final expression is Unit, replace it.
+func replaceTrailingUnit(expr IRExpr) IRExpr {
+	if isIRUnit(expr) {
+		return IRVoidExpr{}
+	}
+	if block, ok := expr.(IRBlock); ok && block.Expr != nil {
+		if isIRUnit(block.Expr) {
+			block.Expr = IRVoidExpr{}
+			return block
+		}
+	}
+	return expr
+}
+
+// isIRUnit checks if an IR expression is the Unit value (struct{}{}).
+func isIRUnit(expr IRExpr) bool {
+	if ident, ok := expr.(IRIdent); ok {
+		return ident.GoName == "struct{}{}"
+	}
+	return false
+}
+
 func collectUsedIdents(expr Expr) map[string]bool {
 	used := make(map[string]bool)
 	collectIdents(expr, used)
