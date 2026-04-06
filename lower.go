@@ -1729,6 +1729,13 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 			if isIRResultType(retType) {
 				l.builtins["result"] = true
 			}
+			// Record IR type for Go FFI resolution on subsequent method/field access
+			// Try unwraps Result: the variable gets the Ok type
+			if l.varIRTypes != nil && goVarName != "_" {
+				if rt, ok := loweredExpr.irType().(IRResultType); ok {
+					l.varIRTypes[s.Name] = rt.Ok
+				}
+			}
 			return []IRStmt{IRTryLetStmt{
 				GoName:     goVarName,
 				CallExpr:   loweredExpr,
