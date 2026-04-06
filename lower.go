@@ -48,6 +48,49 @@ func (l *Lowerer) recordSymbol(name string, t Type, kind string) {
 	l.symbols = append(l.symbols, SymbolInfo{Name: name, Type: t, Kind: kind})
 }
 
+// registerSymbol registers a data symbol (variable, parameter, binding) with both
+// AST and IR types. All variable bindings must go through this function.
+// Returns the resolved Go name (with shadowing suffix if needed).
+func (l *Lowerer) registerSymbol(name string, info SymbolRegInfo) string {
+	goName := l.declareVar(name)
+
+	// Record for LSP (symbol list)
+	sym := SymbolInfo{
+		Name:   name,
+		GoName: goName,
+		Kind:   info.Kind,
+	}
+	if info.ArcaType != nil {
+		sym.Type = info.ArcaType
+	}
+	if info.IRType != nil {
+		sym.IRType = info.IRType
+	}
+	l.symbols = append(l.symbols, sym)
+
+	// Record AST type for validation
+	if info.ArcaType != nil {
+		l.setVarArcaType(name, info.ArcaType)
+	}
+
+	// Record IR type for Go FFI resolution
+	if info.IRType != nil {
+		if _, isInterface := info.IRType.(IRInterfaceType); !isInterface {
+			if l.varIRTypes != nil {
+				l.varIRTypes[name] = info.IRType
+			}
+		}
+	}
+
+	return goName
+}
+
+type SymbolRegInfo struct {
+	ArcaType Type   // nullable
+	IRType   IRType // nullable
+	Kind     string // SymVariable, SymParameter, etc.
+}
+
 // LookupSymbol finds a symbol by name (last defined wins, for shadowing).
 func (l *Lowerer) LookupSymbol(name string) *SymbolInfo {
 	for i := len(l.symbols) - 1; i >= 0; i-- {
@@ -692,18 +735,33 @@ func (l *Lowerer) setVarArcaType(name string, t Type) {
 	}
 }
 
+// setVarIRType records the IR type for a variable, used for Go FFI method/field resolution.
+// Must be called for every variable binding (let, try let, destructure, params).
+func (l *Lowerer) setVarIRType(name string, t IRType) {
+	if l.varIRTypes == nil || t == nil {
+		return
+	}
+	if _, isInterface := t.(IRInterfaceType); isInterface {
+		return // unknown type, don't record
+	}
+	l.varIRTypes[name] = t
+}
+
 func (l *Lowerer) initFnScope(params []FnParam) {
 	l.declaredVars = make(map[string]int)
 	l.varNames = make(map[string]string)
 	l.varArcaTypes = make(map[string]Type)
 	l.varIRTypes = make(map[string]IRType)
 	for _, p := range params {
-		goName := snakeToCamel(p.Name)
-		l.declaredVars[goName] = 1
-		l.varNames[goName] = goName
-		l.varArcaTypes[p.Name] = p.Type
-		l.varIRTypes[p.Name] = l.lowerType(p.Type)
-		l.recordSymbol(p.Name, p.Type, SymParameter)
+		var irType IRType
+		if p.Type != nil {
+			irType = l.lowerType(p.Type)
+		}
+		l.registerSymbol(p.Name, SymbolRegInfo{
+			ArcaType: p.Type,
+			IRType:   irType,
+			Kind:     SymParameter,
+		})
 	}
 }
 
@@ -1595,6 +1653,12 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 			typ = l.lowerType(p.Type)
 		}
 		params[i] = IRParamDecl{GoName: p.Name, Type: typ}
+		// Register lambda parameter for Go FFI resolution within lambda body
+		if typ != nil && l.varIRTypes != nil {
+			if _, isInterface := typ.(IRInterfaceType); !isInterface {
+				l.varIRTypes[p.Name] = typ
+			}
+		}
 	}
 	var retType IRType
 	if lam.ReturnType != nil {
@@ -1716,11 +1780,16 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 			loweredExpr := l.lowerExpr(call.Args[0])
 			goVarName := "_"
 			if s.Name != "_" {
-				goVarName = l.declareVar(s.Name)
-				if t := l.inferASTType(call.Args[0]); t != nil {
-					l.recordSymbol(s.Name, t, SymVariable)
-					l.setVarArcaType(s.Name, t)
+				// Try unwraps Result: the variable gets the Ok type
+				var irType IRType
+				if rt, ok := loweredExpr.irType().(IRResultType); ok {
+					irType = rt.Ok
 				}
+				goVarName = l.registerSymbol(s.Name, SymbolRegInfo{
+					ArcaType: l.inferASTType(call.Args[0]),
+					IRType:   irType,
+					Kind:     SymVariable,
+				})
 			}
 			var retType IRType
 			if l.currentRetType != nil {
@@ -1728,13 +1797,6 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 			}
 			if isIRResultType(retType) {
 				l.builtins["result"] = true
-			}
-			// Record IR type for Go FFI resolution on subsequent method/field access
-			// Try unwraps Result: the variable gets the Ok type
-			if l.varIRTypes != nil && goVarName != "_" {
-				if rt, ok := loweredExpr.irType().(IRResultType); ok {
-					l.varIRTypes[s.Name] = rt.Ok
-				}
 			}
 			return []IRStmt{IRTryLetStmt{
 				GoName:     goVarName,
@@ -1768,22 +1830,17 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	if s.Type != nil {
 		loweredType = l.lowerType(s.Type)
 	}
-	goVarName := l.declareVar(s.Name)
+	var arcaType Type
 	if s.Type != nil {
-		l.recordSymbol(s.Name, s.Type, SymVariable)
-		l.setVarArcaType(s.Name, s.Type)
-	} else if t := l.inferASTType(s.Value); t != nil {
-		l.recordSymbol(s.Name, t, SymVariable)
-		l.setVarArcaType(s.Name, t)
+		arcaType = s.Type
+	} else {
+		arcaType = l.inferASTType(s.Value)
 	}
-	// Record IR type for Go FFI resolution on subsequent method/field access
-	if l.varIRTypes != nil {
-		if irT := loweredValue.irType(); irT != nil {
-			if _, isInterface := irT.(IRInterfaceType); !isInterface {
-				l.varIRTypes[s.Name] = irT
-			}
-		}
-	}
+	goVarName := l.registerSymbol(s.Name, SymbolRegInfo{
+		ArcaType: arcaType,
+		IRType:   loweredValue.irType(),
+		Kind:     SymVariable,
+	})
 
 	return []IRStmt{IRLetStmt{
 		GoName: goVarName,

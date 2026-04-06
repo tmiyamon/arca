@@ -136,10 +136,12 @@ const (
 
 // SymbolInfo records type info for a symbol at a specific position.
 type SymbolInfo struct {
-	Name string
-	Type Type
-	Pos  Pos
-	Kind string
+	Name   string
+	Type   Type   // AST type (for LSP hover, validation)
+	IRType IRType // IR type (for Go FFI resolution)
+	GoName string // resolved Go name
+	Pos    Pos
+	Kind   string
 }
 
 // --- Type Comparison ---

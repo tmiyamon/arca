@@ -1,15 +1,13 @@
-//import go "time.Time"
 import go "database/sql"
 import go "net/http"
 import go "github.com/labstack/echo/v5"
 import go _ "github.com/mattn/go-sqlite3"
 
 type Todo (
-  content: String { max_length: 255 }, 
-  isFinished: Bool,
-  createdAt: time.Time, 
-  dueAt: time.Time
-}
+  id: Int
+  body: String { max_length: 255 }
+  isFinished: Bool
+)
 
 fun getTodo(c: *echo.Context) -> error {
   c.String(http.StatusOK, "Hello World!")
@@ -19,7 +17,17 @@ fun main() {
   let db = sql.Open("sqlite3", "./todo.db")?
   defer db.Close()
 
-  db.Exec("create table if not exists todo(id primary key autoincrement, body text
+  let r = db.Exec("""
+  create table if not exists todo (
+    id          primary key autoincrement, 
+    body        text not null,
+    is_finished boolean
+  )
+  """)
+  match r { 
+    Ok(_) -> Unit
+    Error(e) -> println("db ddl error: ${e}")
+  }
 
   let e = echo.New()
 

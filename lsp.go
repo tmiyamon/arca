@@ -239,7 +239,11 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 
 	// Look up local variables and parameters
 	if sym := lowerer.LookupSymbol(word); sym != nil {
-		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeName(sym.Type))
+		typeStr := typeName(sym.Type)
+		if typeStr == "unknown" && sym.IRType != nil {
+			typeStr = irTypeDisplayName(sym.IRType)
+		}
+		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeStr)
 	}
 
 	// Look up functions
@@ -270,6 +274,29 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 	}
 
 	return ""
+}
+
+func irTypeDisplayName(t IRType) string {
+	switch tt := t.(type) {
+	case IRNamedType:
+		return tt.GoName
+	case IRPointerType:
+		return "*" + irTypeDisplayName(tt.Inner)
+	case IRResultType:
+		return "Result[" + irTypeDisplayName(tt.Ok) + ", " + irTypeDisplayName(tt.Err) + "]"
+	case IROptionType:
+		return "Option[" + irTypeDisplayName(tt.Inner) + "]"
+	case IRListType:
+		return "List[" + irTypeDisplayName(tt.Elem) + "]"
+	case IRTupleType:
+		names := make([]string, len(tt.Elements))
+		for i, e := range tt.Elements {
+			names[i] = irTypeDisplayName(e)
+		}
+		return "(" + strings.Join(names, ", ") + ")"
+	default:
+		return "unknown"
+	}
 }
 
 func formatFnHover(fn FnDecl) string {
