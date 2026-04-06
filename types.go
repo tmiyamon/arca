@@ -192,7 +192,7 @@ func (s *Scope) FindScopeAt(pos Pos) *Scope {
 // Contains checks if a position is within this scope's range.
 func (s *Scope) Contains(pos Pos) bool {
 	if s.StartPos.Line == 0 && s.EndPos.Line == 0 {
-		return true // unset positions = global scope
+		return s.parent == nil // only root scope matches all positions
 	}
 	if pos.Line < s.StartPos.Line || pos.Line > s.EndPos.Line {
 		return false

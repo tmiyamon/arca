@@ -21,7 +21,7 @@ LSP, project structure, build pipeline, dependency management. Newest first.
 
 **Replaces:** `declaredVars`, `varNames`, `varArcaTypes`, `varIRTypes` maps on Lowerer. All unified into `Scope.symbols`.
 
-**Pending:** Match arm bindings not yet registered via `registerSymbol`.
+**Pending:** None. Match arm bindings now registered via `registerSymbol` with `withScope`.
 
 **Status:** Implemented.
 

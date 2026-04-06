@@ -75,6 +75,8 @@ type MatchExpr struct {
 }
 
 type MatchArm struct {
+	Pos     Pos // pattern start position
+	EndPos  Pos // body end position
 	Pattern Pattern
 	Body    Expr
 }

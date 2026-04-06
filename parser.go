@@ -1253,6 +1253,8 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 }
 
 func (p *Parser) parseMatchArm() (MatchArm, error) {
+	startTok := p.peek()
+	startPos := Pos{startTok.Line, startTok.Col}
 	pattern, err := p.parsePattern()
 	if err != nil {
 		return MatchArm{}, err
@@ -1264,7 +1266,12 @@ func (p *Parser) parseMatchArm() (MatchArm, error) {
 	if err != nil {
 		return MatchArm{}, err
 	}
-	return MatchArm{Pattern: pattern, Body: body}, nil
+	// End position: use block EndPos if available, otherwise use current position
+	endPos := Pos{p.peek().Line, p.peek().Col}
+	if b, ok := body.(Block); ok {
+		endPos = b.EndPos
+	}
+	return MatchArm{Pos: startPos, EndPos: endPos, Pattern: pattern, Body: body}, nil
 }
 
 func (p *Parser) parsePattern() (Pattern, error) {
