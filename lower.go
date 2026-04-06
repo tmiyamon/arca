@@ -19,20 +19,17 @@ type Lowerer struct {
 	goPackages    map[string]*GoPackage // short name → Go package info
 
 	// Per-function state
-	declaredVars    map[string]int
-	varNames        map[string]string
-	varArcaTypes    map[string]Type   // arca name → AST type for validation
-	varIRTypes      map[string]IRType // arca name → IR type for Go FFI resolution
 	currentRetType  Type
 	currentReceiver string
 	currentTypeName string
 
 	// Collected during lowering
-	imports    []IRImport
-	builtins   map[string]bool
-	tmpCounter int
-	errors     []LowerError
-	symbols    []SymbolInfo // all symbols with positions, for LSP
+	imports      []IRImport
+	builtins     map[string]bool
+	tmpCounter   int
+	errors       []LowerError
+	symbols      []SymbolInfo // all symbols (flat, for LSP global list)
+	currentScope *Scope       // lexical scope stack
 }
 
 type LowerError struct {
@@ -51,12 +48,20 @@ func (l *Lowerer) recordSymbol(name string, t Type, kind string) {
 // registerSymbol registers a data symbol (variable, parameter, binding) with both
 // AST and IR types. All variable bindings must go through this function.
 // Returns the resolved Go name (with shadowing suffix if needed).
-func (l *Lowerer) registerSymbol(name string, info SymbolRegInfo) string {
-	goName := l.declareVar(name)
+func (l *Lowerer) registerSymbol(info SymbolRegInfo) string {
+	goName := snakeToCamel(info.Name)
 
-	// Record for LSP (symbol list)
+	// Same-scope shadowing: suffix with count
+	if l.currentScope != nil {
+		count := l.currentScope.declCount[goName]
+		l.currentScope.declCount[goName] = count + 1
+		if count > 0 {
+			goName = fmt.Sprintf("%s_%d", goName, count+1)
+		}
+	}
+
 	sym := SymbolInfo{
-		Name:   name,
+		Name:   info.Name,
 		GoName: goName,
 		Kind:   info.Kind,
 	}
@@ -64,35 +69,45 @@ func (l *Lowerer) registerSymbol(name string, info SymbolRegInfo) string {
 		sym.Type = info.ArcaType
 	}
 	if info.IRType != nil {
-		sym.IRType = info.IRType
-	}
-	l.symbols = append(l.symbols, sym)
-
-	// Record AST type for validation
-	if info.ArcaType != nil {
-		l.setVarArcaType(name, info.ArcaType)
-	}
-
-	// Record IR type for Go FFI resolution
-	if info.IRType != nil {
 		if _, isInterface := info.IRType.(IRInterfaceType); !isInterface {
-			if l.varIRTypes != nil {
-				l.varIRTypes[name] = info.IRType
-			}
+			sym.IRType = info.IRType
 		}
 	}
+
+	// Record in lexical scope
+	if l.currentScope != nil {
+		l.currentScope.Define(info.Name, &sym)
+	}
+
+	// Record in flat list (for LSP global queries)
+	l.symbols = append(l.symbols, sym)
 
 	return goName
 }
 
 type SymbolRegInfo struct {
+	Name     string
 	ArcaType Type   // nullable
 	IRType   IRType // nullable
 	Kind     string // SymVariable, SymParameter, etc.
 }
 
-// LookupSymbol finds a symbol by name (last defined wins, for shadowing).
+func (l *Lowerer) withScope(symbols []SymbolRegInfo, fn func()) {
+	l.currentScope = NewScope(l.currentScope)
+	defer func() { l.currentScope = l.currentScope.parent }()
+	for _, s := range symbols {
+		l.registerSymbol(s)
+	}
+	fn()
+}
+
+// LookupSymbol finds a symbol by name in the current lexical scope chain.
+// Falls back to flat symbol list if no scope is active.
 func (l *Lowerer) LookupSymbol(name string) *SymbolInfo {
+	if l.currentScope != nil {
+		return l.currentScope.Lookup(name)
+	}
+	// Fallback: flat search (for LSP which runs after lowering)
 	for i := len(l.symbols) - 1; i >= 0; i-- {
 		if l.symbols[i].Name == name {
 			return &l.symbols[i]
@@ -467,13 +482,11 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 
 	l.currentRetType = fd.ReturnType
-	l.initFnScope(fd.Params)
-	body := l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	var body IRExpr
+	l.withScope(l.paramsToSymbols(fd.Params), func() {
+		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	})
 	l.currentRetType = nil
-	l.declaredVars = nil
-	l.varNames = nil
-	l.varArcaTypes = nil
-	l.varIRTypes = nil
 
 	return IRFuncDecl{
 		GoName:     name,
@@ -511,15 +524,13 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	l.currentRetType = fd.ReturnType
 	l.currentReceiver = receiver
 	l.currentTypeName = td.Name
-	l.initFnScope(fd.Params)
-	body := l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	var body IRExpr
+	l.withScope(l.paramsToSymbols(fd.Params), func() {
+		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	})
 	l.currentReceiver = ""
 	l.currentTypeName = ""
 	l.currentRetType = nil
-	l.declaredVars = nil
-	l.varNames = nil
-	l.varArcaTypes = nil
-	l.varIRTypes = nil
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -574,37 +585,34 @@ func (l *Lowerer) lowerSumTypeMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 		l.currentRetType = fd.ReturnType
 		l.currentReceiver = receiver
 		l.currentTypeName = td.Name
-		l.initFnScope(fd.Params)
-
-		// Create body that binds pattern fields from receiver, then executes arm body
-		var stmts []IRStmt
-		usedVars := collectUsedIdents(arm.Body)
-		for i, fp := range cp.Fields {
-			if _, used := usedVars[fp.Binding]; used {
-				goFieldName := capitalize(fp.Name)
-				if i < len(ctorFields) {
-					goFieldName = capitalize(ctorFields[i].Name)
-				}
-				stmts = append(stmts, IRLetStmt{
-					GoName: snakeToCamel(fp.Binding),
-					Value:  IRFieldAccess{Expr: IRIdent{GoName: receiver}, Field: goFieldName},
-				})
-			}
-		}
-
-		body := l.lowerFnBody(arm.Body, fd.ReturnType != nil)
 		var finalBody IRExpr
-		if len(stmts) > 0 {
-			finalBody = IRBlock{Stmts: stmts, Expr: body}
-		} else {
-			finalBody = body
-		}
+		l.withScope(l.paramsToSymbols(fd.Params), func() {
+			// Create body that binds pattern fields from receiver, then executes arm body
+			var stmts []IRStmt
+			usedVars := collectUsedIdents(arm.Body)
+			for i, fp := range cp.Fields {
+				if _, used := usedVars[fp.Binding]; used {
+					goFieldName := capitalize(fp.Name)
+					if i < len(ctorFields) {
+						goFieldName = capitalize(ctorFields[i].Name)
+					}
+					stmts = append(stmts, IRLetStmt{
+						GoName: snakeToCamel(fp.Binding),
+						Value:  IRFieldAccess{Expr: IRIdent{GoName: receiver}, Field: goFieldName},
+					})
+				}
+			}
 
+			body := l.lowerFnBody(arm.Body, fd.ReturnType != nil)
+			if len(stmts) > 0 {
+				finalBody = IRBlock{Stmts: stmts, Expr: body}
+			} else {
+				finalBody = body
+			}
+		})
 		l.currentReceiver = ""
 		l.currentTypeName = ""
 		l.currentRetType = nil
-		l.declaredVars = nil
-		l.varNames = nil
 
 		funcs = append(funcs, IRFuncDecl{
 			GoName: methodName,
@@ -656,14 +664,12 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 
 	l.currentRetType = fd.ReturnType
 	l.currentTypeName = td.Name
-	l.initFnScope(fd.Params)
-	body := l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	var body IRExpr
+	l.withScope(l.paramsToSymbols(fd.Params), func() {
+		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	})
 	l.currentTypeName = ""
 	l.currentRetType = nil
-	l.declaredVars = nil
-	l.varNames = nil
-	l.varArcaTypes = nil
-	l.varIRTypes = nil
 
 	return IRFuncDecl{
 		GoName:     funcName,
@@ -712,67 +718,31 @@ func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
 
 // --- Variable Scoping ---
 
-func (l *Lowerer) declareVar(name string) string {
-	goName := snakeToCamel(name)
-	if l.declaredVars == nil {
-		l.declaredVars = make(map[string]int)
-	}
-	count := l.declaredVars[goName]
-	l.declaredVars[goName] = count + 1
-	if count > 0 {
-		goName = fmt.Sprintf("%s_%d", goName, count+1)
-	}
-	if l.varNames == nil {
-		l.varNames = make(map[string]string)
-	}
-	l.varNames[snakeToCamel(name)] = goName
-	return goName
-}
-
-func (l *Lowerer) setVarArcaType(name string, t Type) {
-	if l.varArcaTypes != nil {
-		l.varArcaTypes[name] = t
-	}
-}
-
-// setVarIRType records the IR type for a variable, used for Go FFI method/field resolution.
-// Must be called for every variable binding (let, try let, destructure, params).
-func (l *Lowerer) setVarIRType(name string, t IRType) {
-	if l.varIRTypes == nil || t == nil {
-		return
-	}
-	if _, isInterface := t.(IRInterfaceType); isInterface {
-		return // unknown type, don't record
-	}
-	l.varIRTypes[name] = t
-}
-
-func (l *Lowerer) initFnScope(params []FnParam) {
-	l.declaredVars = make(map[string]int)
-	l.varNames = make(map[string]string)
-	l.varArcaTypes = make(map[string]Type)
-	l.varIRTypes = make(map[string]IRType)
-	for _, p := range params {
+// paramsToSymbols converts function parameters to symbol registration info.
+func (l *Lowerer) paramsToSymbols(params []FnParam) []SymbolRegInfo {
+	syms := make([]SymbolRegInfo, len(params))
+	for i, p := range params {
 		var irType IRType
 		if p.Type != nil {
 			irType = l.lowerType(p.Type)
 		}
-		l.registerSymbol(p.Name, SymbolRegInfo{
+		syms[i] = SymbolRegInfo{
+			Name:     p.Name,
 			ArcaType: p.Type,
 			IRType:   irType,
 			Kind:     SymParameter,
-		})
+		}
 	}
+	return syms
 }
 
 func (l *Lowerer) resolveVar(name string) string {
-	goName := snakeToCamel(name)
-	if l.varNames != nil {
-		if mapped, ok := l.varNames[goName]; ok {
-			return mapped
+	if l.currentScope != nil {
+		if sym := l.currentScope.Lookup(name); sym != nil {
+			return sym.GoName
 		}
 	}
-	return goName
+	return snakeToCamel(name)
 }
 
 // --- Types ---
@@ -999,16 +969,16 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 		}
 		return IRIdent{GoName: e.Name, Type: IRInterfaceType{}}
 	}
-	// Variable resolution with shadowing
+	// Variable resolution via lexical scope
 	goName := l.resolveVar(e.Name)
 	var arcaType Type
-	if l.varArcaTypes != nil {
-		arcaType = l.varArcaTypes[e.Name]
-	}
 	irType := IRType(IRInterfaceType{})
-	if l.varIRTypes != nil {
-		if t, ok := l.varIRTypes[e.Name]; ok {
-			irType = t
+	if l.currentScope != nil {
+		if sym := l.currentScope.Lookup(e.Name); sym != nil {
+			arcaType = sym.Type
+			if sym.IRType != nil {
+				irType = sym.IRType
+			}
 		}
 	}
 	return IRIdent{GoName: goName, Type: irType, Source: SourceInfo{Type: arcaType}}
@@ -1647,24 +1617,27 @@ func (l *Lowerer) lowerBlock(b Block) IRExpr {
 
 func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 	params := make([]IRParamDecl, len(lam.Params))
+	var lamSymbols []SymbolRegInfo
 	for i, p := range lam.Params {
 		var typ IRType
 		if p.Type != nil {
 			typ = l.lowerType(p.Type)
 		}
 		params[i] = IRParamDecl{GoName: p.Name, Type: typ}
-		// Register lambda parameter for Go FFI resolution within lambda body
-		if typ != nil && l.varIRTypes != nil {
-			if _, isInterface := typ.(IRInterfaceType); !isInterface {
-				l.varIRTypes[p.Name] = typ
-			}
-		}
+		lamSymbols = append(lamSymbols, SymbolRegInfo{
+			Name:   p.Name,
+			IRType: typ,
+			Kind:   SymParameter,
+		})
 	}
 	var retType IRType
 	if lam.ReturnType != nil {
 		retType = l.lowerType(lam.ReturnType)
 	}
-	body := l.lowerExpr(lam.Body)
+	var body IRExpr
+	l.withScope(lamSymbols, func() {
+		body = l.lowerExpr(lam.Body)
+	})
 	return IRLambda{
 		Params:     params,
 		ReturnType: retType,
@@ -1785,7 +1758,8 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 				if rt, ok := loweredExpr.irType().(IRResultType); ok {
 					irType = rt.Ok
 				}
-				goVarName = l.registerSymbol(s.Name, SymbolRegInfo{
+				goVarName = l.registerSymbol(SymbolRegInfo{
+					Name:     s.Name,
 					ArcaType: l.inferASTType(call.Args[0]),
 					IRType:   irType,
 					Kind:     SymVariable,
@@ -1836,7 +1810,8 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	} else {
 		arcaType = l.inferASTType(s.Value)
 	}
-	goVarName := l.registerSymbol(s.Name, SymbolRegInfo{
+	goVarName := l.registerSymbol(SymbolRegInfo{
+		Name:     s.Name,
 		ArcaType: arcaType,
 		IRType:   loweredValue.irType(),
 		Kind:     SymVariable,
@@ -2214,7 +2189,11 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 			// Register pattern binding types before lowering body
 			for i, fp := range pat.Fields {
 				if i < len(ctorFields) {
-					l.setVarArcaType(fp.Binding, ctorFields[i].Type)
+					l.registerSymbol(SymbolRegInfo{
+						Name:     fp.Binding,
+						ArcaType: ctorFields[i].Type,
+						Kind:     SymVariable,
+					})
 				}
 			}
 

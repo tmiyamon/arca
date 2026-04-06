@@ -144,6 +144,45 @@ type SymbolInfo struct {
 	Kind   string
 }
 
+// Scope represents a lexical scope with a link to its parent.
+type Scope struct {
+	parent    *Scope
+	symbols   map[string]*SymbolInfo
+	declCount map[string]int // same-scope shadowing counter
+}
+
+func NewScope(parent *Scope) *Scope {
+	return &Scope{
+		parent:    parent,
+		symbols:   make(map[string]*SymbolInfo),
+		declCount: make(map[string]int),
+	}
+}
+
+func (s *Scope) Define(name string, sym *SymbolInfo) {
+	s.symbols[name] = sym
+}
+
+func (s *Scope) Lookup(name string) *SymbolInfo {
+	for scope := s; scope != nil; scope = scope.parent {
+		if sym, ok := scope.symbols[name]; ok {
+			return sym
+		}
+	}
+	return nil
+}
+
+// AllSymbols collects all symbols from this scope and parents (for LSP).
+func (s *Scope) AllSymbols() []SymbolInfo {
+	var result []SymbolInfo
+	for scope := s; scope != nil; scope = scope.parent {
+		for _, sym := range scope.symbols {
+			result = append(result, *sym)
+		}
+	}
+	return result
+}
+
 // --- Type Comparison ---
 
 func typeName(t Type) string {
