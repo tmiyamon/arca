@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-06
+
+- [Tag-based snapshot and migration](decisions/ideas.md#2026-04-06-tag-based-snapshot-and-migration-system-idea) — Per-tag snapshots, diff, check. Arca outputs IR, libraries handle concrete formats. Idea
+
 ## 2026-04-05
 
 - [Unified IRMatch + IRMatchPattern](decisions/transpiler.md#2026-04-05-unified-irmatch--irmatchpattern-design) — 6 match types → single IRMatch with typed patterns
