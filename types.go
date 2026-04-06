@@ -149,14 +149,21 @@ type Scope struct {
 	parent    *Scope
 	symbols   map[string]*SymbolInfo
 	declCount map[string]int // same-scope shadowing counter
+	Children  []*Scope
+	StartPos  Pos
+	EndPos    Pos
 }
 
 func NewScope(parent *Scope) *Scope {
-	return &Scope{
+	s := &Scope{
 		parent:    parent,
 		symbols:   make(map[string]*SymbolInfo),
 		declCount: make(map[string]int),
 	}
+	if parent != nil {
+		parent.Children = append(parent.Children, s)
+	}
+	return s
 }
 
 func (s *Scope) Define(name string, sym *SymbolInfo) {
@@ -172,15 +179,31 @@ func (s *Scope) Lookup(name string) *SymbolInfo {
 	return nil
 }
 
-// AllSymbols collects all symbols from this scope and parents (for LSP).
-func (s *Scope) AllSymbols() []SymbolInfo {
-	var result []SymbolInfo
-	for scope := s; scope != nil; scope = scope.parent {
-		for _, sym := range scope.symbols {
-			result = append(result, *sym)
+// FindScopeAt returns the innermost scope containing the given position.
+func (s *Scope) FindScopeAt(pos Pos) *Scope {
+	for _, child := range s.Children {
+		if child.Contains(pos) {
+			return child.FindScopeAt(pos)
 		}
 	}
-	return result
+	return s
+}
+
+// Contains checks if a position is within this scope's range.
+func (s *Scope) Contains(pos Pos) bool {
+	if s.StartPos.Line == 0 && s.EndPos.Line == 0 {
+		return true // unset positions = global scope
+	}
+	if pos.Line < s.StartPos.Line || pos.Line > s.EndPos.Line {
+		return false
+	}
+	if pos.Line == s.StartPos.Line && pos.Col < s.StartPos.Col {
+		return false
+	}
+	if pos.Line == s.EndPos.Line && pos.Col > s.EndPos.Col {
+		return false
+	}
+	return true
 }
 
 // --- Type Comparison ---

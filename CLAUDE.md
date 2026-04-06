@@ -39,7 +39,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 
 - **IR abstraction**: New features go in `lower.go` or `prelude.go`. `emit.go` should rarely change.
 - **Unified IRMatch**: Single `IRMatch` with typed `IRMatchPattern` for all match kinds. Exhaustiveness checked in validate, not structurally enforced by IR types.
-- **Scope.onDefine callback**: All scope.Define() calls auto-record symbols. No manual recording at each binding site.
+- **Lexical Scope tree**: `withScope(startPos, endPos, symbols, fn)` manages scope push/pop + symbol registration. All variable bindings go through `registerSymbol`. Scope tree preserved for LSP `FindSymbolAt`.
 - **Variable shadowing**: Lower RHS before declaring variable name.
 - **Sum type methods**: `match self` methods expanded to per-variant Go methods in lower.go.
 - **Prelude**: Built-in functions defined in one map. Adding a builtin = one line.

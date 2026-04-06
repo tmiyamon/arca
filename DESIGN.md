@@ -44,6 +44,15 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - Go types from FFI are **opaque** — Arca does not guarantee their immutability
 - Go developers are expected to understand Go's mutation semantics at the FFI boundary
 
+## Strings
+
+- `"..."` — single-line, escape sequences (`\n`, `\t`), interpolation `${expr}`
+- `"""..."""` — multiline (triple-quoted), raw (no escape processing), with `${expr}` interpolation
+- Common leading whitespace stripped based on closing `"""` indentation
+- Emit: multiline → Go backtick, falls back to double-quote if content contains backtick
+- Interpolation → `fmt.Sprintf` with `%v` placeholders
+- Single-line `"..."` rejects literal newlines (lexer error with `"""` suggestion)
+
 ## Option Type
 
 - Implemented as a **generic struct**, not a pointer

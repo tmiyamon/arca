@@ -29,7 +29,8 @@ type Lowerer struct {
 	tmpCounter   int
 	errors       []LowerError
 	symbols      []SymbolInfo // all symbols (flat, for LSP global list)
-	currentScope *Scope       // lexical scope stack
+	rootScope    *Scope       // root of scope tree (preserved after lowering)
+	currentScope *Scope       // current scope during lowering
 }
 
 type LowerError struct {
@@ -92,8 +93,10 @@ type SymbolRegInfo struct {
 	Kind     string // SymVariable, SymParameter, etc.
 }
 
-func (l *Lowerer) withScope(symbols []SymbolRegInfo, fn func()) {
+func (l *Lowerer) withScope(startPos, endPos Pos, symbols []SymbolRegInfo, fn func()) {
 	l.currentScope = NewScope(l.currentScope)
+	l.currentScope.StartPos = startPos
+	l.currentScope.EndPos = endPos
 	defer func() { l.currentScope = l.currentScope.parent }()
 	for _, s := range symbols {
 		l.registerSymbol(s)
@@ -107,13 +110,23 @@ func (l *Lowerer) LookupSymbol(name string) *SymbolInfo {
 	if l.currentScope != nil {
 		return l.currentScope.Lookup(name)
 	}
-	// Fallback: flat search (for LSP which runs after lowering)
+	// Fallback: flat search
 	for i := len(l.symbols) - 1; i >= 0; i-- {
 		if l.symbols[i].Name == name {
 			return &l.symbols[i]
 		}
 	}
 	return nil
+}
+
+// FindSymbolAt finds a symbol by name at a specific source position,
+// using the scope tree to resolve lexical scoping.
+func (l *Lowerer) FindSymbolAt(name string, pos Pos) *SymbolInfo {
+	if l.rootScope != nil {
+		scope := l.rootScope.FindScopeAt(pos)
+		return scope.Lookup(name)
+	}
+	return l.LookupSymbol(name)
 }
 
 // Types returns the collected type declarations.
@@ -133,6 +146,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 	if resolver == nil {
 		resolver = NullTypeResolver{}
 	}
+	root := NewScope(nil)
 	l := &Lowerer{
 		types:        make(map[string]TypeDecl),
 		typeAliases:  make(map[string]TypeAliasDecl),
@@ -143,6 +157,8 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		builtins:     make(map[string]bool),
 		goModule:     goModule,
 		typeResolver: resolver,
+		rootScope:    root,
+		currentScope: root,
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -482,8 +498,9 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 
 	l.currentRetType = fd.ReturnType
+	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
-	l.withScope(l.paramsToSymbols(fd.Params), func() {
+	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
 		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
 	})
 	l.currentRetType = nil
@@ -524,8 +541,9 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	l.currentRetType = fd.ReturnType
 	l.currentReceiver = receiver
 	l.currentTypeName = td.Name
+	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
-	l.withScope(l.paramsToSymbols(fd.Params), func() {
+	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
 		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
 	})
 	l.currentReceiver = ""
@@ -585,8 +603,9 @@ func (l *Lowerer) lowerSumTypeMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 		l.currentRetType = fd.ReturnType
 		l.currentReceiver = receiver
 		l.currentTypeName = td.Name
+		sp, ep := bodyPos(arm.Body)
 		var finalBody IRExpr
-		l.withScope(l.paramsToSymbols(fd.Params), func() {
+		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
 			// Create body that binds pattern fields from receiver, then executes arm body
 			var stmts []IRStmt
 			usedVars := collectUsedIdents(arm.Body)
@@ -664,8 +683,9 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 
 	l.currentRetType = fd.ReturnType
 	l.currentTypeName = td.Name
+	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
-	l.withScope(l.paramsToSymbols(fd.Params), func() {
+	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
 		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
 	})
 	l.currentTypeName = ""
@@ -714,6 +734,14 @@ func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
 		return block
 	}
 	return expr
+}
+
+// bodyPos extracts start/end position from a function body expression.
+func bodyPos(body Expr) (Pos, Pos) {
+	if b, ok := body.(Block); ok {
+		return b.Pos, b.EndPos
+	}
+	return Pos{}, Pos{}
 }
 
 // --- Variable Scoping ---
@@ -1634,8 +1662,9 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 	if lam.ReturnType != nil {
 		retType = l.lowerType(lam.ReturnType)
 	}
+	sp, ep := bodyPos(lam.Body)
 	var body IRExpr
-	l.withScope(lamSymbols, func() {
+	l.withScope(sp, ep, lamSymbols, func() {
 		body = l.lowerExpr(lam.Body)
 	})
 	return IRLambda{

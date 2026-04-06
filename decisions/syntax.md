@@ -4,6 +4,18 @@ Language syntax, naming, import system. Newest first.
 
 ---
 
+## 2026-04-06: Triple-quoted multiline strings
+
+**Context:** Needed multiline strings for SQL, templates, etc. Single-line `"..."` can't contain literal newlines.
+
+**Decision:** `"""..."""` syntax with `${}` interpolation. Common leading whitespace stripped based on closing `"""` indentation (Kotlin/Swift convention). Single-line `"..."` rejects literal newlines with error suggesting `"""`.
+
+**Emit:** Go backtick for multiline, `fmt.Sprintf` with backtick for interpolation. Falls back to double-quote if content contains backtick.
+
+**Status:** Implemented.
+
+---
+
 ## 2026-04-02: struct tags — implemented as tags block
 
 **Requirements:**
@@ -207,16 +219,6 @@ Not ideal (two styles) but technically necessary.
 
 ---
 
-## 2026-03-28: Import syntax — dot separator (superseded by 2026-03-30 string literals)
-
-**Context:** SPEC had `go/fmt`, implementation had `go.fmt`.
-
-**Analysis:** `/` is Go convention but most languages use `.` for imports (Java, Kotlin, Scala, Python, C#). Mixing `.` and `/` for Arca vs Go modules is inconsistent.
-
-**Decision at this point:** All dots. `import go.fmt`, `import go.database.sql`, `import user`.
-
----
-
 ## 2026-03-31: struct tags — rethinking (superseded by 2026-04-02)
 
 **Context:** Realized json/db metadata belongs to fields, not types. `type ProductId = Int{min: 1, json: "id"}` breaks when reused — json key leaks to other fields.
@@ -240,6 +242,16 @@ Not ideal (two styles) but technically necessary.
 **Options:** Annotations (@json), separate tags block, auto-generate from field names, mix into constrained types `{}`.
 
 **Decision at this point:** Mix into `{}`. String-valued keys become struct tags, numeric-valued keys become validation constraints. Single source of truth. `Int{min: 1, json: "id", db: "id"}`.
+
+---
+
+## 2026-03-28: Import syntax — dot separator (superseded by 2026-03-30 string literals)
+
+**Context:** SPEC had `go/fmt`, implementation had `go.fmt`.
+
+**Analysis:** `/` is Go convention but most languages use `.` for imports (Java, Kotlin, Scala, Python, C#). Mixing `.` and `/` for Arca vs Go modules is inconsistent.
+
+**Decision at this point:** All dots. `import go.fmt`, `import go.database.sql`, `import user`.
 
 ---
 

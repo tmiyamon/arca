@@ -80,8 +80,10 @@ type MatchArm struct {
 }
 
 type Block struct {
-	Stmts []Stmt
-	Expr  Expr // final expression (return value)
+	Pos    Pos  // { の位置
+	EndPos Pos  // } の位置
+	Stmts  []Stmt
+	Expr   Expr // final expression (return value)
 }
 
 type ConstructorCall struct {

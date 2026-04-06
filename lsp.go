@@ -230,15 +230,15 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 	// Check if this is a field access: receiver.field
 	receiver := getReceiverAt(source, line, col)
 	if receiver != "" {
-		if sym := lowerer.LookupSymbol(receiver); sym != nil {
+		if sym := lowerer.FindSymbolAt(receiver, Pos{line, col}); sym != nil {
 			if fieldType := lookupFieldType(lowerer.Types(), sym.Type, word); fieldType != nil {
 				return fmt.Sprintf("```arca\n%s: %s\n```", word, typeName(fieldType))
 			}
 		}
 	}
 
-	// Look up local variables and parameters
-	if sym := lowerer.LookupSymbol(word); sym != nil {
+	// Look up local variables and parameters (scope-aware)
+	if sym := lowerer.FindSymbolAt(word, Pos{line, col}); sym != nil {
 		typeStr := typeName(sym.Type)
 		if typeStr == "unknown" && sym.IRType != nil {
 			typeStr = irTypeDisplayName(sym.IRType)

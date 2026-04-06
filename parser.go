@@ -596,9 +596,11 @@ func (p *Parser) parseFnParam() (FnParam, error) {
 }
 
 func (p *Parser) parseBlockExpr() (Expr, error) {
-	if _, err := p.expect(TkLBrace); err != nil {
+	openTok, err := p.expect(TkLBrace)
+	if err != nil {
 		return nil, err
 	}
+	startPos := Pos{openTok.Line, openTok.Col}
 	var stmts []Stmt
 	var lastExpr Expr
 
@@ -641,12 +643,13 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 			}
 		}
 	}
-	p.advance() // skip '}'
+	closeTok := p.advance() // skip '}'
+	endPos := Pos{closeTok.Line, closeTok.Col}
 
 	if len(stmts) == 0 && lastExpr != nil {
 		return lastExpr, nil
 	}
-	return Block{Stmts: stmts, Expr: lastExpr}, nil
+	return Block{Pos: startPos, EndPos: endPos, Stmts: stmts, Expr: lastExpr}, nil
 }
 
 func (p *Parser) parseLetStmt() (Stmt, error) {

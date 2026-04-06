@@ -6,8 +6,13 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-07
+
+- [Lexical scope tree](decisions/toolchain.md#2026-04-07-lexical-scope-tree-for-symbol-resolution) — Scope tree with positions for LSP scope-aware symbol lookup. Replaces flat varNames/varIRTypes
+
 ## 2026-04-06
 
+- [Triple-quoted multiline strings](decisions/syntax.md#2026-04-06-triple-quoted-multiline-strings) — `"""..."""` with interpolation, indent stripping, backtick emit
 - [Tag-based snapshot and migration](decisions/ideas.md#2026-04-06-tag-based-snapshot-and-migration-system-idea) — Per-tag snapshots, diff, check. Arca outputs IR, libraries handle concrete formats. Idea
 
 ## 2026-04-05

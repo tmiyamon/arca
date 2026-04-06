@@ -4,6 +4,29 @@ LSP, project structure, build pipeline, dependency management. Newest first.
 
 ---
 
+## 2026-04-07: Lexical scope tree for symbol resolution
+
+**Context:** LSP hover showed wrong type for shadowed variables (e.g. match arm `Error(e)` showed `*echo.Echo` from outer `let e`). Flat symbol list had no scoping — `LookupSymbol` returned last-defined symbol regardless of position.
+
+**Decision:** Lexical scope tree with positions.
+
+- `Scope` struct with `parent`, `Children`, `StartPos`, `EndPos`, `symbols`, `declCount`
+- `withScope(startPos, endPos, symbols, fn)` manages push/pop + initial symbol registration
+- All variable bindings go through `registerSymbol` → `Scope.Define`
+- Scope tree preserved after lowering (`rootScope`)
+- `FindSymbolAt(name, pos)` traverses tree to find innermost scope containing cursor
+- LSP hover uses `FindSymbolAt` instead of flat `LookupSymbol`
+- `SymbolInfo` carries both `ArcaType` and `IRType` (unified from `varArcaTypes`/`varIRTypes`)
+- Block AST node records `{`/`}` positions for scope boundaries
+
+**Replaces:** `declaredVars`, `varNames`, `varArcaTypes`, `varIRTypes` maps on Lowerer. All unified into `Scope.symbols`.
+
+**Pending:** Match arm bindings not yet registered via `registerSymbol`.
+
+**Status:** Implemented.
+
+---
+
 ## 2026-04-05: Project structure and build pipeline
 
 **Context:** The transpiler pipeline generates go.mod in a temporary build/ directory and runs `go get` during build. This causes two problems: (1) TypeResolver runs before `go get`, so external packages can't be resolved — type info is missing, GoMultiReturn not set, wrong code generated. (2) Module cache can make TypeResolver succeed even without `go get`, causing inconsistent behavior.
