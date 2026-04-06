@@ -319,11 +319,17 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 
 func (l *Lexer) readStringOrInterp() ([]Token, error) {
 	l.advance() // skip opening "
+	// Check for triple-quote multiline string
+	if l.pos+1 < len(l.input) && l.peek() == '"' && l.input[l.pos+1] == '"' {
+		l.advance() // skip second "
+		l.advance() // skip third "
+		return l.readMultilineString()
+	}
 	var tokens []Token
 	var buf strings.Builder
 	hasInterp := false
 
-	for l.pos < len(l.input) && l.peek() != '"' {
+	for l.pos < len(l.input) && l.peek() != '"' && l.peek() != '\n' {
 		ch := l.peek()
 		if ch == '$' && l.pos+1 < len(l.input) && l.input[l.pos+1] == '{' {
 			// String interpolation
@@ -384,8 +390,8 @@ func (l *Lexer) readStringOrInterp() ([]Token, error) {
 			buf.WriteRune(l.advance())
 		}
 	}
-	if l.pos >= len(l.input) {
-		return nil, fmt.Errorf("unterminated string")
+	if l.pos >= len(l.input) || l.peek() == '\n' {
+		return nil, fmt.Errorf("%d:%d: unterminated string (use \"\"\" for multiline)", l.line, l.col)
 	}
 	l.advance() // skip closing "
 
@@ -397,6 +403,86 @@ func (l *Lexer) readStringOrInterp() ([]Token, error) {
 		tokens = append(tokens, Token{Kind: TkString, Lit: buf.String()})
 	}
 	// Wrap in interp markers
+	result := []Token{{Kind: TkStringInterpStart, Lit: ""}}
+	result = append(result, tokens...)
+	result = append(result, Token{Kind: TkStringInterpEnd, Lit: ""})
+	return result, nil
+}
+
+func (l *Lexer) readMultilineString() ([]Token, error) {
+	// Skip leading newline after opening """
+	if l.pos < len(l.input) && l.peek() == '\n' {
+		l.advance()
+	}
+
+	var tokens []Token
+	var buf strings.Builder
+	hasInterp := false
+
+	for l.pos < len(l.input) {
+		// Check for closing """
+		if l.peek() == '"' && l.pos+2 < len(l.input) && l.input[l.pos+1] == '"' && l.input[l.pos+2] == '"' {
+			l.advance() // skip "
+			l.advance() // skip "
+			l.advance() // skip "
+			break
+		}
+		ch := l.peek()
+		if ch == '$' && l.pos+1 < len(l.input) && l.input[l.pos+1] == '{' {
+			hasInterp = true
+			if buf.Len() > 0 {
+				tokens = append(tokens, Token{Kind: TkString, Lit: buf.String()})
+				buf.Reset()
+			}
+			l.advance() // skip $
+			l.advance() // skip {
+			depth := 1
+			for l.pos < len(l.input) && depth > 0 {
+				l.skipWhitespaceAndComments()
+				if l.peek() == '}' {
+					depth--
+					if depth == 0 {
+						l.advance()
+						break
+					}
+				}
+				if l.peek() == '{' {
+					depth++
+				}
+				if unicode.IsLetter(l.peek()) || l.peek() == '_' {
+					tok := l.readIdent()
+					tokens = append(tokens, tok)
+					for l.pos < len(l.input) && l.peek() == '.' {
+						l.advance()
+						tokens = append(tokens, Token{Kind: TkDot, Lit: "."})
+						tok = l.readIdent()
+						tokens = append(tokens, tok)
+					}
+				} else {
+					return nil, fmt.Errorf("unsupported expression in string interpolation")
+				}
+			}
+		} else {
+			buf.WriteRune(l.advance())
+		}
+	}
+
+	// Trailing text
+	if buf.Len() > 0 {
+		tokens = append(tokens, Token{Kind: TkString, Lit: buf.String()})
+	}
+
+	if !hasInterp {
+		content := ""
+		if len(tokens) == 1 {
+			content = tokens[0].Lit
+		}
+		return []Token{{Kind: TkString, Lit: stripCommonIndent(content)}}, nil
+	}
+
+	// Strip common indent from all string tokens
+	tokens = stripMultilineInterpIndent(tokens)
+
 	result := []Token{{Kind: TkStringInterpStart, Lit: ""}}
 	result = append(result, tokens...)
 	result = append(result, Token{Kind: TkStringInterpEnd, Lit: ""})

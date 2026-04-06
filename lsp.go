@@ -127,7 +127,7 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 	tokens, err := lexer.Tokenize()
 	if err != nil {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
-			Range:    posToRange(Pos{1, 1}),
+			Range:    posToRange(extractPosFromError(err.Error())),
 			Severity: &severity,
 			Source:   strPtr(lspName),
 			Message:  err.Error(),

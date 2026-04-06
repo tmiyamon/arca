@@ -856,7 +856,7 @@ func (l *Lowerer) lowerExpr(expr Expr) IRExpr {
 	case FloatLit:
 		return IRFloatLit{Value: e.Value, Type: IRNamedType{GoName: "float64"}}
 	case StringLit:
-		return IRStringLit{Value: e.Value, Type: IRNamedType{GoName: "string"}}
+		return IRStringLit{Value: e.Value, Type: IRNamedType{GoName: "string"}, Multiline: e.Multiline}
 	case BoolLit:
 		return IRBoolLit{Value: e.Value, Type: IRNamedType{GoName: "bool"}}
 	case Ident:
@@ -970,12 +970,13 @@ func (l *Lowerer) lowerStringInterp(si StringInterp) IRExpr {
 	}
 	fmtStr := strings.Join(fmtParts, "")
 	if len(args) == 0 {
-		return IRStringLit{Value: fmtStr, Type: IRNamedType{GoName: "string"}}
+		return IRStringLit{Value: fmtStr, Type: IRNamedType{GoName: "string"}, Multiline: si.Multiline}
 	}
 	return IRStringInterp{
-		Format: fmtStr,
-		Args:   args,
-		Type:   IRNamedType{GoName: "string"},
+		Format:    fmtStr,
+		Args:      args,
+		Type:      IRNamedType{GoName: "string"},
+		Multiline: si.Multiline,
 	}
 }
 

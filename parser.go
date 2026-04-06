@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 type Parser struct {
@@ -843,7 +844,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 	case TkString:
 		p.advance()
-		return StringLit{Value: tok.Lit}, nil
+		return StringLit{Value: tok.Lit, Multiline: strings.Contains(tok.Lit, "\n")}, nil
 
 	case TkStringInterpStart:
 		return p.parseStringInterp()
@@ -968,10 +969,14 @@ func (p *Parser) parseListLit() (Expr, error) {
 func (p *Parser) parseStringInterp() (Expr, error) {
 	p.advance() // skip InterpStart
 	var parts []Expr
+	multiline := false
 	for p.peek().Kind != TkStringInterpEnd {
 		if p.peek().Kind == TkString {
 			tok := p.advance()
-			parts = append(parts, StringLit{Value: tok.Lit})
+			if strings.Contains(tok.Lit, "\n") {
+				multiline = true
+			}
+			parts = append(parts, StringLit{Value: tok.Lit, Multiline: multiline})
 		} else {
 			expr, err := p.parseExpr()
 			if err != nil {
@@ -981,7 +986,7 @@ func (p *Parser) parseStringInterp() (Expr, error) {
 		}
 	}
 	p.advance() // skip InterpEnd
-	return StringInterp{Parts: parts}, nil
+	return StringInterp{Parts: parts, Multiline: multiline}, nil
 }
 
 func (p *Parser) parseTupleOrLambda() (Expr, error) {

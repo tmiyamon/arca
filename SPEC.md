@@ -223,6 +223,23 @@ import go _ "modernc.org/sqlite"
 | Result[T, E] | Ok(T) / Error(E) |
 | (A, B, ...) | Tuple |
 
+### Strings
+
+```
+"Hello"                          // plain string
+"Hello ${name}!"                 // string interpolation
+"""
+  SELECT *
+  FROM users
+  WHERE name = ${name}
+  """                            // multiline string (triple-quoted, with interpolation)
+```
+
+- `"..."` — single-line string with escape sequences (`\n`, `\t`, `\\`, `\"`)
+- `"""..."""` — multiline string, raw (no escape processing), with `${}` interpolation
+- Common leading whitespace is stripped based on indentation of closing `"""`
+- Compiles to Go `fmt.Sprintf` (interpolation) or string literal / backtick (plain)
+
 ### FFI (Go interop)
 
 Go packages are imported with string literal paths.

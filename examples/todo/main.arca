@@ -1,29 +1,34 @@
 //import go "time.Time"
-import go "github.com/labstack/echo/v5"
+import go "database/sql"
 import go "net/http"
+import go "github.com/labstack/echo/v5"
+import go _ "github.com/mattn/go-sqlite3"
 
-//type Todo (
-//  content: String { max_length: 255 }, 
-//  isFinished: Bool,
-//  createdAt: time.Time, 
-//  dueAt: time.Time
-//)
+type Todo (
+  content: String { max_length: 255 }, 
+  isFinished: Bool,
+  createdAt: time.Time, 
+  dueAt: time.Time
+}
 
-fun listTodo(c: *echo.Context) -> error {
+fun getTodo(c: *echo.Context) -> error {
   c.String(http.StatusOK, "Hello World!")
 }
 
 fun main() {
+  let db = sql.Open("sqlite3", "./todo.db")?
+  defer db.Close()
+
+  db.Exec("create table if not exists todo(id primary key autoincrement, body text
+
   let e = echo.New()
 
-  e.GET("/", listTodo)
+  e.GET("/", getTodo)
 
   let result = e.Start(":8080")
   match result {
     Ok(_) -> Unit
-    Error(error) -> println("failed to start server", "error", error)
+    Error(e) -> println("error: ${e}")
   }
 }
 
-  
-  

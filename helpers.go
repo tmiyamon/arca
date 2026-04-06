@@ -189,3 +189,83 @@ func collectIdents(expr Expr, used map[string]bool) {
 		collectIdents(e.Body, used)
 	}
 }
+
+// stripCommonIndent removes common leading whitespace from multiline strings.
+// Trailing whitespace-only line (indentation before closing """) is removed.
+func stripCommonIndent(s string) string {
+	lines := strings.Split(s, "\n")
+
+	// Remove trailing whitespace-only line
+	if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	// Find minimum indentation
+	minIndent := -1
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if minIndent < 0 || indent < minIndent {
+			minIndent = indent
+		}
+	}
+	if minIndent <= 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	for i, line := range lines {
+		if len(line) >= minIndent {
+			lines[i] = line[minIndent:]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// stripMultilineInterpIndent strips common indentation from string tokens
+// in an interpolated multiline string.
+func stripMultilineInterpIndent(tokens []Token) []Token {
+	// Collect all literal content to compute common indent
+	var allText strings.Builder
+	for _, t := range tokens {
+		if t.Kind == TkString {
+			allText.WriteString(t.Lit)
+		}
+	}
+	combined := allText.String()
+	lines := strings.Split(combined, "\n")
+
+	// Remove trailing whitespace-only line
+	if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	minIndent := -1
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if minIndent < 0 || indent < minIndent {
+			minIndent = indent
+		}
+	}
+	if minIndent <= 0 {
+		return tokens
+	}
+
+	for i := range tokens {
+		if tokens[i].Kind != TkString {
+			continue
+		}
+		tLines := strings.Split(tokens[i].Lit, "\n")
+		for j, line := range tLines {
+			if len(line) >= minIndent {
+				tLines[j] = line[minIndent:]
+			}
+		}
+		tokens[i].Lit = strings.Join(tLines, "\n")
+	}
+	return tokens
+}

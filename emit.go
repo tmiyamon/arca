@@ -297,6 +297,9 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IRFloatLit:
 		return fmt.Sprintf("%g", expr.Value)
 	case IRStringLit:
+		if expr.Multiline && !strings.Contains(expr.Value, "`") {
+			return "`" + expr.Value + "`"
+		}
 		return fmt.Sprintf("%q", expr.Value)
 	case IRBoolLit:
 		if expr.Value {
@@ -309,6 +312,9 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		args := make([]string, len(expr.Args))
 		for i, a := range expr.Args {
 			args[i] = em.emitExpr(a)
+		}
+		if expr.Multiline && !strings.Contains(expr.Format, "`") {
+			return fmt.Sprintf("fmt.Sprintf(`%s`, %s)", expr.Format, strings.Join(args, ", "))
 		}
 		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, strings.Join(args, ", "))
 	case IRFnCall:

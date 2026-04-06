@@ -184,8 +184,9 @@ type IRFloatLit struct {
 }
 
 type IRStringLit struct {
-	Value string
-	Type  IRType
+	Value     string
+	Type      IRType
+	Multiline bool
 }
 
 type IRBoolLit struct {
@@ -202,7 +203,8 @@ type IRIdent struct {
 
 // String interpolation — resolved to fmt.Sprintf
 type IRStringInterp struct {
-	Format string   // "Hello, %v!"
+	Format    string   // "Hello, %v!"
+	Multiline bool
 	Args   []IRExpr
 	Type   IRType
 }
