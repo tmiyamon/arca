@@ -225,6 +225,9 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 		}
 	}
 
+	// Expand sum type methods to per-variant implementations
+	funcs = l.expandSumTypeMethods(funcs)
+
 	// Collect builtin names
 	var builtinNames []string
 	for name := range l.builtins {
@@ -326,7 +329,7 @@ func (l *Lowerer) lowerSumTypeDecl(td TypeDecl) IRSumTypeDecl {
 	// Collect method signatures for interface definition
 	var ifaceMethods []IRInterfaceMethod
 	for _, m := range td.Methods {
-		if !m.Static && findMatchSelf(m.Body) != nil {
+		if !m.Static {
 			name := snakeToCamel(m.Name)
 			if m.Public {
 				name = snakeToPascal(m.Name)
@@ -519,28 +522,23 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 		return []IRFuncDecl{l.lowerAssociatedFunc(td, fd)}
 	}
 
-	// Sum type with match self: expand method to each variant
-	if len(td.Constructors) > 1 && !isEnum(td) {
-		if expanded := l.lowerSumTypeMethod(td, fd); expanded != nil {
-			return expanded
-		}
-	}
+	// Sum type methods: lower as normal method, expand to per-variant later
 
 	methodName := snakeToCamel(fd.Name)
 	if fd.Public {
 		methodName = snakeToPascal(fd.Name)
 	}
 
+	receiver := strings.ToLower(td.Name[:1])
+	l.currentRetType = fd.ReturnType
+	l.currentReceiver = receiver
+	l.currentTypeName = td.Name
+
 	params := l.lowerParams(fd.Params)
 	var retType IRType
 	if fd.ReturnType != nil {
 		retType = l.lowerType(fd.ReturnType)
 	}
-
-	receiver := strings.ToLower(td.Name[:1])
-	l.currentRetType = fd.ReturnType
-	l.currentReceiver = receiver
-	l.currentTypeName = td.Name
 	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
 	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
@@ -559,114 +557,106 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
-		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}}
 }
 
-// lowerSumTypeMethod expands a method with `match self` into per-variant methods.
-func (l *Lowerer) lowerSumTypeMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
-	// Find the match self expression in the body
-	matchExpr := findMatchSelf(fd.Body)
-	if matchExpr == nil {
-		return nil
+// expandSumTypeMethods transforms methods on sum types (interfaces) into
+// per-variant method implementations. Operates on IR after lowering.
+func (l *Lowerer) expandSumTypeMethods(funcs []IRFuncDecl) []IRFuncDecl {
+	var result []IRFuncDecl
+	for _, fn := range funcs {
+		if fn.Receiver == nil {
+			result = append(result, fn)
+			continue
+		}
+		// Check if receiver type is a sum type
+		td, isSumType := l.types[fn.Receiver.Type]
+		if !isSumType || len(td.Constructors) <= 1 || isEnum(td) {
+			result = append(result, fn)
+			continue
+		}
+		// Expand to per-variant methods
+		result = append(result, l.expandToVariants(fn, td)...)
 	}
+	return result
+}
 
-	methodName := snakeToCamel(fd.Name)
-	if fd.Public {
-		methodName = snakeToPascal(fd.Name)
+func (l *Lowerer) expandToVariants(fn IRFuncDecl, td TypeDecl) []IRFuncDecl {
+	// Find match on self in body
+	matchExpr := findIRMatchSelf(fn.Body, fn.Receiver.GoName)
+	if matchExpr != nil {
+		return l.expandMatchSelf(fn, td, matchExpr)
 	}
+	// No match self: duplicate body for each variant
+	return l.duplicateForVariants(fn, td)
+}
 
-	params := l.lowerParams(fd.Params)
-	var retType IRType
-	if fd.ReturnType != nil {
-		retType = l.lowerType(fd.ReturnType)
+// findIRMatchSelf finds an IRMatch on the receiver variable in the IR body.
+func findIRMatchSelf(body IRExpr, receiverName string) *IRMatch {
+	switch e := body.(type) {
+	case IRMatch:
+		if ident, ok := e.Subject.(IRIdent); ok && ident.GoName == receiverName {
+			return &e
+		}
+	case IRBlock:
+		if e.Expr != nil {
+			return findIRMatchSelf(e.Expr, receiverName)
+		}
 	}
+	return nil
+}
 
+// expandMatchSelf splits a match-on-self method into per-variant methods,
+// each with the corresponding arm's body.
+func (l *Lowerer) expandMatchSelf(fn IRFuncDecl, td TypeDecl, m *IRMatch) []IRFuncDecl {
 	var funcs []IRFuncDecl
-	for _, arm := range matchExpr.Arms {
-		cp, ok := arm.Pattern.(ConstructorPattern)
+	for _, arm := range m.Arms {
+		p, ok := arm.Pattern.(IRSumTypePattern)
 		if !ok {
 			continue
 		}
-		variantName := td.Name + cp.Name
-		receiver := strings.ToLower(td.Name[:1])
-
-		// Find the constructor's field definitions
-		var ctorFields []Field
-		for _, c := range td.Constructors {
-			if c.Name == cp.Name {
-				ctorFields = c.Fields
-				break
-			}
+		// Build body: bind pattern fields from receiver, then arm body
+		var stmts []IRStmt
+		for _, b := range p.Bindings {
+			stmts = append(stmts, IRLetStmt{
+				GoName: b.GoName,
+				Value:  IRFieldAccess{Expr: IRIdent{GoName: fn.Receiver.GoName}, Field: b.Source[1:]}, // strip leading "."
+			})
 		}
-
-		l.currentRetType = fd.ReturnType
-		l.currentReceiver = receiver
-		l.currentTypeName = td.Name
-		sp, ep := arm.Pos, arm.EndPos
-		var finalBody IRExpr
-		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
-			// Create body that binds pattern fields from receiver, then executes arm body
-			var stmts []IRStmt
-			usedVars := collectUsedIdents(arm.Body)
-			for i, fp := range cp.Fields {
-				if _, used := usedVars[fp.Binding]; used {
-					goFieldName := capitalize(fp.Name)
-					if i < len(ctorFields) {
-						goFieldName = capitalize(ctorFields[i].Name)
-					}
-					stmts = append(stmts, IRLetStmt{
-						GoName: snakeToCamel(fp.Binding),
-						Value:  IRFieldAccess{Expr: IRIdent{GoName: receiver}, Field: goFieldName},
-					})
-				}
-			}
-
-			body := l.lowerFnBody(arm.Body, fd.ReturnType != nil)
-			if len(stmts) > 0 {
-				finalBody = IRBlock{Stmts: stmts, Expr: body}
-			} else {
-				finalBody = body
-			}
-		})
-		l.currentReceiver = ""
-		l.currentTypeName = ""
-		l.currentRetType = nil
-
+		var body IRExpr
+		if len(stmts) > 0 {
+			body = IRBlock{Stmts: stmts, Expr: arm.Body}
+		} else {
+			body = arm.Body
+		}
 		funcs = append(funcs, IRFuncDecl{
-			GoName: methodName,
-			Receiver: &IRReceiver{
-				GoName: receiver,
-				Type:   variantName,
-			},
-			Params:     params,
-			ReturnType: retType,
-			Body:       finalBody,
-			Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
+			GoName:     fn.GoName,
+			Receiver:   &IRReceiver{GoName: fn.Receiver.GoName, Type: p.GoType},
+			Params:     fn.Params,
+			ReturnType: fn.ReturnType,
+			Body:       body,
+			Source:     fn.Source,
 		})
 	}
 	return funcs
 }
 
-// findMatchSelf finds a match expression on self in the body (possibly wrapped in a block).
-func findMatchSelf(expr Expr) *MatchExpr {
-	switch e := expr.(type) {
-	case MatchExpr:
-		if ident, ok := e.Subject.(Ident); ok && ident.Name == "self" {
-			return &e
-		}
-	case Block:
-		if e.Expr != nil {
-			return findMatchSelf(e.Expr)
-		}
-		// Check last statement if it's an expression statement with a match
-		if len(e.Stmts) > 0 {
-			if es, ok := e.Stmts[len(e.Stmts)-1].(ExprStmt); ok {
-				return findMatchSelf(es.Expr)
-			}
-		}
+// duplicateForVariants creates identical method implementations for each variant.
+func (l *Lowerer) duplicateForVariants(fn IRFuncDecl, td TypeDecl) []IRFuncDecl {
+	var funcs []IRFuncDecl
+	for _, ctor := range td.Constructors {
+		variantName := td.Name + ctor.Name
+		funcs = append(funcs, IRFuncDecl{
+			GoName:     fn.GoName,
+			Receiver:   &IRReceiver{GoName: fn.Receiver.GoName, Type: variantName},
+			Params:     fn.Params,
+			ReturnType: fn.ReturnType,
+			Body:       fn.Body,
+			Source:     fn.Source,
+		})
 	}
-	return nil
+	return funcs
 }
 
 func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
@@ -675,14 +665,14 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 		funcName = strings.ToLower(td.Name[:1]) + td.Name[1:] + capitalize(fd.Name)
 	}
 
+	l.currentRetType = fd.ReturnType
+	l.currentTypeName = td.Name
+
 	params := l.lowerParams(fd.Params)
 	var retType IRType
 	if fd.ReturnType != nil {
 		retType = l.lowerType(fd.ReturnType)
 	}
-
-	l.currentRetType = fd.ReturnType
-	l.currentTypeName = td.Name
 	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
 	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
@@ -696,7 +686,7 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
-		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -885,6 +875,11 @@ func (l *Lowerer) goTypeStr(t Type) string {
 				return "Result_[" + l.goTypeStr(tt.Params[0]) + ", error]"
 			}
 			return "Result_[interface{}, error]"
+		case "Self":
+			if l.currentTypeName != "" {
+				return l.currentTypeName
+			}
+			return "Self"
 		default:
 			return tt.Name
 		}

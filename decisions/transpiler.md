@@ -4,6 +4,21 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-07: Sum type method expansion as IR post-pass
+
+**Context:** `lowerSumTypeMethod` was a 70-line special case in lower.go, interleaving AST traversal (`findMatchSelf`) with per-variant IR generation. Duplicated logic with `lowerMethod`.
+
+**Decision:** Lower sum type methods as normal methods. `expandSumTypeMethods` IR post-pass transforms them to per-variant implementations after lowering.
+
+- `match self` methods: split by arm, each variant gets corresponding arm body
+- Non-match methods: body duplicated for all variants
+- `findIRMatchSelf` operates on IR (not AST)
+- All non-static methods added to interface definition (no `findMatchSelf` check needed)
+
+**Status:** Implemented.
+
+---
+
 ## 2026-04-05: Unified IRMatch + IRMatchPattern design
 
 **Context:** Match expressions are 6 separate IR types (IRResultMatch, IROptionMatch, IREnumMatch, IRSumTypeMatch, IRListMatch, IRLiteralMatch). The "Unit in void context" bug requires void arm handling in all 6 emit functions. Also, binding structures are duplicated across match types.

@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-07
 
+- [Sum type method expansion as IR post-pass](decisions/transpiler.md#2026-04-07-sum-type-method-expansion-as-ir-post-pass) — Lower as normal method, expand to per-variant in post-pass
 - [Lexical scope tree](decisions/toolchain.md#2026-04-07-lexical-scope-tree-for-symbol-resolution) — Scope tree with positions for LSP scope-aware symbol lookup. Replaces flat varNames/varIRTypes
 
 ## 2026-04-06

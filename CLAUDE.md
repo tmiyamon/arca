@@ -41,7 +41,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **Unified IRMatch**: Single `IRMatch` with typed `IRMatchPattern` for all match kinds. Exhaustiveness checked in validate, not structurally enforced by IR types.
 - **Lexical Scope tree**: `withScope(startPos, endPos, symbols, fn)` manages scope push/pop + symbol registration. All variable bindings go through `registerSymbol`. Scope tree preserved for LSP `FindSymbolAt`.
 - **Variable shadowing**: Lower RHS before declaring variable name.
-- **Sum type methods**: `match self` methods expanded to per-variant Go methods in lower.go.
+- **Sum type methods**: Lowered as normal methods, then expanded to per-variant Go methods by `expandSumTypeMethods` IR post-pass.
 - **Prelude**: Built-in functions defined in one map. Adding a builtin = one line.
 - **TypeResolver boundary**: Lowerer never imports go/types directly.
 - **GoMultiReturn**: Go FFI calls carry `GoMultiReturn` flag + `IRResultType`/`IROptionType`. `goFuncReturnType` maps `(T, error)` → Result, `(T, bool)` → Option, 3+ → Tuple. Consumption sites read IR types, no ad-hoc detection.

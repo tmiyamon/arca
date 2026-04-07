@@ -70,6 +70,7 @@ func (v *IRValidation) validateTypeDecl(td IRTypeDecl) {
 		if astTD, ok := v.types[name]; ok {
 			prev := v.typeParams
 			v.typeParams = make(map[string]bool)
+			v.typeParams["Self"] = true
 			for _, p := range astTD.Params {
 				v.typeParams[p] = true
 			}
@@ -88,6 +89,7 @@ func (v *IRValidation) validateTypeDecl(td IRTypeDecl) {
 		if astTD, ok := v.types[name]; ok {
 			prev := v.typeParams
 			v.typeParams = make(map[string]bool)
+			v.typeParams["Self"] = true
 			for _, p := range astTD.Params {
 				v.typeParams[p] = true
 			}
@@ -161,6 +163,17 @@ func (v *IRValidation) isKnownType(name string) bool {
 // --- Function Validation ---
 
 func (v *IRValidation) validateFunc(fn IRFuncDecl) {
+	// Methods and associated functions can use Self
+	prev := v.typeParams
+	if fn.Source.TypeName != "" {
+		v.typeParams = make(map[string]bool)
+		v.typeParams["Self"] = true
+		for k, val := range prev {
+			v.typeParams[k] = val
+		}
+	}
+	defer func() { v.typeParams = prev }()
+
 	// Check parameter types exist
 	for _, param := range fn.Params {
 		if param.Source.Type != nil {
