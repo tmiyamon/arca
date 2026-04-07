@@ -378,20 +378,22 @@ type transpileResult struct {
 }
 
 type timings struct {
-	parse   time.Duration
-	check   time.Duration
-	codegen time.Duration
-	goBuild time.Duration
+	parse    time.Duration
+	lower    time.Duration
+	validate time.Duration
+	emit     time.Duration
+	goBuild  time.Duration
 }
 
 func (t timings) print() {
 	fmt.Fprintf(os.Stderr, "  parse:     %s\n", t.parse)
-	fmt.Fprintf(os.Stderr, "  check:     %s\n", t.check)
-	fmt.Fprintf(os.Stderr, "  codegen:   %s\n", t.codegen)
+	fmt.Fprintf(os.Stderr, "  lower:     %s\n", t.lower)
+	fmt.Fprintf(os.Stderr, "  validate:  %s\n", t.validate)
+	fmt.Fprintf(os.Stderr, "  emit:      %s\n", t.emit)
 	if t.goBuild > 0 {
 		fmt.Fprintf(os.Stderr, "  go build:  %s\n", t.goBuild)
 	}
-	fmt.Fprintf(os.Stderr, "  total:     %s\n", t.parse+t.check+t.codegen+t.goBuild)
+	fmt.Fprintf(os.Stderr, "  total:     %s\n", t.parse+t.lower+t.validate+t.emit+t.goBuild)
 }
 
 var timing timings
@@ -446,8 +448,10 @@ func transpile(inputPath string) (*transpileResult, error) {
 	// Generate main file
 	mainLowerer := NewLowerer(mergedProg, goModule, resolver)
 	irProg := mainLowerer.Lower(mainProg, "main", false)
+	timing.lower = time.Since(t1)
 
 	// Collect lowering errors + validation errors
+	t2 := time.Now()
 	var allErrors []string
 	for _, e := range mainLowerer.Errors() {
 		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message))
@@ -463,15 +467,15 @@ func transpile(inputPath string) (*transpileResult, error) {
 	if len(allErrors) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(allErrors, "\n"))
 	}
-	timing.check = time.Since(t1)
+	timing.validate = time.Since(t2)
 
-	t2 := time.Now()
+	t3 := time.Now()
 	// Add sub-module imports
 	for modName := range subModules {
 		irProg.Imports = append(irProg.Imports, IRImport{Path: goModule + "/" + modName})
 	}
 	mainCode := emitter.Emit(irProg)
-	timing.codegen = time.Since(t2)
+	timing.emit = time.Since(t3)
 
 	// Convert IR imports to goImportEntry for build system
 	var goImports []goImportEntry
