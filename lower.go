@@ -22,6 +22,7 @@ type Lowerer struct {
 	currentRetType  Type
 	currentReceiver string
 	currentTypeName string
+	matchHint       IRType // type hint for match arm bodies
 
 	// Collected during lowering
 	imports      []IRImport
@@ -700,7 +701,11 @@ func (l *Lowerer) lowerParams(params []FnParam) []IRParamDecl {
 }
 
 func (l *Lowerer) lowerFnBody(body Expr, hasReturn bool) IRExpr {
-	expr := l.lowerExpr(body)
+	var hint IRType
+	if hasReturn && l.currentRetType != nil {
+		hint = l.lowerType(l.currentRetType)
+	}
+	expr := l.lowerExprHint(body, hint)
 	if !hasReturn {
 		expr = l.markVoidContext(expr)
 	}
@@ -1007,9 +1012,9 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	case ConstructorCall:
 		return l.lowerConstructorCall(e)
 	case Block:
-		return l.lowerBlock(e)
+		return l.lowerBlockHint(e, hint)
 	case MatchExpr:
-		return l.lowerMatchExpr(e)
+		return l.lowerMatchExprHint(e, hint)
 	case Lambda:
 		return l.lowerLambdaHint(e, hint)
 	case TupleExpr:
@@ -1839,13 +1844,18 @@ func (l *Lowerer) lowerFieldValues(fields []FieldValue) []IRFieldValue {
 }
 
 func (l *Lowerer) lowerBlock(b Block) IRExpr {
+	return l.lowerBlockHint(b, nil)
+}
+
+func (l *Lowerer) lowerBlockHint(b Block, hint IRType) IRExpr {
 	stmts := make([]IRStmt, 0, len(b.Stmts))
 	for _, s := range b.Stmts {
 		stmts = append(stmts, l.lowerStmt(s)...)
 	}
 	var expr IRExpr
 	if b.Expr != nil {
-		expr = l.lowerExpr(b.Expr)
+		// Hint applies to the block's final expression (return value)
+		expr = l.lowerExprHint(b.Expr, hint)
 	}
 	return IRBlock{
 		Stmts: stmts,
@@ -2060,7 +2070,11 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	}
 
 	// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
-	loweredValue := l.lowerExpr(s.Value)
+	var hint IRType
+	if s.Type != nil {
+		hint = l.lowerType(s.Type)
+	}
+	loweredValue := l.lowerExprHint(s.Value, hint)
 
 	// GoMultiReturn calls that return Result need builtins
 	if isGoMultiReturn(loweredValue) {
@@ -2188,6 +2202,12 @@ func (l *Lowerer) lowerLetDestructure(pat Pattern, value Expr) []IRStmt {
 
 // --- Match Expressions ---
 
+func (l *Lowerer) lowerMatchExprHint(me MatchExpr, hint IRType) IRExpr {
+	l.matchHint = hint
+	defer func() { l.matchHint = nil }()
+	return l.lowerMatchExpr(me)
+}
+
 func (l *Lowerer) lowerMatchExpr(me MatchExpr) IRExpr {
 	if l.isResultMatch(me) {
 		return l.lowerResultMatch(me)
@@ -2252,7 +2272,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, armSymbols, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IRResultOkPattern{Binding: binding}, Body: body})
 		}
@@ -2278,7 +2298,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, armSymbols, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IRResultErrorPattern{Binding: binding}, Body: body})
 		}
@@ -2327,7 +2347,7 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, armSymbols, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IROptionSomePattern{Binding: binding}, Body: body})
 		}
@@ -2335,7 +2355,7 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, nil, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IROptionNonePattern{}, Body: body})
 		}
@@ -2364,7 +2384,7 @@ func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, nil, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IRListDefaultPattern{}, Body: body})
 			continue
@@ -2374,7 +2394,7 @@ func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, nil, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IRListEmptyPattern{}, Body: body})
 			continue
@@ -2398,7 +2418,7 @@ func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 		sp, ep := arm.Pos, arm.EndPos
 		var body IRExpr
 		l.withScope(sp, ep, armSymbols, func() {
-			body = l.lowerExpr(arm.Body)
+			body = l.lowerExprHint(arm.Body, l.matchHint)
 		})
 
 		usedVars := collectUsedIdents(arm.Body)
@@ -2454,7 +2474,7 @@ func (l *Lowerer) lowerLiteralMatch(me MatchExpr) IRExpr {
 	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
-		body := l.lowerExpr(arm.Body)
+		body := l.lowerExprHint(arm.Body, l.matchHint)
 		switch p := arm.Pattern.(type) {
 		case LitPattern:
 			arms = append(arms, IRMatchArm{Pattern: IRLiteralPattern{Value: l.litPatternGoStr(p)}, Body: body})
@@ -2503,7 +2523,7 @@ func (l *Lowerer) lowerEnumMatch(me MatchExpr) IRExpr {
 	var arms []IRMatchArm
 
 	for _, arm := range me.Arms {
-		body := l.lowerExpr(arm.Body)
+		body := l.lowerExprHint(arm.Body, l.matchHint)
 		if cp, ok := arm.Pattern.(ConstructorPattern); ok {
 			typeName := l.findTypeName(cp.Name)
 			arms = append(arms, IRMatchArm{Pattern: IREnumPattern{GoValue: typeName + cp.Name}, Body: body})
@@ -2549,7 +2569,7 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, armSymbols, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			usedVars := collectUsedIdents(arm.Body)
 
@@ -2575,11 +2595,11 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 			sp, ep := arm.Pos, arm.EndPos
 			var body IRExpr
 			l.withScope(sp, ep, nil, func() {
-				body = l.lowerExpr(arm.Body)
+				body = l.lowerExprHint(arm.Body, l.matchHint)
 			})
 			arms = append(arms, IRMatchArm{Pattern: IRSumTypeWildcardPattern{}, Body: body})
 		case BindPattern:
-			body := l.lowerExpr(arm.Body)
+			body := l.lowerExprHint(arm.Body, l.matchHint)
 			arms = append(arms, IRMatchArm{
 				Pattern: IRSumTypeWildcardPattern{Binding: &IRBinding{GoName: snakeToCamel(pat.Name)}},
 				Body:    body,
