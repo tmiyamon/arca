@@ -590,21 +590,36 @@ func isUnitType(t IRType) bool {
 
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
 	em.tmpCounter++
+
+	// Arca Result (single value): unwrap via .IsOk / .Value / .Err
+	if !isGoMultiReturn(stmt.CallExpr) {
+		tmpResult := fmt.Sprintf("__try_result%d", em.tmpCounter)
+		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpResult, em.emitExpr(stmt.CallExpr)))
+		em.writeln(fmt.Sprintf("%sif !%s.IsOk {", indent, tmpResult))
+		if isIRResultType(stmt.ReturnType) {
+			typeArgs := irResultTypeArgs(stmt.ReturnType)
+			em.writeln(fmt.Sprintf("%s\treturn Err_%s(%s.Err)", indent, typeArgs, tmpResult))
+		} else {
+			em.writeln(fmt.Sprintf("%s\tpanic(%s.Err)", indent, tmpResult))
+		}
+		em.writeln(fmt.Sprintf("%s}", indent))
+		if stmt.GoName != "_" {
+			em.writeln(fmt.Sprintf("%s%s := %s.Value", indent, stmt.GoName, tmpResult))
+		}
+		return
+	}
+
+	// Go FFI multi-return: unwrap via val, err := f()
 	tmpErr := fmt.Sprintf("__try_err%d", em.tmpCounter)
 
-	// Derive ErrorOnly from the call expression's type
 	errorOnly := false
-	if isGoMultiReturn(stmt.CallExpr) {
-		if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
-			errorOnly = isUnitType(rt.Ok)
-		}
+	if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
+		errorOnly = isUnitType(rt.Ok)
 	}
 
 	if errorOnly {
-		// Go func returns error only: err := f()
 		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
 	} else {
-		// Go func returns (T, error): val, err := f()
 		tmpVal := "_"
 		if stmt.GoName != "_" {
 			tmpVal = fmt.Sprintf("__try_val%d", em.tmpCounter)

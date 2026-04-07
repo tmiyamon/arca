@@ -1782,6 +1782,24 @@ func (l *Lowerer) lowerStmt(stmt Stmt) []IRStmt {
 		exprStr := l.exprToString(s.Expr)
 		return []IRStmt{IRAssertStmt{Expr: irExpr, ExprStr: exprStr}}
 	case ExprStmt:
+		// Try operator in expression statement: expr? → let _ = expr?
+		if call, ok := s.Expr.(FnCall); ok {
+			if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
+				loweredExpr := l.lowerExpr(call.Args[0])
+				var retType IRType
+				if l.currentRetType != nil {
+					retType = l.lowerType(l.currentRetType)
+				}
+				if isIRResultType(retType) {
+					l.builtins["result"] = true
+				}
+				return []IRStmt{IRTryLetStmt{
+					GoName:     "_",
+					CallExpr:   loweredExpr,
+					ReturnType: retType,
+				}}
+			}
+		}
 		expr := l.lowerExpr(s.Expr)
 		expr = l.markVoidContext(expr)
 		return []IRStmt{IRExprStmt{Expr: expr}}
