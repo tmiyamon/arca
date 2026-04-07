@@ -723,6 +723,83 @@ func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
 	return expr
 }
 
+// checkTypeHint checks if an expression's type matches the expected hint type.
+func (l *Lowerer) checkTypeHint(result IRExpr, hint IRType, sourceExpr Expr) {
+	actualType := result.irType()
+	if actualType == nil {
+		return
+	}
+	// Skip if either type is unknown
+	if _, ok := actualType.(IRInterfaceType); ok {
+		return
+	}
+	if _, ok := hint.(IRInterfaceType); ok {
+		return
+	}
+	if !irTypesMatch(actualType, hint) {
+		pos := Pos{}
+		if ident, ok := sourceExpr.(Ident); ok {
+			pos = ident.Pos
+		}
+		l.addError(pos, "type mismatch: expected %s, got %s", irTypeDisplayStr(hint), irTypeDisplayStr(actualType))
+	}
+}
+
+// irTypesMatch checks if two IR types are compatible.
+func irTypesMatch(a, b IRType) bool {
+	if a == nil || b == nil {
+		return true
+	}
+	// Both unknown = compatible
+	if _, aOk := a.(IRInterfaceType); aOk {
+		return true
+	}
+	if _, bOk := b.(IRInterfaceType); bOk {
+		return true
+	}
+	switch at := a.(type) {
+	case IRNamedType:
+		if bt, ok := b.(IRNamedType); ok {
+			return at.GoName == bt.GoName
+		}
+	case IRPointerType:
+		if bt, ok := b.(IRPointerType); ok {
+			return irTypesMatch(at.Inner, bt.Inner)
+		}
+	case IRResultType:
+		if bt, ok := b.(IRResultType); ok {
+			return irTypesMatch(at.Ok, bt.Ok) && irTypesMatch(at.Err, bt.Err)
+		}
+	case IROptionType:
+		if bt, ok := b.(IROptionType); ok {
+			return irTypesMatch(at.Inner, bt.Inner)
+		}
+	case IRListType:
+		if bt, ok := b.(IRListType); ok {
+			return irTypesMatch(at.Elem, bt.Elem)
+		}
+	}
+	return true // default: assume compatible for unknown combos
+}
+
+// irTypeDisplayStr returns a human-readable type name for error messages.
+func irTypeDisplayStr(t IRType) string {
+	switch tt := t.(type) {
+	case IRNamedType:
+		return tt.GoName
+	case IRPointerType:
+		return "*" + irTypeDisplayStr(tt.Inner)
+	case IRResultType:
+		return "Result[" + irTypeDisplayStr(tt.Ok) + ", " + irTypeDisplayStr(tt.Err) + "]"
+	case IROptionType:
+		return "Option[" + irTypeDisplayStr(tt.Inner) + "]"
+	case IRListType:
+		return "List[" + irTypeDisplayStr(tt.Elem) + "]"
+	default:
+		return "unknown"
+	}
+}
+
 // bodyPos extracts start/end position from a function body expression.
 func bodyPos(body Expr) (Pos, Pos) {
 	if b, ok := body.(Block); ok {
@@ -899,6 +976,14 @@ func (l *Lowerer) lowerExpr(expr Expr) IRExpr {
 }
 
 func (l *Lowerer) lowerExprHint(expr Expr, hint IRType) IRExpr {
+	result := l.lowerExprInner(expr, hint)
+	if hint != nil && result != nil {
+		l.checkTypeHint(result, hint, expr)
+	}
+	return result
+}
+
+func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	if expr == nil {
 		return nil
 	}
@@ -1489,7 +1574,14 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		return l.lowerLambda(lam)
 	}
 
-	return l.lowerExpr(expr)
+	// Resolve expected type for hint-based type checking
+	var hint IRType
+	if fnIdent, ok := call.Fn.(Ident); ok {
+		if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
+			hint = l.lowerType(fn.Params[argIndex].Type)
+		}
+	}
+	return l.lowerExprHint(expr, hint)
 }
 
 // resolveCallParamFuncType resolves the Go function type for a parameter at argIndex.
