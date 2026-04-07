@@ -730,6 +730,10 @@ func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
 
 // checkTypeHint checks if an expression's type matches the expected hint type.
 func (l *Lowerer) checkTypeHint(result IRExpr, hint IRType, sourceExpr Expr) {
+	l.checkTypeHintPos(result, hint, exprPos(sourceExpr))
+}
+
+func (l *Lowerer) checkTypeHintPos(result IRExpr, hint IRType, pos Pos) {
 	actualType := result.irType()
 	if actualType == nil {
 		return
@@ -741,21 +745,16 @@ func (l *Lowerer) checkTypeHint(result IRExpr, hint IRType, sourceExpr Expr) {
 	if _, ok := hint.(IRInterfaceType); ok {
 		return
 	}
-	if !irTypesMatch(actualType, hint) {
-		pos := Pos{}
-		if ident, ok := sourceExpr.(Ident); ok {
-			pos = ident.Pos
-		}
+	if !l.irTypesMatch(actualType, hint) {
 		l.addError(pos, "type mismatch: expected %s, got %s", irTypeDisplayStr(hint), irTypeDisplayStr(actualType))
 	}
 }
 
-// irTypesMatch checks if two IR types are compatible.
-func irTypesMatch(a, b IRType) bool {
+// irTypesMatch checks if two IR types are compatible, including constraint compatibility.
+func (l *Lowerer) irTypesMatch(a, b IRType) bool {
 	if a == nil || b == nil {
 		return true
 	}
-	// Both unknown = compatible
 	if _, aOk := a.(IRInterfaceType); aOk {
 		return true
 	}
@@ -765,26 +764,64 @@ func irTypesMatch(a, b IRType) bool {
 	switch at := a.(type) {
 	case IRNamedType:
 		if bt, ok := b.(IRNamedType); ok {
-			return at.GoName == bt.GoName
+			if at.GoName == bt.GoName {
+				return true
+			}
+			// Type parameters match anything
+			if len(bt.GoName) == 1 && bt.GoName[0] >= 'A' && bt.GoName[0] <= 'Z' {
+				return true // single uppercase letter = type parameter
+			}
+			if len(at.GoName) == 1 && at.GoName[0] >= 'A' && at.GoName[0] <= 'Z' {
+				return true
+			}
+			// Constraint compatibility: stricter alias → wider alias
+			return l.isConstraintCompatible(at.GoName, bt.GoName)
 		}
 	case IRPointerType:
 		if bt, ok := b.(IRPointerType); ok {
-			return irTypesMatch(at.Inner, bt.Inner)
+			return l.irTypesMatch(at.Inner, bt.Inner)
 		}
 	case IRResultType:
 		if bt, ok := b.(IRResultType); ok {
-			return irTypesMatch(at.Ok, bt.Ok) && irTypesMatch(at.Err, bt.Err)
+			return l.irTypesMatch(at.Ok, bt.Ok) && l.irTypesMatch(at.Err, bt.Err)
 		}
 	case IROptionType:
 		if bt, ok := b.(IROptionType); ok {
-			return irTypesMatch(at.Inner, bt.Inner)
+			return l.irTypesMatch(at.Inner, bt.Inner)
 		}
 	case IRListType:
 		if bt, ok := b.(IRListType); ok {
-			return irTypesMatch(at.Elem, bt.Elem)
+			return l.irTypesMatch(at.Elem, bt.Elem)
 		}
 	}
-	return true // default: assume compatible for unknown combos
+	return true
+}
+
+// isConstraintCompatible checks if source type alias is compatible with target type alias.
+// e.g. AdultAge (min:18, max:150) → Age (min:0, max:150) is compatible.
+func (l *Lowerer) isConstraintCompatible(sourceName, targetName string) bool {
+	sourceAlias, sourceOk := l.typeAliases[sourceName]
+	targetAlias, targetOk := l.typeAliases[targetName]
+	if !sourceOk || !targetOk {
+		return false
+	}
+	sourceNT, sourceIsNT := sourceAlias.Type.(NamedType)
+	targetNT, targetIsNT := targetAlias.Type.(NamedType)
+	if !sourceIsNT || !targetIsNT {
+		return false
+	}
+	// Must be same base type
+	if sourceNT.Name != targetNT.Name {
+		return false
+	}
+	// Two different aliases with no constraints → nominal, not compatible
+	if len(sourceNT.Constraints) == 0 && len(targetNT.Constraints) == 0 {
+		return false
+	}
+	// Check constraint dimensions
+	sDims := constraintsToDimensions(sourceNT.Constraints)
+	tDims := constraintsToDimensions(targetNT.Constraints)
+	return dimensionsCompatible(sDims, tDims)
 }
 
 // irTypeDisplayStr returns a human-readable type name for error messages.
@@ -1554,13 +1591,19 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		}
 	}
 
-	// Type alias parameter coercion
+	// Type alias parameter coercion with constraint compatibility check
 	if isFnIdent {
 		if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
 			if pnt, ok := fn.Params[argIndex].Type.(NamedType); ok {
 				if _, isAlias := l.typeAliases[pnt.Name]; isAlias {
 					inner := l.lowerExpr(expr)
-					// Wrap in a type conversion call
+					// Check constraint compatibility before coercion
+					innerType := inner.irType()
+					if named, ok := innerType.(IRNamedType); ok {
+						if named.GoName != pnt.Name && !l.isConstraintCompatible(named.GoName, pnt.Name) {
+							l.addError(Pos{}, "type mismatch: expected %s, got %s", pnt.Name, named.GoName)
+						}
+					}
 					return IRFnCall{
 						Func: pnt.Name,
 						Args: []IRExpr{inner},
@@ -1586,7 +1629,15 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 			hint = l.lowerType(fn.Params[argIndex].Type)
 		}
 	}
-	return l.lowerExprHint(expr, hint)
+	result := l.lowerExprHint(expr, nil) // lower without hint (avoid double check)
+	if hint != nil && result != nil {
+		pos := exprPos(expr)
+		if pos.Line == 0 {
+			pos = call.Pos // fallback to call site position
+		}
+		l.checkTypeHintPos(result, hint, pos)
+	}
+	return result
 }
 
 // resolveCallParamFuncType resolves the Go function type for a parameter at argIndex.
@@ -1760,6 +1811,15 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			}
 		}
 
+		// Find matching constructor's field definitions
+		var ctorFields []Field
+		for _, c := range td.Constructors {
+			if c.Name == cc.Name || (len(td.Constructors) == 1) {
+				ctorFields = c.Fields
+				break
+			}
+		}
+
 		goName := typeName
 		if len(td.Constructors) > 1 {
 			goName = typeName + cc.Name
@@ -1768,7 +1828,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 		// Constrained type constructor: NewType returns (T, error)
 		if l.hasConstraints(td) {
 			l.builtins["fmt"] = true
-			fields := l.lowerFieldValues(cc.Fields)
+			fields := l.lowerFieldValuesWithTypes(cc.Fields, ctorFields, cc.Pos)
 			return IRConstructorCall{
 				GoName:        "New" + goName,
 				Fields:        fields,
@@ -1778,7 +1838,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			}
 		}
 
-		fields := l.lowerFieldValues(cc.Fields)
+		fields := l.lowerFieldValuesWithTypes(cc.Fields, ctorFields, cc.Pos)
 		typeArgs := ""
 		if len(td.Params) > 0 {
 			inferredArgs := make([]string, len(cc.Fields))
@@ -1828,15 +1888,31 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 }
 
 func (l *Lowerer) lowerFieldValues(fields []FieldValue) []IRFieldValue {
+	return l.lowerFieldValuesWithTypes(fields, nil, Pos{})
+}
+
+// lowerFieldValuesWithTypes lowers field values with hint-based type checking
+// against the expected constructor field types.
+func (l *Lowerer) lowerFieldValuesWithTypes(fields []FieldValue, ctorFields []Field, ctorPos Pos) []IRFieldValue {
 	result := make([]IRFieldValue, len(fields))
 	for i, f := range fields {
 		goName := ""
 		if f.Name != "" {
 			goName = capitalize(f.Name)
 		}
+		value := l.lowerExpr(f.Value)
+		// Hint check against constructor field type
+		if ctorFields != nil && i < len(ctorFields) {
+			hint := l.lowerType(ctorFields[i].Type)
+			pos := exprPos(f.Value)
+			if pos.Line == 0 {
+				pos = ctorPos
+			}
+			l.checkTypeHintPos(value, hint, pos)
+		}
 		result[i] = IRFieldValue{
 			GoName: goName,
-			Value:  l.lowerExpr(f.Value),
+			Value:  value,
 			Source: SourceInfo{Name: f.Name},
 		}
 	}
@@ -2561,6 +2637,7 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 					armSymbols = append(armSymbols, SymbolRegInfo{
 						Name:     fp.Binding,
 						ArcaType: ctorFields[i].Type,
+						IRType:   l.lowerType(ctorFields[i].Type),
 						Kind:     SymVariable,
 					})
 				}

@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-08
+
+- [Bidirectional type checking](decisions/transpiler.md#2026-04-08-bidirectional-type-checking) — lowerExprHint propagates expected types. Lambda inference, constraint compat, validate cleanup
+
 ## 2026-04-07
 
 - [Undefined variable detection and IR type propagation](decisions/transpiler.md#2026-04-07-undefined-variable-detection-and-ir-type-propagation) — Detect undefined vars via scope, fix Ok/Error/Some type inference

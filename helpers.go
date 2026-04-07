@@ -111,6 +111,23 @@ func typeZeroValue(typeName string, goBase string) string {
 	}
 }
 
+// exprPos extracts position from an AST expression if available.
+func exprPos(expr Expr) Pos {
+	switch e := expr.(type) {
+	case Ident:
+		return e.Pos
+	case FnCall:
+		return e.Pos
+	case ConstructorCall:
+		return e.Pos
+	case MatchExpr:
+		return e.Pos
+	case Block:
+		return e.Pos
+	}
+	return Pos{}
+}
+
 // replaceTrailingUnit replaces Unit (struct{}{}) at the end of an expression with IRVoidExpr.
 // Handles blocks: if the block's final expression is Unit, replace it.
 func replaceTrailingUnit(expr IRExpr) IRExpr {

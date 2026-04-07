@@ -4,6 +4,26 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-08: Bidirectional type checking
+
+**Context:** Type checking was split between lower (bottom-up IR type inference) and validate (post-hoc AST-level checks). Lambda parameter types couldn't be inferred. Match arm type mismatches weren't detected. Constraint compatibility was only in validate.
+
+**Decision:** `lowerExprHint(expr, hint)` propagates expected types top-down during lowering. Combined with bottom-up `irType()`, this is bidirectional type checking.
+
+**Phases implemented:**
+1. Lambda param type inference from Go FFI call context (resolveCallParamFuncType, ResolveUnderlying for type aliases)
+2. Function argument type mismatch via hint in lowerCallArgs
+3. Let annotation, return type, match arm body hints via lowerBlockHint/lowerFnBody/matchHint
+4. Constraint compatibility moved to irTypesMatch (isConstraintCompatible). Constructor field type checking via hint. Validate type checks removed (kept: existence, count, exhaustiveness)
+
+**What validate still does:** type existence (checkTypeExists), argument count, constructor field count/name, match exhaustiveness.
+
+**Known limitation:** Type parameters detected by single-letter heuristic (`A`-`Z`), not from type param declarations.
+
+**Status:** Implemented.
+
+---
+
 ## 2026-04-07: Undefined variable detection and IR type propagation
 
 **Context:** Variables like `db` in a method body (should be `self.db`) silently passed through to Go, causing Go compile errors instead of Arca errors. Also, builtin constructors (`Ok`, `Error`, `Some`) had `IRInterfaceType{}` as their type, preventing match arm binding type inference.

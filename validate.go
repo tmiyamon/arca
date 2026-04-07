@@ -185,16 +185,7 @@ func (v *IRValidation) validateFunc(fn IRFuncDecl) {
 		v.checkTypeExists(fn.Source.ReturnType)
 	}
 
-	// Check return type mismatch
-	if fn.Source.ReturnType != nil && fn.Body != nil {
-		bodyType := v.inferExprType(fn.Body)
-		if bodyType != nil && !v.typesEqualLocal(bodyType, fn.Source.ReturnType) {
-			if !isResultReturn(fn.Source.ReturnType, bodyType) {
-				v.addError(fn.Source.Pos, "function '%s' returns %s but body has type %s",
-					fn.Source.Name, typeName(fn.Source.ReturnType), typeName(bodyType))
-			}
-		}
-	}
+	// Return type mismatch is now handled by bidirectional hint checking in lower.
 
 	// Validate expressions in body
 	if fn.Body != nil {
@@ -313,17 +304,7 @@ func (v *IRValidation) validateFnCall(e IRFnCall) {
 			e.Source.Name, len(fn.Params), len(e.Args))
 		return
 	}
-	for i, arg := range e.Args {
-		argType := v.inferExprType(arg)
-		if argType == nil {
-			continue
-		}
-		paramType := fn.Params[i].Type
-		if !v.typesCompatible(argType, paramType) {
-			v.addError(e.Source.Pos, "argument %d of '%s' expects %s, got %s",
-				i+1, e.Source.Name, typeName(paramType), typeName(argType))
-		}
-	}
+	// Argument type checking handled by bidirectional hint in lower.
 }
 
 // --- Constructor Call Validation ---
@@ -385,30 +366,20 @@ func (v *IRValidation) validateConstructorCall(cc IRConstructorCall) {
 		return
 	}
 
-	for i, fv := range cc.Fields {
+	for _, fv := range cc.Fields {
 		if fv.Source.Name != "" {
 			found := false
 			for _, cf := range ctor.Fields {
 				if cf.Name == fv.Source.Name {
 					found = true
-					argType := v.inferExprType(fv.Value)
-					if argType != nil && !v.typesCompatible(argType, cf.Type) {
-						v.addError(cc.Source.Pos, "field '%s' of %s expects %s, got %s",
-							fv.Source.Name, ctorName, typeName(cf.Type), typeName(argType))
-					}
 					break
 				}
 			}
 			if !found {
 				v.addError(cc.Source.Pos, "constructor %s has no field named '%s'", ctorName, fv.Source.Name)
 			}
-		} else if i < len(ctor.Fields) {
-			argType := v.inferExprType(fv.Value)
-			if argType != nil && !v.typesCompatible(argType, ctor.Fields[i].Type) {
-				v.addError(cc.Source.Pos, "field %d of %s expects %s, got %s",
-					i+1, ctorName, typeName(ctor.Fields[i].Type), typeName(argType))
-			}
 		}
+		// Field type checking handled by bidirectional hint in lower.
 	}
 }
 

@@ -22,8 +22,8 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 | `lexer.go` | Tokenizer |
 | `parser.go` | Recursive descent parser |
 | `ir.go` | IR node definitions (resolved names, types, structurally exhaustive match) |
-| `lower.go` | AST → IR (name resolution, constructor resolution, match classification, Go FFI type checking) |
-| `validate.go` | IR validation (type checking, arg validation) |
+| `lower.go` | AST → IR (name resolution, constructor resolution, match classification, Go FFI type checking, bidirectional type checking) |
+| `validate.go` | IR validation (exhaustiveness, existence checks, arg count) |
 | `emit.go` | IR → Go output (mechanical, no feature-specific logic) |
 | `prelude.go` | Built-in function definitions (println, map, filter, etc.) |
 | `type_resolver.go` | TypeResolver interface |
@@ -46,6 +46,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **TypeResolver boundary**: Lowerer never imports go/types directly.
 - **GoMultiReturn**: Go FFI calls carry `GoMultiReturn` flag + `IRResultType`/`IROptionType`. `goFuncReturnType` maps `(T, error)` → Result, `(T, bool)` → Option, 3+ → Tuple. Consumption sites read IR types, no ad-hoc detection.
 - **Project go.mod**: TypeResolver uses nearest go.mod (walked up from .arca file) for package resolution. `goModule` read from go.mod, not hardcoded.
+- **Bidirectional type checking**: `lowerExprHint(expr, hint)` propagates expected types top-down. Covers function args, let annotations, return types, match arms, constructor fields. Constraint compatibility checked in `irTypesMatch`. Lambda param types inferred from Go FFI call context.
 
 ## Adding a New Language Feature
 
