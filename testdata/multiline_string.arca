@@ -1,0 +1,15 @@
+fun main() {
+  let sql = """
+    SELECT *
+    FROM users
+    WHERE id = 1
+    """
+  println(sql)
+
+  let name = "Alice"
+  let msg = """
+    Hello ${name}!
+    Welcome to Arca.
+    """
+  println(msg)
+}

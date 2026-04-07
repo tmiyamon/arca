@@ -358,3 +358,105 @@ fun main() {
 		t.Fatal("expected error for OrderId->UserId")
 	}
 }
+
+func TestExhaustiveness(t *testing.T) {
+	t.Parallel()
+	// Non-exhaustive Result match
+	errs := validateSource(`
+fun main() {
+  let r = Ok(1)
+  match r {
+    Ok(n) -> println(n)
+  }
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected non-exhaustive match error")
+	}
+
+	// Exhaustive Result match
+	errs = validateSource(`
+fun main() {
+  let r = Ok(1)
+  match r {
+    Ok(n) -> println(n)
+    Error(e) -> println(e)
+  }
+}
+`)
+	hasExhaustiveErr := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "non-exhaustive") {
+			hasExhaustiveErr = true
+		}
+	}
+	if hasExhaustiveErr {
+		t.Fatal("should not have exhaustiveness error for complete match")
+	}
+}
+
+func TestUndefinedVariable(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+fun main() {
+  println(x)
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected undefined variable error")
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "undefined variable: x") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'undefined variable: x', got: %v", errs)
+	}
+}
+
+func TestBidirectionalTypeCheck(t *testing.T) {
+	t.Parallel()
+	// Return type mismatch
+	errs := validateSource(`
+fun add(a: Int, b: Int) -> Int {
+  "not an int"
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected return type mismatch error")
+	}
+
+	// Match arm type mismatch
+	errs = validateSource(`
+fun test(x: Int) -> String {
+  match x {
+    1 -> "one"
+    2 -> 42
+    _ -> "other"
+  }
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected match arm type mismatch error")
+	}
+}
+
+func TestTryExpressionStatement(t *testing.T) {
+	t.Parallel()
+	// Try in expression statement should not produce errors
+	errs := validateSource(`
+import go "strconv"
+fun test() -> Result[Int, error] {
+  let n = strconv.Atoi("42")?
+  strconv.Atoi("99")?
+  Ok(n)
+}
+`)
+	for _, e := range errs {
+		if strings.Contains(e.Message, "undefined") {
+			t.Errorf("unexpected error: %s", e.Message)
+		}
+	}
+}
