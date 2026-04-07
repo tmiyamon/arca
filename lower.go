@@ -895,6 +895,10 @@ func (l *Lowerer) goTypeStr(t Type) string {
 // --- Expressions ---
 
 func (l *Lowerer) lowerExpr(expr Expr) IRExpr {
+	return l.lowerExprHint(expr, nil)
+}
+
+func (l *Lowerer) lowerExprHint(expr Expr, hint IRType) IRExpr {
 	if expr == nil {
 		return nil
 	}
@@ -922,7 +926,7 @@ func (l *Lowerer) lowerExpr(expr Expr) IRExpr {
 	case MatchExpr:
 		return l.lowerMatchExpr(e)
 	case Lambda:
-		return l.lowerLambda(e)
+		return l.lowerLambdaHint(e, hint)
 	case TupleExpr:
 		return l.lowerTuple(e)
 	case ForExpr:
@@ -1477,7 +1481,110 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		}
 	}
 
+	// Lambda with missing parameter types: infer from call context
+	if lam, ok := expr.(Lambda); ok {
+		if paramTypes := l.resolveCallParamFuncType(call, argIndex); paramTypes != nil {
+			lam = l.inferLambdaParamTypes(lam, paramTypes)
+		}
+		return l.lowerLambda(lam)
+	}
+
 	return l.lowerExpr(expr)
+}
+
+// resolveCallParamFuncType resolves the Go function type for a parameter at argIndex.
+// Returns the FuncInfo if the parameter is a function type, nil otherwise.
+func (l *Lowerer) resolveCallParamFuncType(call FnCall, argIndex int) *FuncInfo {
+	if fa, ok := call.Fn.(FieldAccess); ok {
+		// Method call: resolve receiver type → method signature → param type
+		if ident, ok := fa.Expr.(Ident); ok {
+			if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
+				// Go FFI package function
+				if goPkg, ok := l.goPackages[ident.Name]; ok {
+					if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
+						if argIndex < len(info.Params) {
+							return l.parseFuncType(info.Params[argIndex].Type)
+						}
+					}
+				}
+				return nil
+			}
+		}
+		// Method on receiver
+		receiver := l.lowerExpr(fa.Expr)
+		pkg, typ, ok := l.resolveReceiverGoType(receiver)
+		if ok {
+			if info := l.typeResolver.ResolveMethod(pkg, typ, fa.Field); info != nil {
+				if argIndex < len(info.Params) {
+					return l.parseFuncType(info.Params[argIndex].Type)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// parseFuncType parses a Go type string like "func(echo.Context) error" into FuncInfo.
+// Also resolves type aliases (e.g. echo.HandlerFunc → func(Context) error).
+func (l *Lowerer) parseFuncType(goType string) *FuncInfo {
+	if !strings.HasPrefix(goType, "func(") {
+		// Try resolving as a type alias with underlying func type
+		resolved := l.typeResolver.ResolveUnderlying(goType)
+		if resolved != "" && strings.HasPrefix(resolved, "func(") {
+			goType = resolved
+		} else {
+			return nil
+		}
+	}
+	// Use TypeResolver to get detailed function signature
+	// For now, extract param types from the string
+	// "func(echo.Context) error" → params: ["echo.Context"], results: ["error"]
+	inner := goType[5:] // strip "func("
+	parenEnd := strings.Index(inner, ")")
+	if parenEnd < 0 {
+		return nil
+	}
+	paramStr := inner[:parenEnd]
+	resultStr := strings.TrimSpace(inner[parenEnd+1:])
+
+	info := &FuncInfo{}
+	if paramStr != "" {
+		for _, p := range strings.Split(paramStr, ", ") {
+			p = strings.TrimSpace(p)
+			// Named params: "c *echo.Context" → type is "*echo.Context"
+			if spaceIdx := strings.LastIndex(p, " "); spaceIdx >= 0 {
+				p = p[spaceIdx+1:]
+			}
+			info.Params = append(info.Params, ParamInfo{Type: p})
+		}
+	}
+	if resultStr != "" {
+		info.Results = append(info.Results, ParamInfo{Type: resultStr})
+	}
+	return info
+}
+
+// inferLambdaParamTypes fills in missing parameter types from a Go function signature.
+func (l *Lowerer) inferLambdaParamTypes(lam Lambda, funcType *FuncInfo) Lambda {
+	for i := range lam.Params {
+		if lam.Params[i].Type == nil && i < len(funcType.Params) {
+			goType := funcType.Params[i].Type
+			lam.Params[i].Type = l.goTypeToArcaType(goType)
+		}
+	}
+	return lam
+}
+
+// goTypeToArcaType converts a Go type string to an Arca AST type.
+func (l *Lowerer) goTypeToArcaType(goType string) Type {
+	if strings.HasPrefix(goType, "*") {
+		inner := l.goTypeToArcaType(goType[1:])
+		if inner != nil {
+			return PointerType{Inner: inner}
+		}
+		return nil
+	}
+	return NamedType{Name: goTypeToIRName(goType)}
 }
 
 func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
@@ -1653,6 +1760,10 @@ func (l *Lowerer) lowerBlock(b Block) IRExpr {
 		Expr:  expr,
 		Type:  IRInterfaceType{},
 	}
+}
+
+func (l *Lowerer) lowerLambdaHint(lam Lambda, hint IRType) IRExpr {
+	return l.lowerLambda(lam)
 }
 
 func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {

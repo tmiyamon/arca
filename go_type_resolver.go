@@ -149,6 +149,30 @@ func (r *GoTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo {
 	return nil
 }
 
+func (r *GoTypeResolver) ResolveUnderlying(goType string) string {
+	// Split "github.com/labstack/echo/v5.HandlerFunc" → pkg + name
+	dotIdx := strings.LastIndex(goType, ".")
+	if dotIdx < 0 {
+		return ""
+	}
+	pkgPath := goType[:dotIdx]
+	typeName := goType[dotIdx+1:]
+
+	goPkg := r.loadPackage(pkgPath)
+	if goPkg == nil {
+		return ""
+	}
+	obj := goPkg.Scope().Lookup(typeName)
+	if obj == nil {
+		return ""
+	}
+	underlying := obj.Type().Underlying()
+	if underlying == nil {
+		return ""
+	}
+	return underlying.String()
+}
+
 func (r *GoTypeResolver) CanLoadPackage(pkg string) bool {
 	if isStdLib(pkg) {
 		return r.loadPackage(pkg) != nil

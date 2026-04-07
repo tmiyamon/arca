@@ -53,6 +53,11 @@ type TypeResolver interface {
 	// CanLoadPackage checks if a Go package can be loaded.
 	// Returns true if the package is resolvable (in go.mod or stdlib).
 	CanLoadPackage(pkg string) bool
+
+	// ResolveUnderlying returns the underlying type string for a named type.
+	// e.g. "github.com/labstack/echo/v5.HandlerFunc" → "func(c *echo.Context) error"
+	// Returns "" if unknown.
+	ResolveUnderlying(goType string) string
 }
 
 // NullTypeResolver returns nil for all queries — preserves current behavior
@@ -63,3 +68,4 @@ func (NullTypeResolver) ResolveFunc(pkg, name string) *FuncInfo          { retur
 func (NullTypeResolver) ResolveType(pkg, name string) *TypeInfo          { return nil }
 func (NullTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo { return nil }
 func (NullTypeResolver) CanLoadPackage(pkg string) bool                  { return true }
+func (NullTypeResolver) ResolveUnderlying(goType string) string          { return "" }
