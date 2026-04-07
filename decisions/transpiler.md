@@ -4,6 +4,24 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-07: Undefined variable detection and IR type propagation
+
+**Context:** Variables like `db` in a method body (should be `self.db`) silently passed through to Go, causing Go compile errors instead of Arca errors. Also, builtin constructors (`Ok`, `Error`, `Some`) had `IRInterfaceType{}` as their type, preventing match arm binding type inference.
+
+**Decision:** Detect undefined variables in `lowerIdent` via lexical scope lookup. If a name is not in scope, not a function, not a Go package — error. Also fix type propagation:
+
+- `Ok(42)` → `IRResultType{Ok: int, Err: error}` (was `IRInterfaceType{}`)
+- `Error(e)` → `IRResultType{Ok: unknown, Err: e.type}`
+- `Some(x)` → `IROptionType{Inner: x.type}`
+- Arca function calls resolve return type from `l.functions` declarations
+- Match arm binding type inference errors if subject type is not Result/Option (bug, not limitation)
+
+**Also fixed:** destructure bindings, for loop bindings registered via `registerSymbol`. testdata/map_filter.arca had undefined `nums()` function.
+
+**Status:** Implemented.
+
+---
+
 ## 2026-04-07: Sum type method expansion as IR post-pass
 
 **Context:** `lowerSumTypeMethod` was a 70-line special case in lower.go, interleaving AST traversal (`findMatchSelf`) with per-variant IR generation. Duplicated logic with `lowerMethod`.

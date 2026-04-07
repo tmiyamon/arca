@@ -4,6 +4,10 @@ import (
 	"fmt"
 )
 
+func nums() []int {
+	return []int{1, 2, 3, 4, 5}
+}
+
 func main() {
 	doubled := Map_(nums(), func(x int) int { return x * 2 })
 	positives := Filter_(nums(), func(x int) bool { return x > 0 })

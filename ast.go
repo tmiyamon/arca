@@ -50,7 +50,10 @@ type StringLit struct {
 	Multiline bool
 }
 type BoolLit struct{ Value bool }
-type Ident struct{ Name string }
+type Ident struct {
+	Name string
+	Pos  Pos
+}
 
 type StringInterp struct {
 	Parts     []Expr // alternating StringLit and expressions

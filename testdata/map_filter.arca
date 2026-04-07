@@ -1,5 +1,9 @@
 import go "fmt"
 
+fun nums() -> List[Int] {
+  [1, 2, 3, 4, 5]
+}
+
 fun main() {
   let doubled = map(nums(), (x: Int) -> Int => x * 2)
   let positives = filter(nums(), (x: Int) -> Bool => x > 0)

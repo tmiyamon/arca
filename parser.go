@@ -791,7 +791,7 @@ func (p *Parser) parseExpr() (Expr, error) {
 	// ? operator
 	if p.peek().Kind == TkQuestion {
 		p.advance()
-		expr = FnCall{Pos: Pos{p.peek().Line, p.peek().Col}, Fn: Ident{Name: "__try"}, Args: []Expr{expr}}
+		expr = FnCall{Pos: Pos{p.peek().Line, p.peek().Col}, Fn: Ident{Name: "__try", Pos: Pos{p.peek().Line, p.peek().Col}}, Args: []Expr{expr}}
 	}
 
 	// Pipe operator
@@ -903,7 +903,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 	case TkIdent:
 		p.advance()
-		expr := Expr(Ident{Name: tok.Lit})
+		expr := Expr(Ident{Name: tok.Lit, Pos: Pos{tok.Line, tok.Col}})
 		for {
 			if p.peek().Kind == TkLParen {
 				p.advance()
@@ -1130,7 +1130,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 
 		// Otherwise: field access or method call (e.g. foo.bar, fmt.Println(...))
 		qualifiedName := name.Lit + "." + member.Lit
-		expr := Expr(Ident{Name: qualifiedName})
+		expr := Expr(Ident{Name: qualifiedName, Pos: Pos{name.Line, name.Col}})
 		if p.peek().Kind == TkLParen {
 			p.advance()
 			var args []Expr
@@ -1161,7 +1161,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 		}
 	}
 
-	return Ident{Name: name.Lit}, nil
+	return Ident{Name: name.Lit, Pos: Pos{name.Line, name.Col}}, nil
 }
 
 func (p *Parser) parseQualifiedConstructor(typeName Token, ctorName Token) (Expr, error) {

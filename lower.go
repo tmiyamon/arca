@@ -996,13 +996,24 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	goName := l.resolveVar(e.Name)
 	var arcaType Type
 	irType := IRType(IRInterfaceType{})
+	found := false
 	if l.currentScope != nil {
 		if sym := l.currentScope.Lookup(e.Name); sym != nil {
 			arcaType = sym.Type
 			if sym.IRType != nil {
 				irType = sym.IRType
 			}
+			found = true
 		}
+	}
+	// Check if it's a known function (non-public functions aren't in fnNames)
+	if !found {
+		if _, ok := l.functions[e.Name]; ok {
+			found = true
+		}
+	}
+	if !found && l.currentScope != nil {
+		l.addError(e.Pos, "undefined variable: %s", e.Name)
 	}
 	return IRIdent{GoName: goName, Type: irType, Source: SourceInfo{Type: arcaType}}
 }
@@ -1112,8 +1123,21 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		if id, ok := e.Fn.(Ident); ok {
 			arcaName = id.Name
 		}
-		ret := l.resolveGoCall(ident.GoName, args, e.Pos)
-		return IRFnCall{Func: ident.GoName, Args: args, Type: ret.Type, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		// Try Arca function return type first
+		var fnType IRType = IRInterfaceType{}
+		var goMultiReturn bool
+		if id, ok := e.Fn.(Ident); ok {
+			if fn, ok := l.functions[id.Name]; ok && fn.ReturnType != nil {
+				fnType = l.lowerType(fn.ReturnType)
+			}
+		}
+		// Fall back to Go FFI resolution
+		if _, isInterface := fnType.(IRInterfaceType); isInterface {
+			ret := l.resolveGoCall(ident.GoName, args, e.Pos)
+			fnType = ret.Type
+			goMultiReturn = ret.GoMultiReturn
+		}
+		return IRFnCall{Func: ident.GoName, Args: args, Type: fnType, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
@@ -1481,19 +1505,21 @@ func (l *Lowerer) lowerConstructorCall(e ConstructorCall) IRExpr {
 		l.builtins["result"] = true
 		val := l.lowerExpr(e.Fields[0].Value)
 		typeArgs := l.resultTypeArgs()
-		return IROkCall{Value: val, TypeArgs: typeArgs, Type: IRInterfaceType{}}
+		okType := val.irType()
+		return IROkCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: IRNamedType{GoName: "error"}}}
 	}
 	if e.Name == "Error" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
 		val := l.lowerExpr(e.Fields[0].Value)
 		typeArgs := l.resultTypeArgs()
-		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: IRInterfaceType{}}
+		errType := val.irType()
+		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: IRInterfaceType{}, Err: errType}}
 	}
 	// Built-in Option constructors
 	if e.Name == "Some" && len(e.Fields) == 1 {
 		l.builtins["option"] = true
 		val := l.lowerExpr(e.Fields[0].Value)
-		return IRSomeCall{Value: val, Type: IRInterfaceType{}}
+		return IRSomeCall{Value: val, Type: IROptionType{Inner: val.irType()}}
 	}
 	if e.Name == "None" {
 		l.builtins["option"] = true
@@ -1680,9 +1706,14 @@ func (l *Lowerer) lowerTuple(t TupleExpr) IRExpr {
 
 func (l *Lowerer) lowerForExpr(fe ForExpr) IRExpr {
 	binding := snakeToCamel(fe.Binding)
-	body := l.lowerExpr(fe.Body)
+	forSymbols := []SymbolRegInfo{{Name: fe.Binding, Kind: SymVariable}}
+	sp, ep := bodyPos(fe.Body)
 
 	if rangeExpr, ok := fe.Iter.(RangeExpr); ok {
+		var body IRExpr
+		l.withScope(sp, ep, forSymbols, func() {
+			body = l.lowerExpr(fe.Body)
+		})
 		return IRForRange{
 			Binding: binding,
 			Start:   l.lowerExpr(rangeExpr.Start),
@@ -1692,6 +1723,10 @@ func (l *Lowerer) lowerForExpr(fe ForExpr) IRExpr {
 		}
 	}
 
+	var body IRExpr
+	l.withScope(sp, ep, forSymbols, func() {
+		body = l.lowerExpr(fe.Body)
+	})
 	return IRForEach{
 		Binding: binding,
 		Iter:    l.lowerExpr(fe.Iter),
@@ -1895,6 +1930,7 @@ func (l *Lowerer) lowerLetDestructure(pat Pattern, value Expr) []IRStmt {
 		var bindings []IRDestructureBinding
 		for i, elemPat := range p.Elements {
 			if bp, ok := elemPat.(BindPattern); ok {
+				l.registerSymbol(SymbolRegInfo{Name: bp.Name, Kind: SymVariable})
 				bindings = append(bindings, IRDestructureBinding{
 					GoName: snakeToCamel(bp.Name),
 					Index:  i,
@@ -1910,6 +1946,7 @@ func (l *Lowerer) lowerLetDestructure(pat Pattern, value Expr) []IRStmt {
 		var bindings []IRDestructureBinding
 		for i, elemPat := range p.Elements {
 			if bp, ok := elemPat.(BindPattern); ok {
+				l.registerSymbol(SymbolRegInfo{Name: bp.Name, Kind: SymVariable})
 				bindings = append(bindings, IRDestructureBinding{
 					GoName: snakeToCamel(bp.Name),
 					Index:  i,
@@ -1917,6 +1954,7 @@ func (l *Lowerer) lowerLetDestructure(pat Pattern, value Expr) []IRStmt {
 			}
 		}
 		if p.Rest != "" {
+			l.registerSymbol(SymbolRegInfo{Name: p.Rest, Kind: SymVariable})
 			bindings = append(bindings, IRDestructureBinding{
 				GoName: snakeToCamel(p.Rest),
 				Index:  len(p.Elements),
@@ -1989,11 +2027,14 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 						GoName: snakeToCamel(cp.Fields[0].Binding),
 						Source: ".Value",
 					}
-					if rt, ok := subject.irType().(IRResultType); ok {
-						armSymbols = append(armSymbols, SymbolRegInfo{
-							Name: cp.Fields[0].Binding, IRType: rt.Ok, Kind: SymVariable,
-						})
-					}
+				}
+				rt, ok := subject.irType().(IRResultType)
+				if !ok {
+					l.addError(me.Pos, "cannot infer Result type for match subject")
+				} else {
+					armSymbols = append(armSymbols, SymbolRegInfo{
+						Name: cp.Fields[0].Binding, IRType: rt.Ok, Kind: SymVariable,
+					})
 				}
 			}
 			sp, ep := arm.Pos, arm.EndPos
@@ -2012,11 +2053,14 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 						GoName: snakeToCamel(cp.Fields[0].Binding),
 						Source: ".Err",
 					}
-					if rt, ok := subject.irType().(IRResultType); ok {
-						armSymbols = append(armSymbols, SymbolRegInfo{
-							Name: cp.Fields[0].Binding, IRType: rt.Err, Kind: SymVariable,
-						})
-					}
+				}
+				rt, ok := subject.irType().(IRResultType)
+				if !ok {
+					l.addError(me.Pos, "cannot infer Result type for match subject")
+				} else {
+					armSymbols = append(armSymbols, SymbolRegInfo{
+						Name: cp.Fields[0].Binding, IRType: rt.Err, Kind: SymVariable,
+					})
 				}
 			}
 			sp, ep := arm.Pos, arm.EndPos
@@ -2059,7 +2103,10 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 					GoName: snakeToCamel(cp.Fields[0].Binding),
 					Source: ".Value",
 				}
-				if ot, ok := subject.irType().(IROptionType); ok {
+				ot, ok := subject.irType().(IROptionType)
+				if !ok {
+					l.addError(me.Pos, "cannot infer Option type for match subject")
+				} else {
 					armSymbols = append(armSymbols, SymbolRegInfo{
 						Name: cp.Fields[0].Binding, IRType: ot.Inner, Kind: SymVariable,
 					})
