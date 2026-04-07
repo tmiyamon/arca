@@ -39,7 +39,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 
 - **IR abstraction**: New features go in `lower.go` or `prelude.go`. `emit.go` should rarely change.
 - **Unified IRMatch**: Single `IRMatch` with typed `IRMatchPattern` for all match kinds. Exhaustiveness checked in validate, not structurally enforced by IR types.
-- **Lexical Scope tree**: `withScope(startPos, endPos, symbols, fn)` manages scope push/pop + symbol registration. All variable bindings go through `registerSymbol`. Scope tree preserved for LSP `FindSymbolAt`.
+- **Lexical Scope tree**: `withScope(startPos, endPos, symbols, fn)` manages scope push/pop + symbol registration. All symbols (variables, params, functions, packages) go through `registerSymbol` → `NewSymbolInfo`. GoName auto-resolved by kind. Scope tree preserved for LSP `FindSymbolAt`.
 - **Variable shadowing**: Lower RHS before declaring variable name.
 - **Sum type methods**: Lowered as normal methods, then expanded to per-variant Go methods by `expandSumTypeMethods` IR post-pass.
 - **Prelude**: Built-in functions defined in one map. Adding a builtin = one line.

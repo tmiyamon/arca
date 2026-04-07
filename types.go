@@ -132,7 +132,32 @@ func dimensionsCompatible(source, target []Dimension) bool {
 const (
 	SymVariable  = "variable"
 	SymParameter = "parameter"
+	SymFunction  = "function"
+	SymPackage   = "package"
 )
+
+// NewSymbolInfo creates a SymbolInfo with auto-resolved GoName.
+// Panics if name is empty.
+func NewSymbolInfo(name, kind string) SymbolInfo {
+	if name == "" {
+		panic("NewSymbolInfo: name must not be empty")
+	}
+	return SymbolInfo{
+		Name:   name,
+		GoName: goNameForKind(name, kind),
+		Kind:   kind,
+	}
+}
+
+// goNameForKind determines the Go name based on symbol kind.
+func goNameForKind(name, kind string) string {
+	switch kind {
+	case SymPackage:
+		return name // Go packages keep their name as-is
+	default:
+		return snakeToCamel(name)
+	}
+}
 
 // SymbolInfo records type info for a symbol at a specific position.
 type SymbolInfo struct {

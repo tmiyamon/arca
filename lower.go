@@ -50,22 +50,17 @@ func (l *Lowerer) recordSymbol(name string, t Type, kind string) {
 // AST and IR types. All variable bindings must go through this function.
 // Returns the resolved Go name (with shadowing suffix if needed).
 func (l *Lowerer) registerSymbol(info SymbolRegInfo) string {
-	goName := snakeToCamel(info.Name)
+	sym := NewSymbolInfo(info.Name, info.Kind)
 
 	// Same-scope shadowing: suffix with count
 	if l.currentScope != nil {
-		count := l.currentScope.declCount[goName]
-		l.currentScope.declCount[goName] = count + 1
+		count := l.currentScope.declCount[sym.GoName]
+		l.currentScope.declCount[sym.GoName] = count + 1
 		if count > 0 {
-			goName = fmt.Sprintf("%s_%d", goName, count+1)
+			sym.GoName = fmt.Sprintf("%s_%d", sym.GoName, count+1)
 		}
 	}
 
-	sym := SymbolInfo{
-		Name:   info.Name,
-		GoName: goName,
-		Kind:   info.Kind,
-	}
 	if info.ArcaType != nil {
 		sym.Type = info.ArcaType
 	}
@@ -83,7 +78,7 @@ func (l *Lowerer) registerSymbol(info SymbolRegInfo) string {
 	// Record in flat list (for LSP global queries)
 	l.symbols = append(l.symbols, sym)
 
-	return goName
+	return sym.GoName
 }
 
 type SymbolRegInfo struct {
@@ -180,6 +175,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 					l.goPackages = make(map[string]*GoPackage)
 				}
 				l.goPackages[pkg.ShortName] = pkg
+				l.registerSymbol(SymbolRegInfo{Name: pkg.ShortName, Kind: SymPackage})
 				l.imports = append(l.imports, IRImport{
 					Path:       pkg.FullPath,
 					SideEffect: d.SideEffect,
@@ -194,6 +190,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 			if d.Public {
 				l.fnNames[d.Name] = snakeToPascal(d.Name)
 			}
+			l.registerSymbol(SymbolRegInfo{Name: d.Name, Kind: SymFunction})
 		}
 	}
 	return l
@@ -1003,12 +1000,6 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 			if sym.IRType != nil {
 				irType = sym.IRType
 			}
-			found = true
-		}
-	}
-	// Check if it's a known function (non-public functions aren't in fnNames)
-	if !found {
-		if _, ok := l.functions[e.Name]; ok {
 			found = true
 		}
 	}
