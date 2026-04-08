@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -46,7 +45,7 @@ type Order {
 	if len(errs) == 0 {
 		t.Fatal("expected error for unknown type")
 	}
-	if !strings.Contains(errs[0].Message(), "unknown type: Unknown") {
+	if !hasErrorCode(errs, ErrUnknownType) {
 		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
@@ -61,7 +60,7 @@ fun make() -> String {
 	if len(errs) == 0 {
 		t.Fatal("expected error for unknown constructor")
 	}
-	if !strings.Contains(errs[0].Message(), "unknown constructor: Bogus") {
+	if !hasErrorCode(errs, ErrUnknownType) {
 		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
@@ -80,8 +79,8 @@ fun make() -> Point {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong field count")
 	}
-	if !strings.Contains(errs[0].Message(), "expects 2 fields, got 1") {
-		t.Errorf("unexpected error: %s", errs[0].Message())
+	if !hasErrorCode(errs, ErrWrongFieldCount) {
+		t.Errorf("expected ErrWrongFieldCount, got: %v", errs)
 	}
 }
 
@@ -99,7 +98,7 @@ fun make() -> Point {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong field name")
 	}
-	if !strings.Contains(errs[0].Message(), "no field named 'z'") {
+	if !hasErrorCode(errs, ErrUnknownField) {
 		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
@@ -183,7 +182,7 @@ fun make() -> Bogus {
 	}
 	found := false
 	for _, e := range errs {
-		if strings.Contains(e.Message(), "unknown type: Bogus") {
+		if e.Code == ErrUnknownType {
 			found = true
 			break
 		}
@@ -231,7 +230,7 @@ fun main() {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong argument count")
 	}
-	if !strings.Contains(errs[0].Message(), "expects 2 arguments, got 1") {
+	if !hasErrorCode(errs, ErrWrongArgCount) {
 		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
@@ -392,7 +391,7 @@ fun main() {
 `)
 	hasExhaustiveErr := false
 	for _, e := range errs {
-		if strings.Contains(e.Message(), "non-exhaustive") {
+		if e.Code == ErrNonExhaustiveMatch {
 			hasExhaustiveErr = true
 		}
 	}
@@ -455,7 +454,7 @@ fun test() -> Result[Int, error] {
 }
 `)
 	for _, e := range errs {
-		if strings.Contains(e.Message(), "undefined") {
+		if e.Code == ErrUnknownVariable {
 			t.Errorf("unexpected error: %s", e.Message())
 		}
 	}

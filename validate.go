@@ -46,12 +46,8 @@ func (v *IRValidation) Validate(prog IRProgram) []CompileError {
 	return v.errors
 }
 
-func (v *IRValidation) addError(pos Pos, format string, args ...interface{}) {
-	v.errors = append(v.errors, CompileError{
-		Pos:   pos,
-		Phase: "validate",
-		Data:  MessageData{Text: fmt.Sprintf(format, args...)},
-	})
+func (v *IRValidation) addCompileError(code ErrorCode, pos Pos, data interface{}) {
+	v.errors = append(v.errors, CompileError{Code: code, Pos: pos, Phase: "validate", Data: data})
 }
 
 
@@ -116,7 +112,7 @@ func (v *IRValidation) checkTypeExists(t Type) {
 	switch tt := t.(type) {
 	case NamedType:
 		if !v.isKnownType(tt.Name) {
-			v.addError(tt.Pos, "unknown type: %s", tt.Name)
+			v.addCompileError(ErrUnknownType, tt.Pos, UnknownTypeData{Name: tt.Name})
 		}
 		for _, param := range tt.Params {
 			v.checkTypeExists(param)
@@ -295,8 +291,9 @@ func (v *IRValidation) validateFnCall(e IRFnCall) {
 		return
 	}
 	if len(e.Args) != len(fn.Params) {
-		v.addError(e.Source.Pos, "function '%s' expects %d arguments, got %d",
-			e.Source.Name, len(fn.Params), len(e.Args))
+		v.addCompileError(ErrWrongArgCount, e.Source.Pos, WrongArgCountData{
+			Func: e.Source.Name, Expected: len(fn.Params), Actual: len(e.Args),
+		})
 		return
 	}
 	// Argument type checking handled by bidirectional hint in lower.
@@ -329,7 +326,7 @@ func (v *IRValidation) validateConstructorCall(cc IRConstructorCall) {
 	if tn == "" {
 		tn2, ok := v.ctorTypes[ctorName]
 		if !ok {
-			v.addError(cc.Source.Pos, "unknown constructor: %s", ctorName)
+			v.addCompileError(ErrUnknownType, cc.Source.Pos, UnknownTypeData{Name: ctorName})
 			return
 		}
 		tn = tn2
@@ -337,7 +334,7 @@ func (v *IRValidation) validateConstructorCall(cc IRConstructorCall) {
 
 	td, ok := v.types[tn]
 	if !ok {
-		v.addError(cc.Source.Pos, "unknown type: %s", tn)
+		v.addCompileError(ErrUnknownType, cc.Source.Pos, UnknownTypeData{Name: tn})
 		return
 	}
 
@@ -351,13 +348,14 @@ func (v *IRValidation) validateConstructorCall(cc IRConstructorCall) {
 		}
 	}
 	if !found {
-		v.addError(cc.Source.Pos, "type %s has no constructor %s", tn, ctorName)
+		v.addCompileError(ErrUnknownField, cc.Source.Pos, MessageData{Text: fmt.Sprintf("type %s has no constructor %s", tn, ctorName)})
 		return
 	}
 
 	if len(cc.Fields) != len(ctor.Fields) {
-		v.addError(cc.Source.Pos, "constructor %s expects %d fields, got %d",
-			ctorName, len(ctor.Fields), len(cc.Fields))
+		v.addCompileError(ErrWrongFieldCount, cc.Source.Pos, WrongArgCountData{
+			Func: ctorName, Expected: len(ctor.Fields), Actual: len(cc.Fields),
+		})
 		return
 	}
 
@@ -371,7 +369,7 @@ func (v *IRValidation) validateConstructorCall(cc IRConstructorCall) {
 				}
 			}
 			if !found {
-				v.addError(cc.Source.Pos, "constructor %s has no field named '%s'", ctorName, fv.Source.Name)
+				v.addCompileError(ErrUnknownField, cc.Source.Pos, MessageData{Text: fmt.Sprintf("constructor %s has no field named '%s'", ctorName, fv.Source.Name)})
 			}
 		}
 		// Field type checking handled by bidirectional hint in lower.
@@ -673,10 +671,10 @@ func (v *IRValidation) checkResultExhaustiveness(m IRMatch) {
 		}
 	}
 	if !hasOk {
-		v.addError(m.Pos, "non-exhaustive match: missing Ok arm")
+		v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Ok arm"})
 	}
 	if !hasError {
-		v.addError(m.Pos, "non-exhaustive match: missing Error arm")
+		v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Error arm"})
 	}
 }
 
@@ -691,10 +689,10 @@ func (v *IRValidation) checkOptionExhaustiveness(m IRMatch) {
 		}
 	}
 	if !hasSome {
-		v.addError(m.Pos, "non-exhaustive match: missing Some arm")
+		v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Some arm"})
 	}
 	if !hasNone {
-		v.addError(m.Pos, "non-exhaustive match: missing None arm")
+		v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "None arm"})
 	}
 }
 
@@ -723,7 +721,7 @@ func (v *IRValidation) checkEnumExhaustiveness(m IRMatch) {
 				// This is the right enum type — check all variants
 				for _, ctor := range td.Constructors {
 					if !matched[td.Name+ctor.Name] {
-						v.addError(m.Pos, "non-exhaustive match: missing %s variant", ctor.Name)
+						v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: ctor.Name + " variant"})
 					}
 				}
 				return
@@ -757,7 +755,7 @@ func (v *IRValidation) checkSumTypeExhaustiveness(m IRMatch) {
 				// This is the right sum type — check all variants
 				for _, ctor := range td.Constructors {
 					if !matched[td.Name+ctor.Name] {
-						v.addError(m.Pos, "non-exhaustive match: missing %s variant", ctor.Name)
+						v.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: ctor.Name + " variant"})
 					}
 				}
 				return
