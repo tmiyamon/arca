@@ -454,13 +454,13 @@ func transpile(inputPath string) (*transpileResult, error) {
 	t2 := time.Now()
 	var allErrors []string
 	for _, e := range mainLowerer.Errors() {
-		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message))
+		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message()))
 	}
 
 	validator := NewIRValidation(mainLowerer)
 	if validErrs := validator.Validate(irProg); len(validErrs) > 0 {
 		for _, e := range validErrs {
-			allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message))
+			allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message()))
 		}
 	}
 

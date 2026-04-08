@@ -5,23 +5,13 @@ import (
 	"strings"
 )
 
-// ValidateError represents a validation error with source position.
-type ValidateError struct {
-	Pos     Pos
-	Message string
-}
-
-func (e ValidateError) Error() string {
-	return fmt.Sprintf("%d:%d: %s", e.Pos.Line, e.Pos.Col, e.Message)
-}
-
 // IRValidation walks an IR program and validates types, reporting errors.
 type IRValidation struct {
 	types          map[string]TypeDecl
 	typeAliases    map[string]TypeAliasDecl
 	ctorTypes      map[string]string // constructor name → type name
 	functions      map[string]FnDecl
-	errors         []ValidateError
+	errors         []CompileError
 	typeParams     map[string]bool // currently in-scope type parameters
 	allTypeParams  map[string]bool // all type parameter names across all types
 }
@@ -46,7 +36,7 @@ func NewIRValidation(l *Lowerer) *IRValidation {
 }
 
 // Validate walks the IR program and returns any validation errors.
-func (v *IRValidation) Validate(prog IRProgram) []ValidateError {
+func (v *IRValidation) Validate(prog IRProgram) []CompileError {
 	for _, td := range prog.Types {
 		v.validateTypeDecl(td)
 	}
@@ -57,8 +47,13 @@ func (v *IRValidation) Validate(prog IRProgram) []ValidateError {
 }
 
 func (v *IRValidation) addError(pos Pos, format string, args ...interface{}) {
-	v.errors = append(v.errors, ValidateError{Pos: pos, Message: fmt.Sprintf(format, args...)})
+	v.errors = append(v.errors, CompileError{
+		Pos:   pos,
+		Phase: "validate",
+		Data:  MessageData{Text: fmt.Sprintf(format, args...)},
+	})
 }
+
 
 // --- Type Declaration Validation ---
 

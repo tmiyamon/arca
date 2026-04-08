@@ -159,7 +159,7 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 			Range:    posToRange(e.Pos),
 			Severity: &severity,
 			Source:   strPtr(lspName),
-			Message:  e.Message,
+			Message:  e.Message(),
 		})
 	}
 
@@ -169,7 +169,7 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 			Range:    posToRange(e.Pos),
 			Severity: &severity,
 			Source:   strPtr(lspName),
-			Message:  e.Message,
+			Message:  e.Message(),
 		})
 	}
 

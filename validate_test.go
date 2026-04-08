@@ -5,26 +5,23 @@ import (
 	"testing"
 )
 
-func validateSource(source string) []ValidateError {
+func validateSource(source string) []CompileError {
 	lexer := NewLexer(source)
 	tokens, err := lexer.Tokenize()
 	if err != nil {
-		return []ValidateError{{Message: "lexer error: " + err.Error()}}
+		return []CompileError{{Data: MessageData{Text: "lexer error: " + err.Error()}}}
 	}
 	parser := NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		return []ValidateError{{Message: "parse error: " + err.Error()}}
+		return []CompileError{{Data: MessageData{Text: "parse error: " + err.Error()}}}
 	}
 
 	lowerer := NewLowerer(prog, "", nil)
 	irProg := lowerer.Lower(prog, "main", false)
 
 	// Collect errors from both lowerer (hint-based) and validator
-	var errs []ValidateError
-	for _, e := range lowerer.Errors() {
-		errs = append(errs, ValidateError{Pos: e.Pos, Message: e.Message})
-	}
+	errs := lowerer.Errors()
 	validator := NewIRValidation(lowerer)
 	errs = append(errs, validator.Validate(irProg)...)
 	return errs
@@ -40,8 +37,8 @@ type Order {
 	if len(errs) == 0 {
 		t.Fatal("expected error for unknown type")
 	}
-	if !strings.Contains(errs[0].Message, "unknown type: Unknown") {
-		t.Errorf("unexpected error: %s", errs[0].Message)
+	if !strings.Contains(errs[0].Message(), "unknown type: Unknown") {
+		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
 
@@ -55,8 +52,8 @@ fun make() -> String {
 	if len(errs) == 0 {
 		t.Fatal("expected error for unknown constructor")
 	}
-	if !strings.Contains(errs[0].Message, "unknown constructor: Bogus") {
-		t.Errorf("unexpected error: %s", errs[0].Message)
+	if !strings.Contains(errs[0].Message(), "unknown constructor: Bogus") {
+		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
 
@@ -74,8 +71,8 @@ fun make() -> Point {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong field count")
 	}
-	if !strings.Contains(errs[0].Message, "expects 2 fields, got 1") {
-		t.Errorf("unexpected error: %s", errs[0].Message)
+	if !strings.Contains(errs[0].Message(), "expects 2 fields, got 1") {
+		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
 
@@ -93,8 +90,8 @@ fun make() -> Point {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong field name")
 	}
-	if !strings.Contains(errs[0].Message, "no field named 'z'") {
-		t.Errorf("unexpected error: %s", errs[0].Message)
+	if !strings.Contains(errs[0].Message(), "no field named 'z'") {
+		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
 
@@ -177,7 +174,7 @@ fun make() -> Bogus {
 	}
 	found := false
 	for _, e := range errs {
-		if strings.Contains(e.Message, "unknown type: Bogus") {
+		if strings.Contains(e.Message(), "unknown type: Bogus") {
 			found = true
 			break
 		}
@@ -225,8 +222,8 @@ fun main() {
 	if len(errs) == 0 {
 		t.Fatal("expected error for wrong argument count")
 	}
-	if !strings.Contains(errs[0].Message, "expects 2 arguments, got 1") {
-		t.Errorf("unexpected error: %s", errs[0].Message)
+	if !strings.Contains(errs[0].Message(), "expects 2 arguments, got 1") {
+		t.Errorf("unexpected error: %s", errs[0].Message())
 	}
 }
 
@@ -386,7 +383,7 @@ fun main() {
 `)
 	hasExhaustiveErr := false
 	for _, e := range errs {
-		if strings.Contains(e.Message, "non-exhaustive") {
+		if strings.Contains(e.Message(), "non-exhaustive") {
 			hasExhaustiveErr = true
 		}
 	}
@@ -407,7 +404,7 @@ fun main() {
 	}
 	found := false
 	for _, e := range errs {
-		if strings.Contains(e.Message, "undefined variable: x") {
+		if strings.Contains(e.Message(), "undefined variable: x") {
 			found = true
 		}
 	}
@@ -455,8 +452,8 @@ fun test() -> Result[Int, error] {
 }
 `)
 	for _, e := range errs {
-		if strings.Contains(e.Message, "undefined") {
-			t.Errorf("unexpected error: %s", e.Message)
+		if strings.Contains(e.Message(), "undefined") {
+			t.Errorf("unexpected error: %s", e.Message())
 		}
 	}
 }

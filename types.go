@@ -1,9 +1,112 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"strings"
 )
+
+// --- Compile Errors ---
+
+type ErrorCode int
+
+const (
+	ErrTypeMismatch ErrorCode = iota
+	ErrUnknownType
+	ErrUnknownVariable
+	ErrNonExhaustiveMatch
+	ErrWrongArgCount
+	ErrWrongFieldCount
+	ErrUnknownField
+	ErrPackageNotFound
+	ErrFieldAccessOnResult
+	ErrFieldAccessOnOption
+	ErrReturnTypeMismatch
+	ErrCannotInferType
+)
+
+type CompileError struct {
+	Code  ErrorCode
+	Pos   Pos
+	Phase string      // "parse", "lower", "validate"
+	Data  interface{} // error-specific structured data
+}
+
+func (e CompileError) Error() string {
+	return fmt.Sprintf("%d:%d: %s", e.Pos.Line, e.Pos.Col, e.Message())
+}
+
+func (e CompileError) Message() string {
+	switch d := e.Data.(type) {
+	case TypeMismatchData:
+		return fmt.Sprintf("type mismatch: expected %s, got %s", d.Expected, d.Actual)
+	case UnknownVariableData:
+		return fmt.Sprintf("undefined variable: %s", d.Name)
+	case UnknownTypeData:
+		return fmt.Sprintf("unknown type: %s", d.Name)
+	case WrongArgCountData:
+		if d.AtLeast {
+			return fmt.Sprintf("'%s' expects at least %d arguments, got %d", d.Func, d.Expected, d.Actual)
+		}
+		return fmt.Sprintf("'%s' expects %d arguments, got %d", d.Func, d.Expected, d.Actual)
+	case NonExhaustiveMatchData:
+		return fmt.Sprintf("non-exhaustive match: missing %s", d.Missing)
+	case PackageNotFoundData:
+		return fmt.Sprintf("package %s not found. Run: go get %s", d.Path, d.Path)
+	case FieldAccessOnWrappedData:
+		return fmt.Sprintf("cannot access .%s on %s type. %s", d.Field, d.TypeName, d.Suggestion)
+	case CannotInferTypeData:
+		return fmt.Sprintf("cannot infer %s type for match subject", d.TypeName)
+	case MessageData:
+		return d.Text
+	default:
+		return "unknown error"
+	}
+}
+
+// Error data types
+type TypeMismatchData struct {
+	Expected string
+	Actual   string
+}
+
+type UnknownVariableData struct {
+	Name string
+}
+
+type UnknownTypeData struct {
+	Name string
+}
+
+type WrongArgCountData struct {
+	Func     string
+	Expected int
+	Actual   int
+	AtLeast  bool
+}
+
+type NonExhaustiveMatchData struct {
+	Missing string
+}
+
+type PackageNotFoundData struct {
+	Path string
+}
+
+type FieldAccessOnWrappedData struct {
+	Field      string
+	TypeName   string
+	Suggestion string
+}
+
+type CannotInferTypeData struct {
+	TypeName string
+}
+
+// MessageData is a fallback for errors not yet structured
+type MessageData struct {
+	Text string
+}
 
 // --- Constraint Dimensions ---
 

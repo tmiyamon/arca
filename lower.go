@@ -28,19 +28,22 @@ type Lowerer struct {
 	imports      []IRImport
 	builtins     map[string]bool
 	tmpCounter   int
-	errors       []LowerError
+	errors       []CompileError
 	symbols      []SymbolInfo // all symbols (flat, for LSP global list)
 	rootScope    *Scope       // root of scope tree (preserved after lowering)
 	currentScope *Scope       // current scope during lowering
 }
 
-type LowerError struct {
-	Pos     Pos
-	Message string
+func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
+	l.errors = append(l.errors, CompileError{
+		Pos:   pos,
+		Phase: "lower",
+		Data:  MessageData{Text: fmt.Sprintf(format, args...)},
+	})
 }
 
-func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
-	l.errors = append(l.errors, LowerError{Pos: pos, Message: fmt.Sprintf(format, args...)})
+func (l *Lowerer) addCompileError(code ErrorCode, pos Pos, data interface{}) {
+	l.errors = append(l.errors, CompileError{Code: code, Pos: pos, Phase: "lower", Data: data})
 }
 
 func (l *Lowerer) recordSymbol(name string, t Type, kind string) {
@@ -134,7 +137,7 @@ func (l *Lowerer) TypeAliases() map[string]TypeAliasDecl { return l.typeAliases 
 // Functions returns the collected function declarations.
 func (l *Lowerer) Functions() map[string]FnDecl { return l.functions }
 
-func (l *Lowerer) Errors() []LowerError {
+func (l *Lowerer) Errors() []CompileError {
 	return l.errors
 }
 
