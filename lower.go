@@ -780,10 +780,7 @@ func (l *Lowerer) irTypesMatch(a, b IRType) bool {
 				return true
 			}
 			// Type parameters match anything
-			if len(bt.GoName) == 1 && bt.GoName[0] >= 'A' && bt.GoName[0] <= 'Z' {
-				return true // single uppercase letter = type parameter
-			}
-			if len(at.GoName) == 1 && at.GoName[0] >= 'A' && at.GoName[0] <= 'Z' {
+			if l.isTypeParam(at.GoName) || l.isTypeParam(bt.GoName) {
 				return true
 			}
 			// Constraint compatibility: stricter alias → wider alias
@@ -873,6 +870,29 @@ func (l *Lowerer) checkMethodArgCount(receiver IRExpr, method string, argCount i
 	} else if info.Variadic && argCount < minArgs {
 		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: typ + "." + method, Expected: minArgs, Actual: argCount, AtLeast: true})
 	}
+}
+
+// isTypeParam checks if a name is a type parameter of the current type or any known type.
+func (l *Lowerer) isTypeParam(name string) bool {
+	// Check current type's params
+	if l.currentTypeName != "" {
+		if td, ok := l.types[l.currentTypeName]; ok {
+			for _, p := range td.Params {
+				if p == name {
+					return true
+				}
+			}
+		}
+	}
+	// Check all types' params (for when not inside a type definition)
+	for _, td := range l.types {
+		for _, p := range td.Params {
+			if p == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // irTypeEmitStr returns a Go type string for an IRType (used for type args).
