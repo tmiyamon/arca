@@ -75,6 +75,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Bidirectional**: bottom-up (expression type inference) + top-down (hint from context)
 - **Top-down hints**: function args, let annotations, return types, match arms, constructor fields
 - **Lambda inference**: parameter types inferred from Go FFI call context (resolves type aliases via `ResolveUnderlying`)
+- **Constructor type arg inference**: `Ok(42)` infers `Ok_[int, error](42)` from context (return type, function param, match arm). Nested: `Ok(Some(42))` propagates hint to inner expressions.
 - **Constraint compatibility**: `AdultAge → Age` checked in `irTypesMatch` during hint comparison
 - **Validate**: existence checks (types, fields), count checks (args, fields), exhaustiveness. Type matching moved to lower.
 

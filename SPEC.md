@@ -209,6 +209,25 @@ import go _ "modernc.org/sqlite"
 // No wildcard imports
 ```
 
+### Type Inference
+
+Arca uses bidirectional type inference. Types flow both bottom-up (from values) and top-down (from context).
+
+```
+fun fetch() -> Result[Int, error] {
+  Ok(42)                          // Ok type args inferred from return type
+}
+
+fun process(r: Result[Int, error]) { ... }
+process(Ok(42))                    // inferred from parameter type
+
+let r: Result[Int, error] = Ok(42) // inferred from annotation
+
+(c) -> error => handler(c)         // lambda param type inferred from call context
+```
+
+Type annotations required when context is absent: `let r = Ok(42)` (no annotation, no usage context).
+
 ### Built-in Types
 
 | Type | Description |

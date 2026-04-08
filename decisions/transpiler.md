@@ -16,9 +16,11 @@ IR pipeline, lowering, validation, codegen. Newest first.
 3. Let annotation, return type, match arm body hints via lowerBlockHint/lowerFnBody/matchHint
 4. Constraint compatibility moved to irTypesMatch (isConstraintCompatible). Constructor field type checking via hint. Validate type checks removed (kept: existence, count, exhaustiveness)
 
+5. Constructor type arg inference: Ok/Error/None type args derived from hint. Nested propagation (Ok value gets Result.Ok as hint). `irTypeEmitStr` for Go type string generation.
+
 **What validate still does:** type existence (checkTypeExists), argument count, constructor field count/name, match exhaustiveness.
 
-**Known limitation:** Type parameters detected by single-letter heuristic (`A`-`Z`), not from type param declarations.
+**Known limitation:** Type parameters detected by single-letter heuristic (`A`-`Z`), not from type param declarations. Should resolve against actual type parameter list from TypeDecl.
 
 **Status:** Implemented.
 
