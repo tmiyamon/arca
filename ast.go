@@ -7,6 +7,17 @@ type Pos struct {
 	Col  int
 }
 
+// NodePos is embedded in all AST expression nodes to provide source position.
+type NodePos struct {
+	Pos Pos
+}
+
+func (n NodePos) exprPos() Pos { return n.Pos }
+
+func At(line, col int) NodePos { return NodePos{Pos: Pos{Line: line, Col: col}} }
+func AtPos(pos Pos) NodePos    { return NodePos{Pos: pos} }
+func AtTok(tok Token) NodePos  { return NodePos{Pos: Pos{Line: tok.Line, Col: tok.Col}} }
+
 // --- Types ---
 
 type Type interface {
@@ -41,48 +52,51 @@ func (TupleType) typeNode()    {}
 
 type Expr interface {
 	exprNode()
+	exprPos() Pos
 }
 
 type IntLit struct {
+	NodePos
 	Value int64
-	Pos   Pos
 }
 type FloatLit struct {
+	NodePos
 	Value float64
-	Pos   Pos
 }
 type StringLit struct {
+	NodePos
 	Value     string
 	Multiline bool
-	Pos       Pos
 }
 type BoolLit struct {
+	NodePos
 	Value bool
-	Pos   Pos
 }
 type Ident struct {
+	NodePos
 	Name string
-	Pos  Pos
 }
 
 type StringInterp struct {
+	NodePos
 	Parts     []Expr // alternating StringLit and expressions
 	Multiline bool
 }
 
 type FnCall struct {
-	Pos  Pos
+	NodePos
 	Fn   Expr
 	Args []Expr
 }
 
 type FieldAccess struct {
+	NodePos
 	Expr  Expr
 	Field string
 }
 
 type MatchExpr struct {
-	Pos     Pos
+	NodePos
 	Subject Expr
 	Arms    []MatchArm
 }
@@ -95,14 +109,14 @@ type MatchArm struct {
 }
 
 type Block struct {
-	Pos    Pos  // { の位置
+	NodePos
 	EndPos Pos  // } の位置
 	Stmts  []Stmt
 	Expr   Expr // final expression (return value)
 }
 
 type ConstructorCall struct {
-	Pos      Pos
+	NodePos
 	TypeName string // "Greeting" in Greeting.Hello(...), empty for builtins (Ok/Error/Some/None)
 	Name     string // "Hello" in Greeting.Hello(...), or "Ok" for builtins
 	Fields   []FieldValue
@@ -114,6 +128,7 @@ type FieldValue struct {
 }
 
 type Lambda struct {
+	NodePos
 	Params     []LambdaParam
 	ReturnType Type // optional
 	Body       Expr
@@ -125,26 +140,31 @@ type LambdaParam struct {
 }
 
 type TupleExpr struct {
+	NodePos
 	Elements []Expr
 }
 
 type ForExpr struct {
+	NodePos
 	Binding string
 	Iter    Expr
 	Body    Expr
 }
 
 type ListLit struct {
+	NodePos
 	Elements []Expr
 	Spread   Expr // non-nil if [a, b, ..existing]
 }
 
 type RangeExpr struct {
+	NodePos
 	Start Expr
 	End   Expr
 }
 
 type BinaryExpr struct {
+	NodePos
 	Op    string
 	Left  Expr
 	Right Expr
@@ -166,6 +186,7 @@ func (TupleExpr) exprNode()       {}
 func (ForExpr) exprNode()         {}
 func (ListLit) exprNode()          {}
 type RefExpr struct {
+	NodePos
 	Expr Expr
 }
 

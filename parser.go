@@ -650,7 +650,7 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 	if len(stmts) == 0 && lastExpr != nil {
 		return lastExpr, nil
 	}
-	return Block{Pos: startPos, EndPos: endPos, Stmts: stmts, Expr: lastExpr}, nil
+	return Block{NodePos: AtPos(startPos), EndPos: endPos, Stmts: stmts, Expr: lastExpr}, nil
 }
 
 func (p *Parser) parseLetStmt() (Stmt, error) {
@@ -810,7 +810,7 @@ func (p *Parser) parseExprPrec(minPrec int) (Expr, error) {
 	// ? operator
 	if p.peek().Kind == TkQuestion {
 		p.advance()
-		expr = FnCall{Pos: Pos{p.peek().Line, p.peek().Col}, Fn: Ident{Name: "__try", Pos: Pos{p.peek().Line, p.peek().Col}}, Args: []Expr{expr}}
+		expr = FnCall{NodePos: At(p.peek().Line, p.peek().Col), Fn: Ident{Name: "__try", NodePos: At(p.peek().Line, p.peek().Col)}, Args: []Expr{expr}}
 	}
 
 	// Pipe operator
@@ -825,7 +825,7 @@ func (p *Parser) parseExprPrec(minPrec int) (Expr, error) {
 			call.Args = append([]Expr{expr}, call.Args...)
 			expr = call
 		} else {
-			expr = FnCall{Pos: pipePos, Fn: right, Args: []Expr{expr}}
+			expr = FnCall{NodePos: AtPos(pipePos), Fn: right, Args: []Expr{expr}}
 		}
 	}
 
@@ -852,10 +852,10 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		}
 		// -literal → negative literal
 		if intLit, ok := expr.(IntLit); ok {
-			return IntLit{Value: -intLit.Value, Pos: intLit.Pos}, nil
+			return IntLit{NodePos: intLit.NodePos, Value: -intLit.Value}, nil
 		}
 		if floatLit, ok := expr.(FloatLit); ok {
-			return FloatLit{Value: -floatLit.Value, Pos: floatLit.Pos}, nil
+			return FloatLit{NodePos: floatLit.NodePos, Value: -floatLit.Value}, nil
 		}
 		// -expr → (0 - expr)
 		return BinaryExpr{Op: "-", Left: IntLit{Value: 0}, Right: expr}, nil
@@ -887,27 +887,27 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
-		return IntLit{Value: val, Pos: Pos{tok.Line, tok.Col}}, nil
+		return IntLit{Value: val, NodePos: AtTok(tok)}, nil
 
 	case TkFloat:
 		p.advance()
 		val, _ := strconv.ParseFloat(tok.Lit, 64)
-		return FloatLit{Value: val, Pos: Pos{tok.Line, tok.Col}}, nil
+		return FloatLit{Value: val, NodePos: AtTok(tok)}, nil
 
 	case TkString:
 		p.advance()
-		return StringLit{Value: tok.Lit, Multiline: strings.Contains(tok.Lit, "\n"), Pos: Pos{tok.Line, tok.Col}}, nil
+		return StringLit{Value: tok.Lit, Multiline: strings.Contains(tok.Lit, "\n"), NodePos: AtTok(tok)}, nil
 
 	case TkStringInterpStart:
 		return p.parseStringInterp()
 
 	case TkTrue:
 		p.advance()
-		return BoolLit{Value: true, Pos: Pos{tok.Line, tok.Col}}, nil
+		return BoolLit{Value: true, NodePos: AtTok(tok)}, nil
 
 	case TkFalse:
 		p.advance()
-		return BoolLit{Value: false, Pos: Pos{tok.Line, tok.Col}}, nil
+		return BoolLit{Value: false, NodePos: AtTok(tok)}, nil
 
 	case TkMatch:
 		return p.parseMatchExpr()
@@ -939,7 +939,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.advance()
-				expr = FnCall{Pos: Pos{tok.Line, tok.Col}, Fn: expr, Args: args}
+				expr = FnCall{NodePos: AtTok(tok), Fn: expr, Args: args}
 			}
 		}
 		return expr, nil
@@ -952,7 +952,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 	case TkIdent:
 		p.advance()
-		expr := Expr(Ident{Name: tok.Lit, Pos: Pos{tok.Line, tok.Col}})
+		expr := Expr(Ident{Name: tok.Lit, NodePos: AtTok(tok)})
 		for {
 			if p.peek().Kind == TkLParen {
 				p.advance()
@@ -968,7 +968,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					}
 				}
 				p.advance()
-				expr = FnCall{Pos: Pos{tok.Line, tok.Col}, Fn: expr, Args: args}
+				expr = FnCall{NodePos: AtTok(tok), Fn: expr, Args: args}
 			} else if p.peek().Kind == TkDot {
 				p.advance()
 				field := p.advance()
@@ -1171,7 +1171,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 			}
 			// Enum variant: Color.Red (no parens)
 			return ConstructorCall{
-				Pos:      Pos{name.Line, name.Col},
+				NodePos:  At(name.Line, name.Col),
 				TypeName: name.Lit,
 				Name:     member.Lit,
 			}, nil
@@ -1179,7 +1179,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 
 		// Otherwise: field access or method call (e.g. foo.bar, fmt.Println(...))
 		qualifiedName := name.Lit + "." + member.Lit
-		expr := Expr(Ident{Name: qualifiedName, Pos: Pos{name.Line, name.Col}})
+		expr := Expr(Ident{Name: qualifiedName, NodePos: At(name.Line, name.Col)})
 		if p.peek().Kind == TkLParen {
 			p.advance()
 			var args []Expr
@@ -1194,7 +1194,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 				}
 			}
 			p.advance()
-			return FnCall{Pos: Pos{name.Line, name.Col}, Fn: expr, Args: args}, nil
+			return FnCall{NodePos: At(name.Line, name.Col), Fn: expr, Args: args}, nil
 		}
 		return expr, nil
 	}
@@ -1210,7 +1210,7 @@ func (p *Parser) parseConstructorOrIdent() (Expr, error) {
 		}
 	}
 
-	return Ident{Name: name.Lit, Pos: Pos{name.Line, name.Col}}, nil
+	return Ident{Name: name.Lit, NodePos: At(name.Line, name.Col)}, nil
 }
 
 func (p *Parser) parseQualifiedConstructor(typeName Token, ctorName Token) (Expr, error) {
@@ -1220,7 +1220,7 @@ func (p *Parser) parseQualifiedConstructor(typeName Token, ctorName Token) (Expr
 		return nil, err
 	}
 	return ConstructorCall{
-		Pos:      Pos{typeName.Line, typeName.Col},
+		NodePos:  At(typeName.Line, typeName.Col),
 		TypeName: typeName.Lit,
 		Name:     ctorName.Lit,
 		Fields:   fields,
@@ -1234,7 +1234,7 @@ func (p *Parser) parseBuiltinConstructor(name Token) (Expr, error) {
 		return nil, err
 	}
 	return ConstructorCall{
-		Pos:    Pos{name.Line, name.Col},
+		NodePos: At(name.Line, name.Col),
 		Name:   name.Lit,
 		Fields: fields,
 	}, nil
@@ -1247,7 +1247,7 @@ func (p *Parser) parseUnqualifiedConstructor(name Token) (Expr, error) {
 		return nil, err
 	}
 	return ConstructorCall{
-		Pos:    Pos{name.Line, name.Col},
+		NodePos: At(name.Line, name.Col),
 		Name:   name.Lit,
 		Fields: fields,
 	}, nil
@@ -1298,7 +1298,7 @@ func (p *Parser) parseMatchExpr() (Expr, error) {
 		arms = append(arms, arm)
 	}
 	p.advance()
-	return MatchExpr{Pos: pos, Subject: subject, Arms: arms}, nil
+	return MatchExpr{NodePos: AtPos(pos), Subject: subject, Arms: arms}, nil
 }
 
 func (p *Parser) parseMatchArm() (MatchArm, error) {
@@ -1355,11 +1355,11 @@ func (p *Parser) parsePattern() (Pattern, error) {
 		return BindPattern{Name: tok.Lit}, nil
 	case TkString:
 		p.advance()
-		return LitPattern{Expr: StringLit{Value: tok.Lit, Pos: Pos{tok.Line, tok.Col}}}, nil
+		return LitPattern{Expr: StringLit{Value: tok.Lit, NodePos: AtTok(tok)}}, nil
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
-		return LitPattern{Expr: IntLit{Value: val, Pos: Pos{tok.Line, tok.Col}}}, nil
+		return LitPattern{Expr: IntLit{Value: val, NodePos: AtTok(tok)}}, nil
 	default:
 		return nil, fmt.Errorf("%d:%d: expected pattern, got %s", tok.Line, tok.Col, tok)
 	}

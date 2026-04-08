@@ -739,7 +739,7 @@ func (l *Lowerer) markVoidContext(expr IRExpr) IRExpr {
 
 // checkTypeHint checks if an expression's type matches the expected hint type.
 func (l *Lowerer) checkTypeHint(result IRExpr, hint IRType, sourceExpr Expr) {
-	l.checkTypeHintPos(result, hint, exprPos(sourceExpr))
+	l.checkTypeHintPos(result, hint, sourceExpr.exprPos())
 }
 
 func (l *Lowerer) checkTypeHintPos(result IRExpr, hint IRType, pos Pos) {

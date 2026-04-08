@@ -50,8 +50,8 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 
 ## Adding a New Language Feature
 
-1. AST node in `ast.go` (if new syntax)
-2. Parser support in `parser.go`
+1. AST node in `ast.go` (if new syntax — all Expr nodes must embed `NodePos` for source position, enforced by `exprPos()` interface)
+2. Parser support in `parser.go` (use `AtTok(tok)` for NodePos construction)
 3. IR node in `ir.go`
 4. Lowering in `lower.go`
 5. Emission in `emit.go` (only if new IR node type)
