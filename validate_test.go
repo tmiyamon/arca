@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+func hasErrorCode(errs []CompileError, code ErrorCode) bool {
+	for _, e := range errs {
+		if e.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func validateSource(source string) []CompileError {
 	lexer := NewLexer(source)
 	tokens, err := lexer.Tokenize()
@@ -402,14 +411,8 @@ fun main() {
 	if len(errs) == 0 {
 		t.Fatal("expected undefined variable error")
 	}
-	found := false
-	for _, e := range errs {
-		if strings.Contains(e.Message(), "undefined variable: x") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 'undefined variable: x', got: %v", errs)
+	if !hasErrorCode(errs, ErrUnknownVariable) {
+		t.Errorf("expected ErrUnknownVariable, got: %v", errs)
 	}
 }
 
@@ -421,8 +424,8 @@ fun add(a: Int, b: Int) -> Int {
   "not an int"
 }
 `)
-	if len(errs) == 0 {
-		t.Fatal("expected return type mismatch error")
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatal("expected ErrTypeMismatch for return type")
 	}
 
 	// Match arm type mismatch
@@ -435,8 +438,8 @@ fun test(x: Int) -> String {
   }
 }
 `)
-	if len(errs) == 0 {
-		t.Fatal("expected match arm type mismatch error")
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatal("expected ErrTypeMismatch for match arm")
 	}
 }
 

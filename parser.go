@@ -68,7 +68,8 @@ func (p *Parser) parseDecl() (Decl, error) {
 }
 
 func (p *Parser) parseImportDecl() (Decl, error) {
-	p.advance() // skip 'import'
+	importTok := p.advance() // skip 'import'
+	importPos := Pos{importTok.Line, importTok.Col}
 	tok := p.peek()
 
 	// Go package: import go "path" or import go _ "path"
@@ -83,7 +84,7 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%d:%d: expected string path after 'import go', got %s", p.peek().Line, p.peek().Col, p.peek())
 		}
-		return ImportDecl{Path: "go/" + pathTok.Lit, SideEffect: sideEffect}, nil
+		return ImportDecl{Pos: importPos, Path: "go/" + pathTok.Lit, SideEffect: sideEffect}, nil
 	}
 
 	// Arca module: import user, import user.{find, create}, import user as u
@@ -109,7 +110,7 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 				}
 			}
 			p.advance() // skip '}'
-			return ImportDecl{Path: path, Names: names}, nil
+			return ImportDecl{Pos: importPos, Path: path, Names: names}, nil
 		}
 		p.advance() // skip '.'
 		next := p.advance()
@@ -126,10 +127,10 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		if alias.Kind != TkIdent {
 			return nil, fmt.Errorf("%d:%d: expected alias name, got %s", alias.Line, alias.Col, alias)
 		}
-		return ImportDecl{Path: path, Alias: alias.Lit}, nil
+		return ImportDecl{Pos: importPos, Path: path, Alias: alias.Lit}, nil
 	}
 
-	return ImportDecl{Path: path}, nil
+	return ImportDecl{Pos: importPos, Path: path}, nil
 }
 
 func (p *Parser) parseTypeDecl() (Decl, error) {

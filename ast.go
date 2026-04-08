@@ -237,6 +237,7 @@ type Decl interface {
 }
 
 type ImportDecl struct {
+	Pos        Pos
 	Path       string   // e.g. "go/fmt", "user"
 	SideEffect bool     // import go _ "pkg"
 	Names      []string // selective: import user.{find, create} → ["find", "create"]

@@ -186,7 +186,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 				})
 				// Check if the package can be loaded
 				if !isStdLib(pkg.FullPath) && !l.typeResolver.CanLoadPackage(pkg.FullPath) {
-					l.addError(Pos{}, "package %s not found. Run: go get %s", pkg.FullPath, pkg.FullPath)
+					l.addCompileError(ErrPackageNotFound, d.Pos, PackageNotFoundData{Path: pkg.FullPath})
 				}
 			}
 		case FnDecl:
@@ -749,7 +749,10 @@ func (l *Lowerer) checkTypeHintPos(result IRExpr, hint IRType, pos Pos) {
 		return
 	}
 	if !l.irTypesMatch(actualType, hint) {
-		l.addError(pos, "type mismatch: expected %s, got %s", irTypeDisplayStr(hint), irTypeDisplayStr(actualType))
+		l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
+			Expected: irTypeDisplayStr(hint),
+			Actual:   irTypeDisplayStr(actualType),
+		})
 	}
 }
 
@@ -860,9 +863,9 @@ func (l *Lowerer) checkMethodArgCount(receiver IRExpr, method string, argCount i
 		minArgs--
 	}
 	if !info.Variadic && argCount != len(info.Params) {
-		l.addError(pos, "'%s.%s' expects %d arguments, got %d", typ, method, len(info.Params), argCount)
+		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: typ + "." + method, Expected: len(info.Params), Actual: argCount})
 	} else if info.Variadic && argCount < minArgs {
-		l.addError(pos, "'%s.%s' expects at least %d arguments, got %d", typ, method, minArgs, argCount)
+		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: typ + "." + method, Expected: minArgs, Actual: argCount, AtLeast: true})
 	}
 }
 
@@ -1190,7 +1193,7 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 		}
 	}
 	if !found && l.currentScope != nil {
-		l.addError(e.Pos, "undefined variable: %s", e.Name)
+		l.addCompileError(ErrUnknownVariable, e.Pos, UnknownVariableData{Name: e.Name})
 	}
 	return IRIdent{GoName: goName, Type: irType, Source: SourceInfo{Type: arcaType}}
 }
@@ -1348,9 +1351,9 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 		minArgs-- // last param is variadic, not required
 	}
 	if !info.Variadic && len(args) != len(info.Params) {
-		l.addError(pos, "'%s' expects %d arguments, got %d", goName, len(info.Params), len(args))
+		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: goName, Expected: len(info.Params), Actual: len(args)})
 	} else if info.Variadic && len(args) < minArgs {
-		l.addError(pos, "'%s' expects at least %d arguments, got %d", goName, minArgs, len(args))
+		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: goName, Expected: minArgs, Actual: len(args), AtLeast: true})
 	}
 
 	// Validate argument types (Phase 2)
@@ -1658,7 +1661,7 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 					innerType := inner.irType()
 					if named, ok := innerType.(IRNamedType); ok {
 						if named.GoName != pnt.Name && !l.isConstraintCompatible(named.GoName, pnt.Name) {
-							l.addError(Pos{}, "type mismatch: expected %s, got %s", pnt.Name, named.GoName)
+							l.addCompileError(ErrTypeMismatch, call.Pos, TypeMismatchData{Expected: pnt.Name, Actual: named.GoName})
 						}
 					}
 					return IRFnCall{
@@ -1791,12 +1794,12 @@ func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 	if rt := receiver.irType(); rt != nil {
 		if _, ok := rt.(IRResultType); ok {
 			if ident, ok := e.Expr.(Ident); ok {
-				l.addError(ident.Pos, "cannot access .%s on Result type. Use ? to unwrap first", e.Field)
+				l.addCompileError(ErrFieldAccessOnResult, ident.Pos, FieldAccessOnWrappedData{Field: e.Field, TypeName: "Result", Suggestion: "Use ? to unwrap first"})
 			}
 		}
 		if _, ok := rt.(IROptionType); ok {
 			if ident, ok := e.Expr.(Ident); ok {
-				l.addError(ident.Pos, "cannot access .%s on Option type. Use match to unwrap first", e.Field)
+				l.addCompileError(ErrFieldAccessOnOption, ident.Pos, FieldAccessOnWrappedData{Field: e.Field, TypeName: "Option", Suggestion: "Use match to unwrap first"})
 			}
 		}
 	}
@@ -2429,7 +2432,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 				}
 				rt, ok := subject.irType().(IRResultType)
 				if !ok {
-					l.addError(me.Pos, "cannot infer Result type for match subject")
+					l.addCompileError(ErrCannotInferType, me.Pos, CannotInferTypeData{TypeName: "Result"})
 				} else {
 					armSymbols = append(armSymbols, SymbolRegInfo{
 						Name: cp.Fields[0].Binding, IRType: rt.Ok, Kind: SymVariable,
@@ -2455,7 +2458,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 				}
 				rt, ok := subject.irType().(IRResultType)
 				if !ok {
-					l.addError(me.Pos, "cannot infer Result type for match subject")
+					l.addCompileError(ErrCannotInferType, me.Pos, CannotInferTypeData{TypeName: "Result"})
 				} else {
 					armSymbols = append(armSymbols, SymbolRegInfo{
 						Name: cp.Fields[0].Binding, IRType: rt.Err, Kind: SymVariable,
@@ -2504,7 +2507,7 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 				}
 				ot, ok := subject.irType().(IROptionType)
 				if !ok {
-					l.addError(me.Pos, "cannot infer Option type for match subject")
+					l.addCompileError(ErrCannotInferType, me.Pos, CannotInferTypeData{TypeName: "Option"})
 				} else {
 					armSymbols = append(armSymbols, SymbolRegInfo{
 						Name: cp.Fields[0].Binding, IRType: ot.Inner, Kind: SymVariable,
