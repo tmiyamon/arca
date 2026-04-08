@@ -16,7 +16,7 @@ func NewAge(v int) (Age, error) {
 	return Age(v), nil
 }
 
-func (v Age) Validate() error {
+func (v Age) ArcaValidate() error {
 	_, err := NewAge(int(v))
 	return err
 }
@@ -33,7 +33,7 @@ func NewAdultAge(v int) (AdultAge, error) {
 	return AdultAge(v), nil
 }
 
-func (v AdultAge) Validate() error {
+func (v AdultAge) ArcaValidate() error {
 	_, err := NewAdultAge(int(v))
 	return err
 }

@@ -14,7 +14,7 @@ func NewPositiveInt(v int) (PositiveInt, error) {
 	return PositiveInt(v), nil
 }
 
-func (v PositiveInt) Validate() error {
+func (v PositiveInt) ArcaValidate() error {
 	_, err := NewPositiveInt(int(v))
 	return err
 }
@@ -31,7 +31,7 @@ func NewEmail(v string) (Email, error) {
 	return Email(v), nil
 }
 
-func (v Email) Validate() error {
+func (v Email) ArcaValidate() error {
 	_, err := NewEmail(string(v))
 	return err
 }
@@ -61,7 +61,7 @@ func NewUser(id int, name string, age int) (User, error) {
 	return User{Id: id, Name: name, Age: age}, nil
 }
 
-func (v User) Validate() error {
+func (v User) ArcaValidate() error {
 	_, err := NewUser(v.Id, v.Name, v.Age)
 	return err
 }

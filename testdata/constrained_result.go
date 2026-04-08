@@ -16,7 +16,7 @@ func NewEmail(v string) (Email, error) {
 	return Email(v), nil
 }
 
-func (v Email) Validate() error {
+func (v Email) ArcaValidate() error {
 	_, err := NewEmail(string(v))
 	return err
 }

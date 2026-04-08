@@ -152,7 +152,7 @@ func (em *Emitter) emitValidateMethod(d IRStructDecl) {
 		fields[i] = "v." + f.GoName
 	}
 	em.writeln("")
-	em.writeln(fmt.Sprintf("func (v %s) Validate() error {", d.GoName))
+	em.writeln(fmt.Sprintf("func (v %s) ArcaValidate() error {", d.GoName))
 	em.writeln(fmt.Sprintf("\t_, err := New%s(%s)", d.GoName, strings.Join(fields, ", ")))
 	em.writeln("\treturn err")
 	em.writeln("}")
@@ -204,9 +204,9 @@ func (em *Emitter) emitTypeAliasDecl(d IRTypeAliasDecl) {
 	em.writeln(fmt.Sprintf("\treturn %s(v), nil", d.GoName))
 	em.writeln("}")
 
-	// Validate() method for Validatable interface
+	// ArcaValidate() method for ArcaValidatable interface
 	em.writeln("")
-	em.writeln(fmt.Sprintf("func (v %s) Validate() error {", d.GoName))
+	em.writeln(fmt.Sprintf("func (v %s) ArcaValidate() error {", d.GoName))
 	em.writeln(fmt.Sprintf("\t_, err := New%s(%s(v))", d.GoName, d.GoBase))
 	em.writeln("\treturn err")
 	em.writeln("}")
