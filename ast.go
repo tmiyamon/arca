@@ -43,13 +43,23 @@ type Expr interface {
 	exprNode()
 }
 
-type IntLit struct{ Value int64 }
-type FloatLit struct{ Value float64 }
+type IntLit struct {
+	Value int64
+	Pos   Pos
+}
+type FloatLit struct {
+	Value float64
+	Pos   Pos
+}
 type StringLit struct {
 	Value     string
 	Multiline bool
+	Pos       Pos
 }
-type BoolLit struct{ Value bool }
+type BoolLit struct {
+	Value bool
+	Pos   Pos
+}
 type Ident struct {
 	Name string
 	Pos  Pos

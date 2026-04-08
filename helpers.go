@@ -114,6 +114,14 @@ func typeZeroValue(typeName string, goBase string) string {
 // exprPos extracts position from an AST expression if available.
 func exprPos(expr Expr) Pos {
 	switch e := expr.(type) {
+	case IntLit:
+		return e.Pos
+	case FloatLit:
+		return e.Pos
+	case StringLit:
+		return e.Pos
+	case BoolLit:
+		return e.Pos
 	case Ident:
 		return e.Pos
 	case FnCall:

@@ -852,10 +852,10 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		}
 		// -literal → negative literal
 		if intLit, ok := expr.(IntLit); ok {
-			return IntLit{Value: -intLit.Value}, nil
+			return IntLit{Value: -intLit.Value, Pos: intLit.Pos}, nil
 		}
 		if floatLit, ok := expr.(FloatLit); ok {
-			return FloatLit{Value: -floatLit.Value}, nil
+			return FloatLit{Value: -floatLit.Value, Pos: floatLit.Pos}, nil
 		}
 		// -expr → (0 - expr)
 		return BinaryExpr{Op: "-", Left: IntLit{Value: 0}, Right: expr}, nil
@@ -887,27 +887,27 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
-		return IntLit{Value: val}, nil
+		return IntLit{Value: val, Pos: Pos{tok.Line, tok.Col}}, nil
 
 	case TkFloat:
 		p.advance()
 		val, _ := strconv.ParseFloat(tok.Lit, 64)
-		return FloatLit{Value: val}, nil
+		return FloatLit{Value: val, Pos: Pos{tok.Line, tok.Col}}, nil
 
 	case TkString:
 		p.advance()
-		return StringLit{Value: tok.Lit, Multiline: strings.Contains(tok.Lit, "\n")}, nil
+		return StringLit{Value: tok.Lit, Multiline: strings.Contains(tok.Lit, "\n"), Pos: Pos{tok.Line, tok.Col}}, nil
 
 	case TkStringInterpStart:
 		return p.parseStringInterp()
 
 	case TkTrue:
 		p.advance()
-		return BoolLit{Value: true}, nil
+		return BoolLit{Value: true, Pos: Pos{tok.Line, tok.Col}}, nil
 
 	case TkFalse:
 		p.advance()
-		return BoolLit{Value: false}, nil
+		return BoolLit{Value: false, Pos: Pos{tok.Line, tok.Col}}, nil
 
 	case TkMatch:
 		return p.parseMatchExpr()
@@ -1355,11 +1355,11 @@ func (p *Parser) parsePattern() (Pattern, error) {
 		return BindPattern{Name: tok.Lit}, nil
 	case TkString:
 		p.advance()
-		return LitPattern{Expr: StringLit{Value: tok.Lit}}, nil
+		return LitPattern{Expr: StringLit{Value: tok.Lit, Pos: Pos{tok.Line, tok.Col}}}, nil
 	case TkInt:
 		p.advance()
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
-		return LitPattern{Expr: IntLit{Value: val}}, nil
+		return LitPattern{Expr: IntLit{Value: val, Pos: Pos{tok.Line, tok.Col}}}, nil
 	default:
 		return nil, fmt.Errorf("%d:%d: expected pattern, got %s", tok.Line, tok.Col, tok)
 	}
