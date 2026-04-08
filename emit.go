@@ -122,6 +122,7 @@ func (em *Emitter) emitStructDecl(d IRStructDecl) {
 
 	if d.Validator != nil {
 		em.emitStructValidator(d)
+		em.emitValidateMethod(d)
 	}
 }
 
@@ -142,6 +143,18 @@ func (em *Emitter) emitStructValidator(d IRStructDecl) {
 		fields[i] = fmt.Sprintf("%s: %s", f.GoName, lowerFirst(f.GoName))
 	}
 	em.writeln(fmt.Sprintf("\treturn %s{%s}, nil", d.GoName, strings.Join(fields, ", ")))
+	em.writeln("}")
+}
+
+func (em *Emitter) emitValidateMethod(d IRStructDecl) {
+	fields := make([]string, len(d.Fields))
+	for i, f := range d.Fields {
+		fields[i] = "v." + f.GoName
+	}
+	em.writeln("")
+	em.writeln(fmt.Sprintf("func (v %s) Validate() error {", d.GoName))
+	em.writeln(fmt.Sprintf("\t_, err := New%s(%s)", d.GoName, strings.Join(fields, ", ")))
+	em.writeln("\treturn err")
 	em.writeln("}")
 }
 
@@ -189,6 +202,13 @@ func (em *Emitter) emitTypeAliasDecl(d IRTypeAliasDecl) {
 	em.writeln(fmt.Sprintf("func New%s(v %s) (%s, error) {", d.GoName, d.GoBase, d.GoName))
 	em.emitValidatorAlias(d.Validator, d.GoName, zeroVal, d.GoBase)
 	em.writeln(fmt.Sprintf("\treturn %s(v), nil", d.GoName))
+	em.writeln("}")
+
+	// Validate() method for Validatable interface
+	em.writeln("")
+	em.writeln(fmt.Sprintf("func (v %s) Validate() error {", d.GoName))
+	em.writeln(fmt.Sprintf("\t_, err := New%s(%s(v))", d.GoName, d.GoBase))
+	em.writeln("\treturn err")
 	em.writeln("}")
 }
 

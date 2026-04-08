@@ -16,6 +16,11 @@ func NewEmail(v string) (Email, error) {
 	return Email(v), nil
 }
 
+func (v Email) Validate() error {
+	_, err := NewEmail(string(v))
+	return err
+}
+
 func main() {
 	__cval1, __cerr1 := NewEmail("test@example.com")
 	var result Result_[Email, error]

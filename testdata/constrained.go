@@ -14,6 +14,11 @@ func NewPositiveInt(v int) (PositiveInt, error) {
 	return PositiveInt(v), nil
 }
 
+func (v PositiveInt) Validate() error {
+	_, err := NewPositiveInt(int(v))
+	return err
+}
+
 type Email string
 
 func NewEmail(v string) (Email, error) {
@@ -24,6 +29,11 @@ func NewEmail(v string) (Email, error) {
 		return "", fmt.Errorf("max length 255")
 	}
 	return Email(v), nil
+}
+
+func (v Email) Validate() error {
+	_, err := NewEmail(string(v))
+	return err
 }
 
 type User struct {
@@ -49,6 +59,11 @@ func NewUser(id int, name string, age int) (User, error) {
 		return User{}, fmt.Errorf("age: must be <= 150")
 	}
 	return User{Id: id, Name: name, Age: age}, nil
+}
+
+func (v User) Validate() error {
+	_, err := NewUser(v.Id, v.Name, v.Age)
+	return err
 }
 
 func createUser() Result_[User, error] {
