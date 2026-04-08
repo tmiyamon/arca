@@ -1760,7 +1760,11 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 	// Built-in Result constructors
 	if e.Name == "Ok" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
-		val := l.lowerExpr(e.Fields[0].Value)
+		var valHint IRType
+		if rt, ok := hint.(IRResultType); ok {
+			valHint = rt.Ok
+		}
+		val := l.lowerExprHint(e.Fields[0].Value, valHint)
 		typeArgs := l.resultTypeArgs()
 		// Use hint to derive type args if resultTypeArgs() is empty
 		if typeArgs == "" {
@@ -1777,7 +1781,11 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 	}
 	if e.Name == "Error" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
-		val := l.lowerExpr(e.Fields[0].Value)
+		var valHint IRType
+		if rt, ok := hint.(IRResultType); ok {
+			valHint = rt.Err
+		}
+		val := l.lowerExprHint(e.Fields[0].Value, valHint)
 		typeArgs := l.resultTypeArgs()
 		if typeArgs == "" {
 			if rt, ok := hint.(IRResultType); ok {
