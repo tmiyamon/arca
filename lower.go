@@ -895,6 +895,46 @@ func (l *Lowerer) isTypeParam(name string) bool {
 	return false
 }
 
+// deriveTypeArgs derives Go generic type arguments from hint and actual return type.
+// e.g., return type Result[T, error] + hint Result[User, error] → "[User]"
+func (l *Lowerer) deriveTypeArgs(returnType, hint IRType) string {
+	// Result[T, error] + hint Result[User, error] → T = User
+	if rt, ok := returnType.(IRResultType); ok {
+		if ht, ok := hint.(IRResultType); ok {
+			okStr := irTypeEmitStr(ht.Ok)
+			if okStr != "" && okStr != irTypeEmitStr(rt.Ok) {
+				return "[" + okStr + "]"
+			}
+		}
+		// hint is the Ok type directly (e.g., let user: User = f()?)
+		if _, isResult := hint.(IRResultType); !isResult {
+			hintStr := irTypeEmitStr(hint)
+			if hintStr != "" && hintStr != "interface{}" {
+				return "[" + hintStr + "]"
+			}
+		}
+	}
+	// List[T] + hint List[User] → T = User
+	if _, ok := returnType.(IRListType); ok {
+		if ht, ok := hint.(IRListType); ok {
+			elemStr := irTypeEmitStr(ht.Elem)
+			if elemStr != "" {
+				return "[" + elemStr + "]"
+			}
+		}
+	}
+	// Option[T] + hint Option[User] → T = User
+	if _, ok := returnType.(IROptionType); ok {
+		if ht, ok := hint.(IROptionType); ok {
+			innerStr := irTypeEmitStr(ht.Inner)
+			if innerStr != "" {
+				return "[" + innerStr + "]"
+			}
+		}
+	}
+	return ""
+}
+
 // irTypeEmitStr returns a Go type string for an IRType (used for type args).
 func irTypeEmitStr(t IRType) string {
 	switch tt := t.(type) {
@@ -1114,7 +1154,7 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	case StringInterp:
 		return l.lowerStringInterp(e)
 	case FnCall:
-		return l.lowerFnCall(e)
+		return l.lowerFnCallHint(e, hint)
 	case FieldAccess:
 		return l.lowerFieldAccess(e)
 	case ConstructorCall:
@@ -1246,6 +1286,22 @@ func (l *Lowerer) lowerStringInterp(si StringInterp) IRExpr {
 		Type:      IRNamedType{GoName: "string"},
 		Multiline: si.Multiline,
 	}
+}
+
+func (l *Lowerer) lowerFnCallHint(e FnCall, hint IRType) IRExpr {
+	result := l.lowerFnCall(e)
+	// If hint is available and result is IRFnCall without TypeArgs, derive from hint
+	if hint != nil {
+		if fc, ok := result.(IRFnCall); ok && fc.TypeArgs == "" && fc.GoMultiReturn {
+			if typeArgs := l.deriveTypeArgs(fc.Type, hint); typeArgs != "" {
+				fc.TypeArgs = typeArgs
+				// Update the return type to match hint (replaces Go type params with concrete types)
+				fc.Type = hint
+				return fc
+			}
+		}
+	}
+	return result
 }
 
 func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
@@ -2227,7 +2283,12 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	if call, ok := s.Value.(FnCall); ok {
 		if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
 			// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
-			loweredExpr := l.lowerExpr(call.Args[0])
+			// Pass hint from let type annotation (try unwraps Result, so wrap hint in ResultType)
+			var tryHint IRType
+			if s.Type != nil {
+				tryHint = IRResultType{Ok: l.lowerType(s.Type), Err: IRNamedType{GoName: "error"}}
+			}
+			loweredExpr := l.lowerExprHint(call.Args[0], tryHint)
 			goVarName := "_"
 			if s.Name != "_" {
 				// Try unwraps Result: the variable gets the Ok type

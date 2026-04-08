@@ -214,6 +214,7 @@ type IRFnCall struct {
 	Func          string   // "fmt.Println", "message", "userFrom", etc.
 	Args          []IRExpr
 	Type          IRType
+	TypeArgs      string   // "[User]" for explicit Go generic type args, empty if inferred
 	Source        SourceInfo
 	GoMultiReturn bool // true if Go func returns multiple values (needs multi-value receive)
 }

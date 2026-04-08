@@ -177,8 +177,21 @@ func (r *GoTypeResolver) CanLoadPackage(pkg string) bool {
 	if isStdLib(pkg) {
 		return r.loadPackage(pkg) != nil
 	}
+	// Same-module subpackage: always available
+	if r.isSameModule(pkg) {
+		return true
+	}
 	// Non-stdlib: check go.mod require entries, not just module cache
 	return r.isInGoMod(pkg)
+}
+
+// isSameModule checks if a package is a subpackage of the current module.
+func (r *GoTypeResolver) isSameModule(pkg string) bool {
+	if r.dir == "" {
+		return false
+	}
+	moduleName := readGoModuleName(r.dir)
+	return moduleName != "" && strings.HasPrefix(pkg, moduleName+"/")
 }
 
 // isInGoMod checks if a package path is required in the project's go.mod.

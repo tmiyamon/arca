@@ -342,7 +342,7 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		for i, a := range expr.Args {
 			args[i] = em.emitExpr(a)
 		}
-		return fmt.Sprintf("%s(%s)", expr.Func, strings.Join(args, ", "))
+		return fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, strings.Join(args, ", "))
 	case IRMethodCall:
 		args := make([]string, len(expr.Args))
 		for i, a := range expr.Args {
