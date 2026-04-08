@@ -243,6 +243,9 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 		if typeStr == "unknown" && sym.IRType != nil {
 			typeStr = irTypeDisplayName(sym.IRType)
 		}
+		if sym.Kind == SymPackage {
+			return fmt.Sprintf("```arca\nimport go \"%s\"\n```", sym.Name)
+		}
 		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeStr)
 	}
 
