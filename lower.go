@@ -1057,7 +1057,7 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	case BoolLit:
 		return IRBoolLit{Value: e.Value, Type: IRNamedType{GoName: "bool"}}
 	case Ident:
-		return l.lowerIdent(e)
+		return l.lowerIdentHint(e, hint)
 	case StringInterp:
 		return l.lowerStringInterp(e)
 	case FnCall:
@@ -1093,6 +1093,19 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	default:
 		return IRStringLit{Value: "/* unsupported expr */", Type: IRInterfaceType{}}
 	}
+}
+
+func (l *Lowerer) lowerIdentHint(e Ident, hint IRType) IRExpr {
+	// None with hint: use hint to resolve inner type
+	if e.Name == "None" {
+		l.builtins["option"] = true
+		if ot, ok := hint.(IROptionType); ok {
+			typeArg := "[" + irTypeEmitStr(ot.Inner) + "]"
+			return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: ot.Inner}}
+		}
+		return IRNoneExpr{TypeArg: "[any]", Type: IROptionType{Inner: IRInterfaceType{}}}
+	}
+	return l.lowerIdent(e)
 }
 
 func (l *Lowerer) lowerIdent(e Ident) IRExpr {
@@ -1944,16 +1957,11 @@ func (l *Lowerer) lowerFieldValuesWithTypes(fields []FieldValue, ctorFields []Fi
 		if f.Name != "" {
 			goName = capitalize(f.Name)
 		}
-		value := l.lowerExpr(f.Value)
-		// Hint check against constructor field type
+		var hint IRType
 		if ctorFields != nil && i < len(ctorFields) {
-			hint := l.lowerType(ctorFields[i].Type)
-			pos := exprPos(f.Value)
-			if pos.Line == 0 {
-				pos = ctorPos
-			}
-			l.checkTypeHintPos(value, hint, pos)
+			hint = l.lowerType(ctorFields[i].Type)
 		}
+		value := l.lowerExprHint(f.Value, hint)
 		result[i] = IRFieldValue{
 			GoName: goName,
 			Value:  value,
