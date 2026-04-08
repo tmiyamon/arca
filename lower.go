@@ -842,6 +842,27 @@ func irTypeDisplayStr(t IRType) string {
 	}
 }
 
+// checkMethodArgCount validates method call argument count against Go signature.
+func (l *Lowerer) checkMethodArgCount(receiver IRExpr, method string, argCount int, pos Pos) {
+	pkg, typ, ok := l.resolveReceiverGoType(receiver)
+	if !ok {
+		return
+	}
+	info := l.typeResolver.ResolveMethod(pkg, typ, method)
+	if info == nil {
+		return
+	}
+	minArgs := len(info.Params)
+	if info.Variadic {
+		minArgs--
+	}
+	if !info.Variadic && argCount != len(info.Params) {
+		l.addError(pos, "'%s.%s' expects %d arguments, got %d", typ, method, len(info.Params), argCount)
+	} else if info.Variadic && argCount < minArgs {
+		l.addError(pos, "'%s.%s' expects at least %d arguments, got %d", typ, method, minArgs, argCount)
+	}
+}
+
 // irTypeEmitStr returns a Go type string for an IRType (used for type args).
 func irTypeEmitStr(t IRType) string {
 	switch tt := t.(type) {
@@ -1260,6 +1281,8 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		args := l.lowerCallArgs(e)
 		receiver := l.lowerExpr(fa.Expr)
 		ret := l.resolveMethodReturnType(receiver, fa.Field)
+		// Check method argument count
+		l.checkMethodArgCount(receiver, fa.Field, len(e.Args), e.Pos)
 		return IRMethodCall{
 			Receiver:      receiver,
 			Method:        methodName,
@@ -1761,6 +1784,19 @@ func (l *Lowerer) goTypeToArcaType(goType string) Type {
 
 func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 	receiver := l.lowerExpr(e.Expr)
+	// Check for field access on Result/Option (likely missing ?)
+	if rt := receiver.irType(); rt != nil {
+		if _, ok := rt.(IRResultType); ok {
+			if ident, ok := e.Expr.(Ident); ok {
+				l.addError(ident.Pos, "cannot access .%s on Result type. Use ? to unwrap first", e.Field)
+			}
+		}
+		if _, ok := rt.(IROptionType); ok {
+			if ident, ok := e.Expr.(Ident); ok {
+				l.addError(ident.Pos, "cannot access .%s on Option type. Use match to unwrap first", e.Field)
+			}
+		}
+	}
 	fieldType := l.resolveFieldType(receiver, capitalize(e.Field))
 	return IRFieldAccess{
 		Expr:  receiver,
