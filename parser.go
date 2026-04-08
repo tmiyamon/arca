@@ -763,26 +763,44 @@ func (p *Parser) parseForExpr() (Expr, error) {
 	return ForExpr{Binding: binding.Lit, Iter: iter, Body: body}, nil
 }
 
-func isBinaryOp(kind TokenKind) bool {
+// Operator precedence (higher = binds tighter)
+func precedence(kind TokenKind) int {
 	switch kind {
-	case TkPlus, TkMinus, TkStar, TkSlash, TkPercent,
-		TkEqEq, TkNotEq, TkLt, TkGt, TkLtEq, TkGtEq,
-		TkAnd, TkOr:
-		return true
+	case TkOr:
+		return 1
+	case TkAnd:
+		return 2
+	case TkEqEq, TkNotEq:
+		return 3
+	case TkLt, TkGt, TkLtEq, TkGtEq:
+		return 4
+	case TkPlus, TkMinus:
+		return 5
+	case TkStar, TkSlash, TkPercent:
+		return 6
+	default:
+		return 0 // not a binary operator
 	}
-	return false
 }
 
 func (p *Parser) parseExpr() (Expr, error) {
-	expr, err := p.parsePrimaryExpr()
+	return p.parseExprPrec(0)
+}
+
+func (p *Parser) parseExprPrec(minPrec int) (Expr, error) {
+	expr, err := p.parseUnaryExpr()
 	if err != nil {
 		return nil, err
 	}
 
-	// Binary operators
-	for isBinaryOp(p.peek().Kind) {
+	// Pratt parser: handle binary operators by precedence
+	for {
+		prec := precedence(p.peek().Kind)
+		if prec <= minPrec {
+			break
+		}
 		op := p.advance()
-		right, err := p.parsePrimaryExpr()
+		right, err := p.parseExprPrec(prec) // right-assoc for same prec: use prec; left-assoc: use prec+1
 		if err != nil {
 			return nil, err
 		}
@@ -822,6 +840,36 @@ func (p *Parser) parseExpr() (Expr, error) {
 	}
 
 	return expr, nil
+}
+
+func (p *Parser) parseUnaryExpr() (Expr, error) {
+	// Unary minus: -expr
+	if p.peek().Kind == TkMinus {
+		p.advance()
+		expr, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		// -literal → negative literal
+		if intLit, ok := expr.(IntLit); ok {
+			return IntLit{Value: -intLit.Value}, nil
+		}
+		if floatLit, ok := expr.(FloatLit); ok {
+			return FloatLit{Value: -floatLit.Value}, nil
+		}
+		// -expr → (0 - expr)
+		return BinaryExpr{Op: "-", Left: IntLit{Value: 0}, Right: expr}, nil
+	}
+	// Unary not: !expr (pass through as-is, emit handles it)
+	if p.peek().Kind == TkBang {
+		p.advance()
+		expr, err := p.parsePrimaryExpr()
+		if err != nil {
+			return nil, err
+		}
+		return FnCall{Fn: Ident{Name: "__not"}, Args: []Expr{expr}}, nil
+	}
+	return p.parsePrimaryExpr()
 }
 
 func (p *Parser) parsePrimaryExpr() (Expr, error) {

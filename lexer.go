@@ -285,6 +285,9 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			if l.pos < len(l.input) && l.peek() == '>' {
 				l.advance()
 				tokens = append(tokens, Token{TkPipe, "|>", line, col})
+			} else if l.pos < len(l.input) && l.peek() == '|' {
+				l.advance()
+				tokens = append(tokens, Token{TkOr, "||", line, col})
 			} else {
 				return nil, fmt.Errorf("%d:%d: unexpected '|'", line, col)
 			}
