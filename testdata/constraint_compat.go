@@ -50,4 +50,3 @@ func main() {
 	adult := __try_val1
 	fmt.Println(greet(Age(adult)))
 }
-

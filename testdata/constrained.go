@@ -37,9 +37,9 @@ func (v Email) ArcaValidate() error {
 }
 
 type User struct {
-	Id int
+	Id   int
 	Name string
-	Age int
+	Age  int
 }
 
 func NewUser(id int, name string, age int) (User, error) {
@@ -93,4 +93,3 @@ func Ok_[T any, E any](v T) Result_[T, E] {
 func Err_[T any, E any](e E) Result_[T, E] {
 	return Result_[T, E]{Err: e}
 }
-

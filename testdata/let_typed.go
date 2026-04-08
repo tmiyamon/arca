@@ -5,7 +5,7 @@ import (
 )
 
 type User struct {
-	Id int
+	Id   int
 	Name string
 }
 
@@ -14,4 +14,3 @@ func main() {
 	var count int = 42
 	fmt.Println(users, count)
 }
-

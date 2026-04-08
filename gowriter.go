@@ -36,6 +36,11 @@ func (w *GoWriter) Raw(s string) {
 	w.buf.WriteString(s)
 }
 
+// --- Indentation ---
+
+func (w *GoWriter) Indent() { w.indent++ }
+func (w *GoWriter) Dedent() { w.indent-- }
+
 // --- Blocks ---
 
 func (w *GoWriter) Block(body func()) {
@@ -70,14 +75,18 @@ func (w *GoWriter) IfElse(cond string, ifBody, elseBody func()) {
 
 func (w *GoWriter) Switch(expr string, body func()) {
 	w.writeIndent()
-	fmt.Fprintf(&w.buf, "switch %s ", expr)
-	w.BlockLn(body)
+	fmt.Fprintf(&w.buf, "switch %s {\n", expr)
+	body()
+	w.writeIndent()
+	w.buf.WriteString("}\n")
 }
 
 func (w *GoWriter) SwitchType(varName, expr string, body func()) {
 	w.writeIndent()
-	fmt.Fprintf(&w.buf, "switch %s := %s.(type) ", varName, expr)
-	w.BlockLn(body)
+	fmt.Fprintf(&w.buf, "switch %s := %s.(type) {\n", varName, expr)
+	body()
+	w.writeIndent()
+	w.buf.WriteString("}\n")
 }
 
 func (w *GoWriter) Case(label string, body func()) {
@@ -200,8 +209,12 @@ func (w *GoWriter) TypeAlias(name, typ string) {
 
 func (w *GoWriter) Const(body func()) {
 	w.writeIndent()
-	w.buf.WriteString("const ")
-	w.BlockLn(body)
+	w.buf.WriteString("const (\n")
+	w.indent++
+	body()
+	w.indent--
+	w.writeIndent()
+	w.buf.WriteString(")\n")
 }
 
 // --- Internal ---

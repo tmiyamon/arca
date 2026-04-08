@@ -9,4 +9,3 @@ func main() {
 	age := 30
 	fmt.Println(fmt.Sprintf("Hello %v, you are %v!", name, age))
 }
-

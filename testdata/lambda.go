@@ -19,4 +19,3 @@ func Map_[T any, U any](list []T, f func(T) U) []U {
 	}
 	return result
 }
-

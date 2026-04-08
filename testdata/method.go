@@ -6,7 +6,7 @@ import (
 
 type User struct {
 	Name string
-	Age int
+	Age  int
 }
 
 func (u User) isAdult() bool {
@@ -27,4 +27,3 @@ func main() {
 	fmt.Println(user.ToJson())
 	fmt.Println(user.greet("Hello"))
 }
-

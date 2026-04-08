@@ -4,8 +4,14 @@ import (
 	"fmt"
 )
 
-func pair() struct{ First int; Second string } {
-	return struct{ First int; Second string }{42, "hello"}
+func pair() struct {
+	First  int
+	Second string
+} {
+	return struct {
+		First  int
+		Second string
+	}{42, "hello"}
 }
 
 func main() {
@@ -15,4 +21,3 @@ func main() {
 	fmt.Println(num)
 	fmt.Println(name)
 }
-

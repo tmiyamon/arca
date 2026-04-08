@@ -9,4 +9,3 @@ func main() {
 	b := append([]int{0}, a...)
 	fmt.Println(b)
 }
-

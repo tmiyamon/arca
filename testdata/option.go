@@ -30,4 +30,3 @@ func Some_[T any](v T) Option_[T] {
 func None_[T any]() Option_[T] {
 	return Option_[T]{}
 }
-

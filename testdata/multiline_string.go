@@ -15,4 +15,3 @@ Welcome to Arca.
 `, name)
 	fmt.Println(msg)
 }
-

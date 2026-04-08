@@ -167,6 +167,7 @@ Formatted by `formatError()` in main.go. Checker errors carry `Pos` (line/col) a
 - Builtin helpers (`Map_`, `Filter_`, `Fold_`, `Option_`, `Result_`, `Ok_`, `Err_`, `Some_`, `None_`, `Ptr_`) use trailing underscore to avoid collision with Go builtins
 - Helpers are only emitted when used
 - Unused variable bindings in match patterns are suppressed
+- Output generated via GoWriter (structured builder with auto-indentation), normalized by `gofmt` in tests
 
 ## Things Intentionally Not Included
 

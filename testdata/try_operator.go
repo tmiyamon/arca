@@ -1,8 +1,8 @@
 package main
 
 import (
-	"strconv"
 	"fmt"
+	"strconv"
 )
 
 func parseAndDouble(s string) Result_[int, error] {
@@ -38,4 +38,3 @@ func Ok_[T any, E any](v T) Result_[T, E] {
 func Err_[T any, E any](e E) Result_[T, E] {
 	return Result_[T, E]{Err: e}
 }
-

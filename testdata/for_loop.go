@@ -9,4 +9,3 @@ func printNumbers() {
 		fmt.Println(i)
 	}
 }
-

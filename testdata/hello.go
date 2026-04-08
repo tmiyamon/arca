@@ -43,4 +43,3 @@ func main() {
 	fmt.Println(colorName(ColorRed))
 	fmt.Println(colorName(ColorBlue))
 }
-

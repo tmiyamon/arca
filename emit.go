@@ -9,62 +9,65 @@ import (
 // All complex logic (name resolution, constructor resolution, match classification)
 // was handled in lower.go. The Emitter is simple and mechanical.
 type Emitter struct {
-	buf        strings.Builder
+	w          *GoWriter
 	tmpCounter int
 }
 
 // Emit is the main entry point. It produces a complete Go source file.
 func (em *Emitter) Emit(prog IRProgram) string {
 	// Generate body first so we know what's needed
-	var body strings.Builder
-	prevBuf := em.buf
-	em.buf = body
+	bodyWriter := NewGoWriter()
+	prevW := em.w
+	em.w = bodyWriter
 
 	for _, td := range prog.Types {
 		em.emitTypeDecl(td)
-		em.writeln("")
+		em.w.Line("")
 	}
 	for _, fd := range prog.Funcs {
 		em.emitFuncDecl(fd)
-		em.writeln("")
+		em.w.Line("")
 	}
 	em.emitBuiltins(prog.Builtins)
-	bodyStr := em.buf.String()
+	bodyStr := em.w.String()
 
-	em.buf = prevBuf
-	em.buf.Reset()
+	em.w = NewGoWriter()
+	if prevW != nil {
+		em.w = prevW
+	}
 
-	// Package declaration
+	w := em.w
 	pkg := prog.Package
 	if pkg == "" {
 		pkg = "main"
 	}
-	em.writeln(fmt.Sprintf("package %s", pkg))
-	em.writeln("")
+	w.Line("package %s", pkg)
+	w.Line("")
 
-	// Imports
 	em.emitImports(prog.Imports)
 
-	// Body
-	em.buf.WriteString(bodyStr)
+	w.Raw(bodyStr)
 
-	return em.buf.String()
+	return w.String()
 }
 
 func (em *Emitter) emitImports(imports []IRImport) {
 	if len(imports) == 0 {
 		return
 	}
-	em.writeln("import (")
+	w := em.w
+	w.Line("import (")
+	w.Indent()
 	for _, imp := range imports {
 		if imp.SideEffect {
-			em.writeln(fmt.Sprintf("\t_ %q", imp.Path))
+			w.Line("_ %q", imp.Path)
 		} else {
-			em.writeln(fmt.Sprintf("\t%q", imp.Path))
+			w.Line("%q", imp.Path)
 		}
 	}
-	em.writeln(")")
-	em.writeln("")
+	w.Dedent()
+	w.Line(")")
+	w.Line("")
 }
 
 // --- Type Declarations ---
@@ -83,42 +86,41 @@ func (em *Emitter) emitTypeDecl(td IRTypeDecl) {
 }
 
 func (em *Emitter) emitEnumDecl(d IREnumDecl) {
-	em.writeln(fmt.Sprintf("type %s int", d.GoName))
-	em.writeln("")
-	em.writeln("const (")
-	for i, v := range d.Variants {
-		if i == 0 {
-			em.writeln(fmt.Sprintf("\t%s%s %s = iota", d.GoName, v, d.GoName))
-		} else {
-			em.writeln(fmt.Sprintf("\t%s%s", d.GoName, v))
+	w := em.w
+	w.TypeAlias(d.GoName, "int")
+	w.Line("")
+	w.Const(func() {
+		for i, v := range d.Variants {
+			if i == 0 {
+				w.Line("%s%s %s = iota", d.GoName, v, d.GoName)
+			} else {
+				w.Line("%s%s", d.GoName, v)
+			}
 		}
-	}
-	em.writeln(")")
-	em.writeln("")
-	em.writeln(fmt.Sprintf("func (v %s) String() string {", d.GoName))
-	em.writeln("\tswitch v {")
-	for _, v := range d.Variants {
-		em.writeln(fmt.Sprintf("\tcase %s%s:", d.GoName, v))
-		em.writeln(fmt.Sprintf("\t\treturn %q", v))
-	}
-	em.writeln("\tdefault:")
-	em.writeln(fmt.Sprintf("\t\treturn \"Unknown%s\"", d.GoName))
-	em.writeln("\t}")
-	em.writeln("}")
+	})
+	w.Line("")
+	w.Method(fmt.Sprintf("v %s", d.GoName), "String", "", "string", func() {
+		w.Switch("v", func() {
+			for _, v := range d.Variants {
+				w.Case(fmt.Sprintf("%s%s", d.GoName, v), func() {
+					w.Return(fmt.Sprintf("%q", v))
+				})
+			}
+			w.Default(func() {
+				w.Return(fmt.Sprintf("\"Unknown%s\"", d.GoName))
+			})
+		})
+	})
 }
 
 func (em *Emitter) emitStructDecl(d IRStructDecl) {
+	w := em.w
 	typeParams := em.goTypeParams(d.TypeParams)
-	em.writeln(fmt.Sprintf("type %s%s struct {", d.GoName, typeParams))
-	for _, f := range d.Fields {
-		typeStr := em.irTypeStr(f.Type)
-		if f.Tag != "" {
-			em.writeln(fmt.Sprintf("\t%s %s %s", f.GoName, typeStr, f.Tag))
-		} else {
-			em.writeln(fmt.Sprintf("\t%s %s", f.GoName, typeStr))
+	w.Struct(d.GoName+typeParams, func() {
+		for _, f := range d.Fields {
+			w.Field(f.GoName, em.irTypeStr(f.Type), f.Tag)
 		}
-	}
-	em.writeln("}")
+	})
 
 	if d.Validator != nil {
 		em.emitStructValidator(d)
@@ -127,150 +129,152 @@ func (em *Emitter) emitStructDecl(d IRStructDecl) {
 }
 
 func (em *Emitter) emitStructValidator(d IRStructDecl) {
-	// func NewType(params...) (Type, error) {
+	w := em.w
 	params := make([]string, len(d.Fields))
 	for i, f := range d.Fields {
 		params[i] = fmt.Sprintf("%s %s", lowerFirst(f.GoName), em.irTypeStr(f.Type))
 	}
-	em.writeln("")
-	em.writeln(fmt.Sprintf("func New%s(%s) (%s, error) {", d.GoName, strings.Join(params, ", "), d.GoName))
+	w.Line("")
+	w.Func("New"+d.GoName, strings.Join(params, ", "), fmt.Sprintf("(%s, error)", d.GoName), func() {
+		em.emitValidator(d.Validator)
 
-	em.emitValidator(d.Validator)
-
-	// Return constructed value
-	fields := make([]string, len(d.Fields))
-	for i, f := range d.Fields {
-		fields[i] = fmt.Sprintf("%s: %s", f.GoName, lowerFirst(f.GoName))
-	}
-	em.writeln(fmt.Sprintf("\treturn %s{%s}, nil", d.GoName, strings.Join(fields, ", ")))
-	em.writeln("}")
+		fields := make([]string, len(d.Fields))
+		for i, f := range d.Fields {
+			fields[i] = fmt.Sprintf("%s: %s", f.GoName, lowerFirst(f.GoName))
+		}
+		w.Return(fmt.Sprintf("%s{%s}, nil", d.GoName, strings.Join(fields, ", ")))
+	})
 }
 
 func (em *Emitter) emitValidateMethod(d IRStructDecl) {
+	w := em.w
 	fields := make([]string, len(d.Fields))
 	for i, f := range d.Fields {
 		fields[i] = "v." + f.GoName
 	}
-	em.writeln("")
-	em.writeln(fmt.Sprintf("func (v %s) ArcaValidate() error {", d.GoName))
-	em.writeln(fmt.Sprintf("\t_, err := New%s(%s)", d.GoName, strings.Join(fields, ", ")))
-	em.writeln("\treturn err")
-	em.writeln("}")
+	w.Line("")
+	w.Method(fmt.Sprintf("v %s", d.GoName), "ArcaValidate", "", "error", func() {
+		w.Assign("_, err", fmt.Sprintf("New%s(%s)", d.GoName, strings.Join(fields, ", ")))
+		w.Return("err")
+	})
 }
 
 func (em *Emitter) emitSumTypeDecl(d IRSumTypeDecl) {
+	w := em.w
 	tp := em.goTypeParams(d.TypeParams)
-	em.writeln(fmt.Sprintf("type %s%s interface {", d.GoName, tp))
-	em.writeln(fmt.Sprintf("\tis%s()", d.GoName))
-	for _, m := range d.InterfaceMethods {
-		params := make([]string, len(m.Params))
-		for i, p := range m.Params {
-			params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
+	w.Interface(d.GoName+tp, func() {
+		w.Line("is%s()", d.GoName)
+		for _, m := range d.InterfaceMethods {
+			params := make([]string, len(m.Params))
+			for i, p := range m.Params {
+				params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
+			}
+			retStr := ""
+			if m.ReturnType != nil {
+				retStr = " " + em.irTypeStr(m.ReturnType)
+			}
+			w.Line("%s(%s)%s", m.Name, strings.Join(params, ", "), retStr)
 		}
-		retStr := ""
-		if m.ReturnType != nil {
-			retStr = " " + em.irTypeStr(m.ReturnType)
-		}
-		em.writeln(fmt.Sprintf("\t%s(%s)%s", m.Name, strings.Join(params, ", "), retStr))
-	}
-	em.writeln("}")
-	em.writeln("")
+	})
+	w.Line("")
 	for _, v := range d.Variants {
 		if len(v.Fields) == 0 {
-			em.writeln(fmt.Sprintf("type %s%s struct{}", v.GoName, tp))
+			w.Line("type %s%s struct{}", v.GoName, tp)
 		} else {
-			em.writeln(fmt.Sprintf("type %s%s struct {", v.GoName, tp))
-			for _, f := range v.Fields {
-				em.writeln(fmt.Sprintf("\t%s %s", f.GoName, em.irTypeStr(f.Type)))
-			}
-			em.writeln("}")
+			w.Struct(v.GoName+tp, func() {
+				for _, f := range v.Fields {
+					w.Field(f.GoName, em.irTypeStr(f.Type), "")
+				}
+			})
 		}
-		em.writeln(fmt.Sprintf("func (%s) is%s() {}", v.GoName, d.GoName))
-		em.writeln("")
+		w.Line("func (%s) is%s() {}", v.GoName, d.GoName)
+		w.Line("")
 	}
 }
 
 func (em *Emitter) emitTypeAliasDecl(d IRTypeAliasDecl) {
-	em.writeln(fmt.Sprintf("type %s %s", d.GoName, d.GoBase))
+	w := em.w
+	w.TypeAlias(d.GoName, d.GoBase)
 
 	if d.Validator == nil {
 		return
 	}
 
 	zeroVal := typeZeroValue(d.GoName, d.GoBase)
-	em.writeln("")
-	em.writeln(fmt.Sprintf("func New%s(v %s) (%s, error) {", d.GoName, d.GoBase, d.GoName))
-	em.emitValidatorAlias(d.Validator, d.GoName, zeroVal, d.GoBase)
-	em.writeln(fmt.Sprintf("\treturn %s(v), nil", d.GoName))
-	em.writeln("}")
+	w.Line("")
+	w.Func("New"+d.GoName, fmt.Sprintf("v %s", d.GoBase), fmt.Sprintf("(%s, error)", d.GoName), func() {
+		em.emitValidatorAlias(d.Validator, d.GoName, zeroVal, d.GoBase)
+		w.Return(fmt.Sprintf("%s(v), nil", d.GoName))
+	})
 
-	// ArcaValidate() method for ArcaValidatable interface
-	em.writeln("")
-	em.writeln(fmt.Sprintf("func (v %s) ArcaValidate() error {", d.GoName))
-	em.writeln(fmt.Sprintf("\t_, err := New%s(%s(v))", d.GoName, d.GoBase))
-	em.writeln("\treturn err")
-	em.writeln("}")
+	w.Line("")
+	w.Method(fmt.Sprintf("v %s", d.GoName), "ArcaValidate", "", "error", func() {
+		w.Assign("_, err", fmt.Sprintf("New%s(%s(v))", d.GoName, d.GoBase))
+		w.Return("err")
+	})
 }
 
 func (em *Emitter) emitValidator(v *IRValidator) {
+	w := em.w
 	for _, check := range v.Checks {
 		switch check.Kind {
 		case "min":
-			em.writeln(fmt.Sprintf("\tif %s < %s {", check.Field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: must be >= %s\")", check.ZeroVal, check.TypeName, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("%s < %s", check.Field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: must be >= %s\")", check.ZeroVal, check.TypeName, check.Value))
+			})
 		case "max":
-			em.writeln(fmt.Sprintf("\tif %s > %s {", check.Field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: must be <= %s\")", check.ZeroVal, check.TypeName, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("%s > %s", check.Field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: must be <= %s\")", check.ZeroVal, check.TypeName, check.Value))
+			})
 		case "min_length":
-			em.writeln(fmt.Sprintf("\tif len(%s) < %s {", check.Field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: min length %s\")", check.ZeroVal, check.TypeName, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("len(%s) < %s", check.Field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: min length %s\")", check.ZeroVal, check.TypeName, check.Value))
+			})
 		case "max_length":
-			em.writeln(fmt.Sprintf("\tif len(%s) > %s {", check.Field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: max length %s\")", check.ZeroVal, check.TypeName, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("len(%s) > %s", check.Field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: max length %s\")", check.ZeroVal, check.TypeName, check.Value))
+			})
 		case "pattern":
-			em.writeln(fmt.Sprintf("\tif !regexp.MustCompile(%s).MatchString(%s) {", check.Value, check.Field))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: must match pattern\")", check.ZeroVal, check.TypeName))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("!regexp.MustCompile(%s).MatchString(%s)", check.Value, check.Field), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: must match pattern\")", check.ZeroVal, check.TypeName))
+			})
 		case "validate":
-			em.writeln(fmt.Sprintf("\tif !%s(%s) {", check.Value, check.Field))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"%s: validation failed\")", check.ZeroVal, check.TypeName))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("!%s(%s)", check.Value, check.Field), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"%s: validation failed\")", check.ZeroVal, check.TypeName))
+			})
 		}
 	}
 }
 
 func (em *Emitter) emitValidatorAlias(v *IRValidator, typeName, zeroVal, goBase string) {
+	w := em.w
 	for _, check := range v.Checks {
 		field := check.Field // "v" for aliases
 		switch check.Kind {
 		case "min":
-			em.writeln(fmt.Sprintf("\tif %s < %s {", field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must be >= %s\")", zeroVal, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("%s < %s", field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"must be >= %s\")", zeroVal, check.Value))
+			})
 		case "max":
-			em.writeln(fmt.Sprintf("\tif %s > %s {", field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must be <= %s\")", zeroVal, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("%s > %s", field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"must be <= %s\")", zeroVal, check.Value))
+			})
 		case "min_length":
-			em.writeln(fmt.Sprintf("\tif len(%s) < %s {", field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"min length %s\")", zeroVal, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("len(%s) < %s", field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"min length %s\")", zeroVal, check.Value))
+			})
 		case "max_length":
-			em.writeln(fmt.Sprintf("\tif len(%s) > %s {", field, check.Value))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"max length %s\")", zeroVal, check.Value))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("len(%s) > %s", field, check.Value), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"max length %s\")", zeroVal, check.Value))
+			})
 		case "pattern":
-			em.writeln(fmt.Sprintf("\tif !regexp.MustCompile(%s).MatchString(string(%s)) {", check.Value, field))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"must match pattern\")", zeroVal))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("!regexp.MustCompile(%s).MatchString(string(%s))", check.Value, field), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"must match pattern\")", zeroVal))
+			})
 		case "validate":
-			em.writeln(fmt.Sprintf("\tif !%s(%s) {", check.Value, field))
-			em.writeln(fmt.Sprintf("\t\treturn %s, fmt.Errorf(\"validation failed\")", zeroVal))
-			em.writeln("\t}")
+			w.If(fmt.Sprintf("!%s(%s)", check.Value, field), func() {
+				w.Return(fmt.Sprintf("%s, fmt.Errorf(\"validation failed\")", zeroVal))
+			})
 		}
 	}
 }
@@ -278,6 +282,7 @@ func (em *Emitter) emitValidatorAlias(v *IRValidator, typeName, zeroVal, goBase 
 // --- Function Declarations ---
 
 func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
+	w := em.w
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
 		params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
@@ -285,24 +290,23 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 
 	retType := ""
 	if fd.ReturnType != nil {
-		retType = " " + em.irTypeStr(fd.ReturnType)
+		retType = em.irTypeStr(fd.ReturnType)
+	}
+
+	body := func() {
+		if fd.ReturnType != nil {
+			em.emitReturnExpr(fd.Body)
+		} else {
+			em.emitVoidBody(fd.Body)
+		}
 	}
 
 	if fd.Receiver != nil {
-		em.writeln(fmt.Sprintf("func (%s %s) %s(%s)%s {",
-			fd.Receiver.GoName, fd.Receiver.Type,
-			fd.GoName, strings.Join(params, ", "), retType))
+		w.Method(fmt.Sprintf("%s %s", fd.Receiver.GoName, fd.Receiver.Type),
+			fd.GoName, strings.Join(params, ", "), retType, body)
 	} else {
-		em.writeln(fmt.Sprintf("func %s(%s)%s {",
-			fd.GoName, strings.Join(params, ", "), retType))
+		w.Func(fd.GoName, strings.Join(params, ", "), retType, body)
 	}
-
-	if fd.ReturnType != nil {
-		em.emitReturnExpr(fd.Body, "\t")
-	} else {
-		em.emitVoidBody(fd.Body, "\t")
-	}
-	em.writeln("}")
 }
 
 // --- Expressions ---
@@ -456,106 +460,108 @@ func (em *Emitter) emitTupleLit(t IRTupleLit) string {
 
 // --- Return/Void Body Modes ---
 
-func (em *Emitter) emitReturnExpr(e IRExpr, indent string) {
+func (em *Emitter) emitReturnExpr(e IRExpr) {
 	if e == nil {
 		return
 	}
+	w := em.w
 	switch expr := e.(type) {
 	case IRBlock:
 		for _, stmt := range expr.Stmts {
-			em.emitStmt(stmt, indent)
+			em.emitStmt(stmt)
 		}
 		if expr.Expr != nil {
-			em.emitReturnExpr(expr.Expr, indent)
+			em.emitReturnExpr(expr.Expr)
 		}
 	case IRMatch:
-		em.emitMatch(expr, indent, true)
+		em.emitMatch(expr, true)
 	default:
-		em.writeln(fmt.Sprintf("%sreturn %s", indent, em.emitExpr(e)))
+		w.Return(em.emitExpr(e))
 	}
 }
 
-func (em *Emitter) emitVoidBody(e IRExpr, indent string) {
+func (em *Emitter) emitVoidBody(e IRExpr) {
 	if e == nil {
 		return
 	}
+	w := em.w
 	switch expr := e.(type) {
 	case IRVoidExpr:
 		// nothing to emit
 	case IRBlock:
 		for _, stmt := range expr.Stmts {
-			em.emitStmt(stmt, indent)
+			em.emitStmt(stmt)
 		}
 		if expr.Expr != nil {
-			em.emitVoidBody(expr.Expr, indent)
+			em.emitVoidBody(expr.Expr)
 		}
 	case IRMatch:
-		em.emitMatch(expr, indent, false)
+		em.emitMatch(expr, false)
 	case IRForRange:
-		em.emitForRange(expr, indent)
+		em.emitForRange(expr)
 	case IRForEach:
-		em.emitForEach(expr, indent)
+		em.emitForEach(expr)
 	default:
-		em.writeln(fmt.Sprintf("%s%s", indent, em.emitExpr(e)))
+		w.Stmt(em.emitExpr(e))
 	}
 }
 
-func (em *Emitter) emitArmBody(body IRExpr, indent string, isReturn bool) {
+func (em *Emitter) emitArmBody(body IRExpr, isReturn bool) {
 	if isReturn {
-		em.emitReturnExpr(body, indent)
+		em.emitReturnExpr(body)
 	} else {
-		em.emitVoidBody(body, indent)
+		em.emitVoidBody(body)
 	}
 }
 
 // --- Statements ---
 
-func (em *Emitter) emitStmt(s IRStmt, indent string) {
+func (em *Emitter) emitStmt(s IRStmt) {
+	w := em.w
 	switch stmt := s.(type) {
 	case IRLetStmt:
-		em.emitLetStmt(stmt, indent)
+		em.emitLetStmt(stmt)
 	case IRTryLetStmt:
-		em.emitTryLetStmt(stmt, indent)
+		em.emitTryLetStmt(stmt)
 	case IRExprStmt:
-		em.emitExprStmt(stmt, indent)
+		em.emitExprStmt(stmt)
 	case IRDeferStmt:
-		em.writeln(fmt.Sprintf("%sdefer %s", indent, em.emitExpr(stmt.Expr)))
+		w.Defer(em.emitExpr(stmt.Expr))
 	case IRAssertStmt:
-		exprStr := em.emitExpr(stmt.Expr)
-		em.writeln(fmt.Sprintf("%sif !(%s) {", indent, exprStr))
-		em.writeln(fmt.Sprintf("%s\tpanic(%q)", indent, "assertion failed: "+stmt.ExprStr))
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.If(fmt.Sprintf("!(%s)", em.emitExpr(stmt.Expr)), func() {
+			w.Panic(fmt.Sprintf("%q", "assertion failed: "+stmt.ExprStr))
+		})
 	case IRDestructureStmt:
-		em.emitDestructureStmt(stmt, indent)
+		em.emitDestructureStmt(stmt)
 	}
 }
 
-func (em *Emitter) emitLetStmt(stmt IRLetStmt, indent string) {
+func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
+	w := em.w
 	if stmt.GoName == "_" {
-		em.writeln(fmt.Sprintf("%s_ = %s", indent, em.emitExpr(stmt.Value)))
+		w.Stmt(fmt.Sprintf("_ = %s", em.emitExpr(stmt.Value)))
 		return
 	}
-	// GoMultiReturn: Go func returns multiple values, wrap into Result/Option
 	if isGoMultiReturn(stmt.Value) {
-		em.emitGoMultiReturnLet(stmt.GoName, stmt.Value, indent)
+		em.emitGoMultiReturnLet(stmt.GoName, stmt.Value)
 		return
 	}
 	if stmt.Type != nil {
-		// Check for empty list: var x []Type
 		if ll, ok := stmt.Value.(IRListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
-			em.writeln(fmt.Sprintf("%svar %s %s", indent, stmt.GoName, em.irTypeStr(stmt.Type)))
+			w.Var(stmt.GoName, em.irTypeStr(stmt.Type))
 			return
 		}
-		em.writeln(fmt.Sprintf("%svar %s %s = %s", indent, stmt.GoName, em.irTypeStr(stmt.Type), em.emitExpr(stmt.Value)))
+		w.VarAssign(stmt.GoName, em.irTypeStr(stmt.Type), em.emitExpr(stmt.Value))
 		return
 	}
-	em.writeln(fmt.Sprintf("%s%s := %s", indent, stmt.GoName, em.emitExpr(stmt.Value)))
+	w.Assign(stmt.GoName, em.emitExpr(stmt.Value))
 }
 
 
 // emitGoMultiReturnLet emits a let statement for a Go call that returns multiple values.
 // The call's IRType determines the wrapping: IRResultType → Result, IROptionType → Option.
-func (em *Emitter) emitGoMultiReturnLet(goName string, callExpr IRExpr, indent string) {
+func (em *Emitter) emitGoMultiReturnLet(goName string, callExpr IRExpr) {
+	w := em.w
 	em.tmpCounter++
 	callStr := em.emitExpr(callExpr)
 	irType := callExpr.irType()
@@ -566,37 +572,34 @@ func (em *Emitter) emitGoMultiReturnLet(goName string, callExpr IRExpr, indent s
 		okType := em.irTypeStr(rt.Ok)
 		isErrorOnly := isUnitType(rt.Ok)
 		if isErrorOnly {
-			// Go func returns error only: err := f()
-			em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, callStr))
-			em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, goName, okType))
-			em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-			em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, goName, okType, tmpErr))
-			em.writeln(fmt.Sprintf("%s} else {", indent))
-			em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s{})", indent, goName, okType, okType))
-			em.writeln(fmt.Sprintf("%s}", indent))
+			w.Assign(tmpErr, callStr)
+			w.Var(goName, fmt.Sprintf("Result_[%s, error]", okType))
+			w.IfElse(fmt.Sprintf("%s != nil", tmpErr), func() {
+				w.Stmt(fmt.Sprintf("%s = Err_[%s, error](%s)", goName, okType, tmpErr))
+			}, func() {
+				w.Stmt(fmt.Sprintf("%s = Ok_[%s, error](%s{})", goName, okType, okType))
+			})
 		} else {
-			// Go func returns (T, error): val, err := f()
 			tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
-			em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, callStr))
-			em.writeln(fmt.Sprintf("%svar %s Result_[%s, error]", indent, goName, okType))
-			em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-			em.writeln(fmt.Sprintf("%s\t%s = Err_[%s, error](%s)", indent, goName, okType, tmpErr))
-			em.writeln(fmt.Sprintf("%s} else {", indent))
-			em.writeln(fmt.Sprintf("%s\t%s = Ok_[%s, error](%s)", indent, goName, okType, tmpVal))
-			em.writeln(fmt.Sprintf("%s}", indent))
+			w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpErr), callStr)
+			w.Var(goName, fmt.Sprintf("Result_[%s, error]", okType))
+			w.IfElse(fmt.Sprintf("%s != nil", tmpErr), func() {
+				w.Stmt(fmt.Sprintf("%s = Err_[%s, error](%s)", goName, okType, tmpErr))
+			}, func() {
+				w.Stmt(fmt.Sprintf("%s = Ok_[%s, error](%s)", goName, okType, tmpVal))
+			})
 		}
 	case IROptionType:
 		tmpVal := fmt.Sprintf("__oval%d", em.tmpCounter)
 		tmpOk := fmt.Sprintf("__ook%d", em.tmpCounter)
 		innerType := em.irTypeStr(rt.Inner)
-		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpOk, callStr))
-		em.writeln(fmt.Sprintf("%svar %s Option_[%s]", indent, goName, innerType))
-		em.writeln(fmt.Sprintf("%sif %s {", indent, tmpOk))
-		em.writeln(fmt.Sprintf("%s\t%s = Some_[%s](%s)", indent, goName, innerType, tmpVal))
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpOk), callStr)
+		w.Var(goName, fmt.Sprintf("Option_[%s]", innerType))
+		w.If(tmpOk, func() {
+			w.Stmt(fmt.Sprintf("%s = Some_[%s](%s)", goName, innerType, tmpVal))
+		})
 	default:
-		// Tuple or unknown: plain multi-value assignment
-		em.writeln(fmt.Sprintf("%s%s := %s", indent, goName, callStr))
+		w.Assign(goName, callStr)
 	}
 }
 
@@ -608,23 +611,24 @@ func isUnitType(t IRType) bool {
 	return false
 }
 
-func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
+func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
+	w := em.w
 	em.tmpCounter++
 
 	// Arca Result (single value): unwrap via .IsOk / .Value / .Err
 	if !isGoMultiReturn(stmt.CallExpr) {
 		tmpResult := fmt.Sprintf("__try_result%d", em.tmpCounter)
-		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpResult, em.emitExpr(stmt.CallExpr)))
-		em.writeln(fmt.Sprintf("%sif !%s.IsOk {", indent, tmpResult))
-		if isIRResultType(stmt.ReturnType) {
-			typeArgs := irResultTypeArgs(stmt.ReturnType)
-			em.writeln(fmt.Sprintf("%s\treturn Err_%s(%s.Err)", indent, typeArgs, tmpResult))
-		} else {
-			em.writeln(fmt.Sprintf("%s\tpanic(%s.Err)", indent, tmpResult))
-		}
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.Assign(tmpResult, em.emitExpr(stmt.CallExpr))
+		w.If(fmt.Sprintf("!%s.IsOk", tmpResult), func() {
+			if isIRResultType(stmt.ReturnType) {
+				typeArgs := irResultTypeArgs(stmt.ReturnType)
+				w.Return(fmt.Sprintf("Err_%s(%s.Err)", typeArgs, tmpResult))
+			} else {
+				w.Panic(fmt.Sprintf("%s.Err", tmpResult))
+			}
+		})
 		if stmt.GoName != "_" {
-			em.writeln(fmt.Sprintf("%s%s := %s.Value", indent, stmt.GoName, tmpResult))
+			w.Assign(stmt.GoName, fmt.Sprintf("%s.Value", tmpResult))
 		}
 		return
 	}
@@ -638,106 +642,110 @@ func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt, indent string) {
 	}
 
 	if errorOnly {
-		em.writeln(fmt.Sprintf("%s%s := %s", indent, tmpErr, em.emitExpr(stmt.CallExpr)))
+		w.Assign(tmpErr, em.emitExpr(stmt.CallExpr))
 	} else {
 		tmpVal := "_"
 		if stmt.GoName != "_" {
 			tmpVal = fmt.Sprintf("__try_val%d", em.tmpCounter)
 		}
-		em.writeln(fmt.Sprintf("%s%s, %s := %s", indent, tmpVal, tmpErr, em.emitExpr(stmt.CallExpr)))
+		w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpErr), em.emitExpr(stmt.CallExpr))
 		defer func() {
 			if stmt.GoName != "_" {
-				em.writeln(fmt.Sprintf("%s%s := %s", indent, stmt.GoName, tmpVal))
+				w.Assign(stmt.GoName, tmpVal)
 			}
 		}()
 	}
 
-	em.writeln(fmt.Sprintf("%sif %s != nil {", indent, tmpErr))
-	if isIRResultType(stmt.ReturnType) {
-		typeArgs := irResultTypeArgs(stmt.ReturnType)
-		em.writeln(fmt.Sprintf("%s\treturn Err_%s(%s)", indent, typeArgs, tmpErr))
-	} else {
-		em.writeln(fmt.Sprintf("%s\tpanic(%s)", indent, tmpErr))
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
+	w.If(fmt.Sprintf("%s != nil", tmpErr), func() {
+		if isIRResultType(stmt.ReturnType) {
+			typeArgs := irResultTypeArgs(stmt.ReturnType)
+			w.Return(fmt.Sprintf("Err_%s(%s)", typeArgs, tmpErr))
+		} else {
+			w.Panic(tmpErr)
+		}
+	})
 }
 
-func (em *Emitter) emitExprStmt(stmt IRExprStmt, indent string) {
+func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
+	w := em.w
 	switch e := stmt.Expr.(type) {
 	case IRForRange:
-		em.emitForRange(e, indent)
+		em.emitForRange(e)
 	case IRForEach:
-		em.emitForEach(e, indent)
+		em.emitForEach(e)
 	case IRMatch:
-		em.emitMatch(e, indent, false)
+		em.emitMatch(e, false)
 	default:
-		em.writeln(fmt.Sprintf("%s%s", indent, em.emitExpr(stmt.Expr)))
+		w.Stmt(em.emitExpr(stmt.Expr))
 	}
 }
 
-func (em *Emitter) emitDestructureStmt(stmt IRDestructureStmt, indent string) {
+func (em *Emitter) emitDestructureStmt(stmt IRDestructureStmt) {
+	w := em.w
 	em.tmpCounter++
 	prefix := "__list"
 	if stmt.Kind == IRDestructureTuple {
 		prefix = "__tuple"
 	}
 	tmp := fmt.Sprintf("%s%d", prefix, em.tmpCounter)
-	em.writeln(fmt.Sprintf("%s%s := %s", indent, tmp, em.emitExpr(stmt.Value)))
+	w.Assign(tmp, em.emitExpr(stmt.Value))
 	for _, b := range stmt.Bindings {
 		if b.Slice {
-			em.writeln(fmt.Sprintf("%s%s := %s[%d:]", indent, b.GoName, tmp, b.Index))
+			w.Assign(b.GoName, fmt.Sprintf("%s[%d:]", tmp, b.Index))
 		} else if stmt.Kind == IRDestructureTuple {
 			field := "First"
 			if b.Index == 1 {
 				field = "Second"
 			}
-			em.writeln(fmt.Sprintf("%s%s := %s.%s", indent, b.GoName, tmp, field))
+			w.Assign(b.GoName, fmt.Sprintf("%s.%s", tmp, field))
 		} else {
-			em.writeln(fmt.Sprintf("%s%s := %s[%d]", indent, b.GoName, tmp, b.Index))
+			w.Assign(b.GoName, fmt.Sprintf("%s[%d]", tmp, b.Index))
 		}
 	}
 }
 
 // --- For Loops ---
 
-func (em *Emitter) emitForRange(fr IRForRange, indent string) {
-	em.writeln(fmt.Sprintf("%sfor %s := %s; %s < %s; %s++ {",
-		indent, fr.Binding, em.emitExpr(fr.Start),
-		fr.Binding, em.emitExpr(fr.End), fr.Binding))
-	em.emitVoidBody(fr.Body, indent+"\t")
-	em.writeln(fmt.Sprintf("%s}", indent))
+func (em *Emitter) emitForRange(fr IRForRange) {
+	w := em.w
+	w.For(fmt.Sprintf("%s := %s; %s < %s; %s++",
+		fr.Binding, em.emitExpr(fr.Start),
+		fr.Binding, em.emitExpr(fr.End), fr.Binding), func() {
+		em.emitVoidBody(fr.Body)
+	})
 }
 
-func (em *Emitter) emitForEach(fe IRForEach, indent string) {
-	em.writeln(fmt.Sprintf("%sfor _, %s := range %s {", indent, fe.Binding, em.emitExpr(fe.Iter)))
-	em.emitVoidBody(fe.Body, indent+"\t")
-	em.writeln(fmt.Sprintf("%s}", indent))
+func (em *Emitter) emitForEach(fe IRForEach) {
+	w := em.w
+	w.For(fmt.Sprintf("_, %s := range %s", fe.Binding, em.emitExpr(fe.Iter)), func() {
+		em.emitVoidBody(fe.Body)
+	})
 }
 
 // --- Match ---
 
-func (em *Emitter) emitMatch(m IRMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatch(m IRMatch, isReturn bool) {
 	if len(m.Arms) == 0 {
 		return
 	}
-	// Dispatch based on first arm's pattern type
 	switch m.Arms[0].Pattern.(type) {
 	case IRResultOkPattern, IRResultErrorPattern:
-		em.emitMatchResult(m, indent, isReturn)
+		em.emitMatchResult(m, isReturn)
 	case IROptionSomePattern, IROptionNonePattern:
-		em.emitMatchOption(m, indent, isReturn)
+		em.emitMatchOption(m, isReturn)
 	case IREnumPattern:
-		em.emitMatchEnum(m, indent, isReturn)
+		em.emitMatchEnum(m, isReturn)
 	case IRSumTypePattern, IRSumTypeWildcardPattern:
-		em.emitMatchSumType(m, indent, isReturn)
+		em.emitMatchSumType(m, isReturn)
 	case IRListEmptyPattern, IRListExactPattern, IRListConsPattern, IRListDefaultPattern:
-		em.emitMatchList(m, indent, isReturn)
+		em.emitMatchList(m, isReturn)
 	case IRLiteralPattern, IRLiteralDefaultPattern:
-		em.emitMatchLiteral(m, indent, isReturn)
+		em.emitMatchLiteral(m, isReturn)
 	}
 }
 
-func (em *Emitter) emitMatchResult(m IRMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchResult(m IRMatch, isReturn bool) {
+	w := em.w
 	subject := em.emitExpr(m.Subject)
 	var okArm, errorArm *IRMatchArm
 	for i := range m.Arms {
@@ -752,47 +760,45 @@ func (em *Emitter) emitMatchResult(m IRMatch, indent string, isReturn bool) {
 	errorVoid := errorArm != nil && isVoidBody(errorArm.Body)
 
 	if okVoid && errorVoid {
-		return // both void, nothing to emit
+		return
 	}
 	if okVoid {
-		// Only error arm: invert condition
-		em.writeln(fmt.Sprintf("%sif !%s.IsOk {", indent, subject))
-		if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
-		}
-		em.emitArmBody(errorArm.Body, indent+"\t", isReturn)
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.If(fmt.Sprintf("!%s.IsOk", subject), func() {
+			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
+			}
+			em.emitArmBody(errorArm.Body, isReturn)
+		})
 		return
 	}
 	if errorVoid {
-		// Only ok arm
-		em.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
-		if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
-		}
-		em.emitArmBody(okArm.Body, indent+"\t", isReturn)
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.If(fmt.Sprintf("%s.IsOk", subject), func() {
+			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
+			}
+			em.emitArmBody(okArm.Body, isReturn)
+		})
 		return
 	}
-	// Both arms have content
-	em.writeln(fmt.Sprintf("%sif %s.IsOk {", indent, subject))
-	if okArm != nil {
-		if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+	w.IfElse(fmt.Sprintf("%s.IsOk", subject), func() {
+		if okArm != nil {
+			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
+			}
+			em.emitArmBody(okArm.Body, isReturn)
 		}
-		em.emitArmBody(okArm.Body, indent+"\t", isReturn)
-	}
-	em.writeln(fmt.Sprintf("%s} else {", indent))
-	if errorArm != nil {
-		if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
+	}, func() {
+		if errorArm != nil {
+			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
+			}
+			em.emitArmBody(errorArm.Body, isReturn)
 		}
-		em.emitArmBody(errorArm.Body, indent+"\t", isReturn)
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
+	})
 }
 
-func (em *Emitter) emitMatchOption(m IRMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchOption(m IRMatch, isReturn bool) {
+	w := em.w
 	subject := em.emitExpr(m.Subject)
 	var someArm, noneArm *IRMatchArm
 	for i := range m.Arms {
@@ -810,141 +816,158 @@ func (em *Emitter) emitMatchOption(m IRMatch, indent string, isReturn bool) {
 		return
 	}
 	if someVoid {
-		em.writeln(fmt.Sprintf("%sif !%s.Valid {", indent, subject))
-		em.emitArmBody(noneArm.Body, indent+"\t", isReturn)
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.If(fmt.Sprintf("!%s.Valid", subject), func() {
+			em.emitArmBody(noneArm.Body, isReturn)
+		})
 		return
 	}
 	if noneVoid {
-		em.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
-		if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
-		}
-		em.emitArmBody(someArm.Body, indent+"\t", isReturn)
-		em.writeln(fmt.Sprintf("%s}", indent))
+		w.If(fmt.Sprintf("%s.Valid", subject), func() {
+			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
+			}
+			em.emitArmBody(someArm.Body, isReturn)
+		})
 		return
 	}
-	em.writeln(fmt.Sprintf("%sif %s.Valid {", indent, subject))
-	if someArm != nil {
-		if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
-			em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Binding.GoName, subject, p.Binding.Source))
-		}
-		em.emitArmBody(someArm.Body, indent+"\t", isReturn)
-	}
-	em.writeln(fmt.Sprintf("%s} else {", indent))
-	if noneArm != nil {
-		em.emitArmBody(noneArm.Body, indent+"\t", isReturn)
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
-}
-
-func (em *Emitter) emitMatchEnum(m IRMatch, indent string, isReturn bool) {
-	subject := em.emitExpr(m.Subject)
-	em.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
-	for _, arm := range m.Arms {
-		switch p := arm.Pattern.(type) {
-		case IREnumPattern:
-			em.writeln(fmt.Sprintf("%scase %s:", indent, p.GoValue))
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
-		case IRWildcardPattern:
-			em.writeln(fmt.Sprintf("%sdefault:", indent))
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
-		}
-	}
-	if isReturn && !em.hasWildcard(m) {
-		em.writeln(fmt.Sprintf("%sdefault:", indent))
-		em.writeln(fmt.Sprintf("%s\tpanic(\"unreachable\")", indent))
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
-}
-
-func (em *Emitter) emitMatchSumType(m IRMatch, indent string, isReturn bool) {
-	subject := em.emitExpr(m.Subject)
-	em.writeln(fmt.Sprintf("%sswitch v := %s.(type) {", indent, subject))
-	for _, arm := range m.Arms {
-		switch p := arm.Pattern.(type) {
-		case IRSumTypePattern:
-			em.writeln(fmt.Sprintf("%scase %s:", indent, p.GoType))
-			for _, b := range p.Bindings {
-				em.writeln(fmt.Sprintf("%s\t%s := v%s", indent, b.GoName, b.Source))
+	w.IfElse(fmt.Sprintf("%s.Valid", subject), func() {
+		if someArm != nil {
+			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
+				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
-		case IRSumTypeWildcardPattern:
-			em.writeln(fmt.Sprintf("%sdefault:", indent))
-			if p.Binding != nil {
-				em.writeln(fmt.Sprintf("%s\t%s := v", indent, p.Binding.GoName))
-			}
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+			em.emitArmBody(someArm.Body, isReturn)
 		}
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
+	}, func() {
+		if noneArm != nil {
+			em.emitArmBody(noneArm.Body, isReturn)
+		}
+	})
+}
+
+func (em *Emitter) emitMatchEnum(m IRMatch, isReturn bool) {
+	w := em.w
+	subject := em.emitExpr(m.Subject)
+	w.Switch(subject, func() {
+		for _, arm := range m.Arms {
+			switch p := arm.Pattern.(type) {
+			case IREnumPattern:
+				w.Case(p.GoValue, func() {
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			case IRWildcardPattern:
+				w.Default(func() {
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			}
+		}
+		if isReturn && !em.hasWildcard(m) {
+			w.Default(func() {
+				w.Panic("\"unreachable\"")
+			})
+		}
+	})
+}
+
+func (em *Emitter) emitMatchSumType(m IRMatch, isReturn bool) {
+	w := em.w
+	subject := em.emitExpr(m.Subject)
+	w.SwitchType("v", subject, func() {
+		for _, arm := range m.Arms {
+			switch p := arm.Pattern.(type) {
+			case IRSumTypePattern:
+				w.Case(p.GoType, func() {
+					for _, b := range p.Bindings {
+						w.Assign(b.GoName, fmt.Sprintf("v%s", b.Source))
+					}
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			case IRSumTypeWildcardPattern:
+				w.Default(func() {
+					if p.Binding != nil {
+						w.Assign(p.Binding.GoName, "v")
+					}
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			}
+		}
+	})
 	if isReturn && !em.hasWildcard(m) {
-		em.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
+		w.Panic("\"unreachable\"")
 	}
 }
 
-func (em *Emitter) emitMatchList(m IRMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchList(m IRMatch, isReturn bool) {
+	w := em.w
 	subject := em.emitExpr(m.Subject)
 	first := true
 	for _, arm := range m.Arms {
 		switch p := arm.Pattern.(type) {
 		case IRListEmptyPattern:
-			keyword := "if"
-			if !first {
-				keyword = "} else if"
+			if first {
+				w.Line("if len(%s) == 0 {", subject)
+			} else {
+				w.Line("} else if len(%s) == 0 {", subject)
 			}
-			em.writeln(fmt.Sprintf("%s%s len(%s) == 0 {", indent, keyword, subject))
 		case IRListExactPattern:
-			keyword := "if"
-			if !first {
-				keyword = "} else if"
+			if first {
+				w.Line("if len(%s) == %d {", subject, p.MinLen)
+			} else {
+				w.Line("} else if len(%s) == %d {", subject, p.MinLen)
 			}
-			em.writeln(fmt.Sprintf("%s%s len(%s) == %d {", indent, keyword, subject, p.MinLen))
+			w.Indent()
 			for _, b := range p.Elements {
-				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, b.GoName, subject, b.Source))
+				w.Assign(b.GoName, fmt.Sprintf("%s%s", subject, b.Source))
 			}
+			w.Dedent()
 		case IRListConsPattern:
-			keyword := "if"
-			if !first {
-				keyword = "} else if"
+			if first {
+				w.Line("if len(%s) >= %d {", subject, p.MinLen)
+			} else {
+				w.Line("} else if len(%s) >= %d {", subject, p.MinLen)
 			}
-			em.writeln(fmt.Sprintf("%s%s len(%s) >= %d {", indent, keyword, subject, p.MinLen))
+			w.Indent()
 			for _, b := range p.Elements {
-				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, b.GoName, subject, b.Source))
+				w.Assign(b.GoName, fmt.Sprintf("%s%s", subject, b.Source))
 			}
 			if p.Rest != nil {
-				em.writeln(fmt.Sprintf("%s\t%s := %s%s", indent, p.Rest.GoName, subject, p.Rest.Source))
+				w.Assign(p.Rest.GoName, fmt.Sprintf("%s%s", subject, p.Rest.Source))
 			}
+			w.Dedent()
 		case IRListDefaultPattern:
 			if first {
-				em.writeln(fmt.Sprintf("%s{", indent))
+				w.Line("{")
 			} else {
-				em.writeln(fmt.Sprintf("%s} else {", indent))
+				w.Line("} else {")
 			}
 		}
-		em.emitArmBody(arm.Body, indent+"\t", isReturn)
+		w.Indent()
+		em.emitArmBody(arm.Body, isReturn)
+		w.Dedent()
 		first = false
 	}
-	em.writeln(fmt.Sprintf("%s}", indent))
+	w.Line("}")
 	if isReturn {
-		em.writeln(fmt.Sprintf("%spanic(\"unreachable\")", indent))
+		w.Panic("\"unreachable\"")
 	}
 }
 
-func (em *Emitter) emitMatchLiteral(m IRMatch, indent string, isReturn bool) {
+func (em *Emitter) emitMatchLiteral(m IRMatch, isReturn bool) {
+	w := em.w
 	subject := em.emitExpr(m.Subject)
-	em.writeln(fmt.Sprintf("%sswitch %s {", indent, subject))
-	for _, arm := range m.Arms {
-		switch p := arm.Pattern.(type) {
-		case IRLiteralPattern:
-			em.writeln(fmt.Sprintf("%scase %s:", indent, p.Value))
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
-		case IRLiteralDefaultPattern:
-			em.writeln(fmt.Sprintf("%sdefault:", indent))
-			em.emitArmBody(arm.Body, indent+"\t", isReturn)
+	w.Switch(subject, func() {
+		for _, arm := range m.Arms {
+			switch p := arm.Pattern.(type) {
+			case IRLiteralPattern:
+				w.Case(p.Value, func() {
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			case IRLiteralDefaultPattern:
+				w.Default(func() {
+					em.emitArmBody(arm.Body, isReturn)
+				})
+			}
 		}
-	}
-	em.writeln(fmt.Sprintf("%s}", indent))
+	})
 }
 
 func (em *Emitter) hasWildcard(m IRMatch) bool {
@@ -972,73 +995,74 @@ func isVoidBody(expr IRExpr) bool {
 // --- Builtins ---
 
 func (em *Emitter) emitBuiltins(builtins []string) {
+	w := em.w
 	set := make(map[string]bool, len(builtins))
 	for _, b := range builtins {
 		set[b] = true
 	}
 
 	if set["result"] {
-		em.writeln("type Result_[T any, E any] struct {")
-		em.writeln("\tValue T")
-		em.writeln("\tErr   E")
-		em.writeln("\tIsOk  bool")
-		em.writeln("}")
-		em.writeln("")
-		em.writeln("func Ok_[T any, E any](v T) Result_[T, E] {")
-		em.writeln("\treturn Result_[T, E]{Value: v, IsOk: true}")
-		em.writeln("}")
-		em.writeln("")
-		em.writeln("func Err_[T any, E any](e E) Result_[T, E] {")
-		em.writeln("\treturn Result_[T, E]{Err: e}")
-		em.writeln("}")
-		em.writeln("")
+		w.Struct("Result_[T any, E any]", func() {
+			w.Field("Value", "T", "")
+			w.Field("Err", "  E", "")
+			w.Field("IsOk", " bool", "")
+		})
+		w.Line("")
+		w.Func("Ok_[T any, E any]", "v T", "Result_[T, E]", func() {
+			w.Return("Result_[T, E]{Value: v, IsOk: true}")
+		})
+		w.Line("")
+		w.Func("Err_[T any, E any]", "e E", "Result_[T, E]", func() {
+			w.Return("Result_[T, E]{Err: e}")
+		})
+		w.Line("")
 	}
 	if set["option"] {
-		em.writeln("type Option_[T any] struct {")
-		em.writeln("\tValue T")
-		em.writeln("\tValid bool")
-		em.writeln("}")
-		em.writeln("")
-		em.writeln("func Some_[T any](v T) Option_[T] {")
-		em.writeln("\treturn Option_[T]{Value: v, Valid: true}")
-		em.writeln("}")
-		em.writeln("")
-		em.writeln("func None_[T any]() Option_[T] {")
-		em.writeln("\treturn Option_[T]{}")
-		em.writeln("}")
-		em.writeln("")
+		w.Struct("Option_[T any]", func() {
+			w.Field("Value", "T", "")
+			w.Field("Valid", "bool", "")
+		})
+		w.Line("")
+		w.Func("Some_[T any]", "v T", "Option_[T]", func() {
+			w.Return("Option_[T]{Value: v, Valid: true}")
+		})
+		w.Line("")
+		w.Func("None_[T any]", "", "Option_[T]", func() {
+			w.Return("Option_[T]{}")
+		})
+		w.Line("")
 	}
 	if set["map"] {
-		em.writeln("func Map_[T any, U any](list []T, f func(T) U) []U {")
-		em.writeln("\tresult := make([]U, len(list))")
-		em.writeln("\tfor i, v := range list {")
-		em.writeln("\t\tresult[i] = f(v)")
-		em.writeln("\t}")
-		em.writeln("\treturn result")
-		em.writeln("}")
-		em.writeln("")
+		w.Func("Map_[T any, U any]", "list []T, f func(T) U", "[]U", func() {
+			w.Assign("result", "make([]U, len(list))")
+			w.For("i, v := range list", func() {
+				w.Stmt("result[i] = f(v)")
+			})
+			w.Return("result")
+		})
+		w.Line("")
 	}
 	if set["filter"] {
-		em.writeln("func Filter_[T any](list []T, f func(T) bool) []T {")
-		em.writeln("\tvar result []T")
-		em.writeln("\tfor _, v := range list {")
-		em.writeln("\t\tif f(v) {")
-		em.writeln("\t\t\tresult = append(result, v)")
-		em.writeln("\t\t}")
-		em.writeln("\t}")
-		em.writeln("\treturn result")
-		em.writeln("}")
-		em.writeln("")
+		w.Func("Filter_[T any]", "list []T, f func(T) bool", "[]T", func() {
+			w.Var("result", "[]T")
+			w.For("_, v := range list", func() {
+				w.If("f(v)", func() {
+					w.Stmt("result = append(result, v)")
+				})
+			})
+			w.Return("result")
+		})
+		w.Line("")
 	}
 	if set["fold"] {
-		em.writeln("func Fold_[T any, U any](list []T, init U, f func(U, T) U) U {")
-		em.writeln("\tacc := init")
-		em.writeln("\tfor _, v := range list {")
-		em.writeln("\t\tacc = f(acc, v)")
-		em.writeln("\t}")
-		em.writeln("\treturn acc")
-		em.writeln("}")
-		em.writeln("")
+		w.Func("Fold_[T any, U any]", "list []T, init U, f func(U, T) U", "U", func() {
+			w.Assign("acc", "init")
+			w.For("_, v := range list", func() {
+				w.Stmt("acc = f(acc, v)")
+			})
+			w.Return("acc")
+		})
+		w.Line("")
 	}
 }
 
@@ -1110,15 +1134,6 @@ func (em *Emitter) inferGoTypeFromIR(e IRExpr) string {
 
 // --- Helpers ---
 
-func (em *Emitter) write(s string) {
-	em.buf.WriteString(s)
-}
-
-func (em *Emitter) writeln(s string) {
-	em.buf.WriteString(s)
-	em.buf.WriteString("\n")
-}
-
 // lowerFirst lowercases the first character of a string.
 func lowerFirst(s string) string {
 	if s == "" {
@@ -1142,6 +1157,6 @@ func irResultTypeArgs(t IRType) string {
 	if !ok {
 		return ""
 	}
-	em := &Emitter{}
+	em := &Emitter{w: NewGoWriter()}
 	return "[" + em.irTypeStr(rt.Ok) + ", " + em.irTypeStr(rt.Err) + "]"
 }

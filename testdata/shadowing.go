@@ -10,4 +10,3 @@ func main() {
 	x_2 := 42
 	fmt.Println(x_2)
 }
-

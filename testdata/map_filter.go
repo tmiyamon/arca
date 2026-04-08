@@ -42,4 +42,3 @@ func Fold_[T any, U any](list []T, init U, f func(U, T) U) U {
 	}
 	return acc
 }
-

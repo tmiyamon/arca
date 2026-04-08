@@ -32,13 +32,14 @@ type Shape interface {
 type ShapeCircle struct {
 	Radius float64
 }
+
 func (ShapeCircle) isShape() {}
 
 type ShapeSquare struct {
 	Side float64
 }
-func (ShapeSquare) isShape() {}
 
+func (ShapeSquare) isShape() {}
 
 func main() {
 	c := ColorRed
@@ -46,4 +47,3 @@ func main() {
 	fmt.Println(c)
 	fmt.Println(s)
 }
-

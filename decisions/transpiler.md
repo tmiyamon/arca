@@ -4,6 +4,27 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-09: GoWriter integration into emit
+
+**Context:** `emit.go` used `writeln(fmt.Sprintf("%s...", indent, ...))` with manual `\t` indentation. Every body/stmt/match function threaded an `indent string` parameter. Error-prone (easy to forget indent level) and hard to read.
+
+**Decision:** Integrate GoWriter (`gowriter.go`) as the sole output mechanism for emit. GoWriter provides structured methods (`If`, `IfElse`, `Switch`, `Case`, `Func`, `Method`, `For`, `Assign`, `Return`, etc.) with automatic indentation tracking.
+
+**Changes:**
+- Emitter.buf → Emitter.w (*GoWriter)
+- Remove `indent string` parameter from all body/stmt/match emit functions
+- Add `Indent()`/`Dedent()` to GoWriter for cases not covered by Block
+- Fix `Const` to use Go's `()` syntax instead of `{}`
+- Fix `Switch`/`SwitchType` to Go convention (case at same indent as switch)
+- Snapshot tests compare `gofmt`-normalized output via `go/format.Source`
+- All `testdata/*.go` snapshots updated to gofmt-canonical form
+
+**Result:** `writeln` bridge fully eliminated. emit.go reads as structured Go generation, not string concatenation. Format differences absorbed by gofmt in tests.
+
+**Status:** Done
+
+---
+
 ## 2026-04-08: Bidirectional type checking
 
 **Context:** Type checking was split between lower (bottom-up IR type inference) and validate (post-hoc AST-level checks). Lambda parameter types couldn't be inferred. Match arm type mismatches weren't detected. Constraint compatibility was only in validate.

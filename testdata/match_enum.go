@@ -33,4 +33,3 @@ func colorName(c Color) string {
 		panic("unreachable")
 	}
 }
-

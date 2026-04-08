@@ -20,4 +20,3 @@ func (v Color) String() string {
 		return "UnknownColor"
 	}
 }
-

@@ -24,7 +24,8 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 | `ir.go` | IR node definitions (resolved names, types, structurally exhaustive match) |
 | `lower.go` | AST → IR (name resolution, constructor resolution, match classification, Go FFI type checking, bidirectional type checking) |
 | `validate.go` | IR validation (exhaustiveness, existence checks, arg count) |
-| `emit.go` | IR → Go output (mechanical, no feature-specific logic) |
+| `emit.go` | IR → Go output via GoWriter (mechanical, no feature-specific logic) |
+| `gowriter.go` | Structured Go code builder with auto-indentation |
 | `prelude.go` | Built-in function definitions (println, map, filter, etc.) |
 | `type_resolver.go` | TypeResolver interface |
 | `go_type_resolver.go` | go/types implementation |
@@ -47,6 +48,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **GoMultiReturn**: Go FFI calls carry `GoMultiReturn` flag + `IRResultType`/`IROptionType`. `goFuncReturnType` maps `(T, error)` → Result, `(T, bool)` → Option, 3+ → Tuple. Consumption sites read IR types, no ad-hoc detection.
 - **Project go.mod**: TypeResolver uses nearest go.mod (walked up from .arca file) for package resolution. `goModule` read from go.mod, not hardcoded.
 - **Bidirectional type checking**: `lowerExprHint(expr, hint)` propagates expected types top-down. Covers function args, let annotations, return types, match arms, constructor fields, None/Ok/Error type args. Constraint compatibility checked in `irTypesMatch`. Lambda param types inferred from Go FFI call context.
+- **GoWriter**: Structured Go code builder in `gowriter.go`. `emit.go` uses GoWriter methods (`If`, `Switch`, `Func`, `Method`, `For`, `Assign`, etc.) instead of manual string formatting. Auto-indentation eliminates `indent string` parameter threading. Output is `gofmt`-normalized in tests.
 
 ## Adding a New Language Feature
 

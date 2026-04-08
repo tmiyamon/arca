@@ -7,12 +7,12 @@ type ApiResponse interface {
 type ApiResponseSuccess struct {
 	Data string
 }
+
 func (ApiResponseSuccess) isApiResponse() {}
 
 type ApiResponseErrorResponse struct {
 	Message string
-	Code int
+	Code    int
 }
+
 func (ApiResponseErrorResponse) isApiResponse() {}
-
-

@@ -7,13 +7,14 @@ type Response interface {
 type ResponseOk struct {
 	Value string
 }
+
 func (ResponseOk) isResponse() {}
 
 type ResponseErr struct {
 	Message string
 }
-func (ResponseErr) isResponse() {}
 
+func (ResponseErr) isResponse() {}
 
 func unwrap(r Response) string {
 	switch v := r.(type) {
@@ -26,4 +27,3 @@ func unwrap(r Response) string {
 	}
 	panic("unreachable")
 }
-

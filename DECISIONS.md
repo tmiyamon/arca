@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-09
+
+- [GoWriter integration into emit](decisions/transpiler.md#2026-04-09-gowriter-integration-into-emit) — Replace manual writeln+indent with structured GoWriter methods. gofmt-normalized snapshots
+
 ## 2026-04-08
 
 - [Bidirectional type checking](decisions/transpiler.md#2026-04-08-bidirectional-type-checking) — lowerExprHint propagates expected types. Lambda inference, constraint compat, validate cleanup

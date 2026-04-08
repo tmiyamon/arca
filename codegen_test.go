@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/format"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,8 +77,13 @@ func TestCodegen(t *testing.T) {
 				t.Fatalf("transpile error: %v", err)
 			}
 
-			if result.goCode != string(expected) {
-				t.Errorf("output mismatch for %s\n--- expected ---\n%s\n--- got ---\n%s", arcaFile, expected, result.goCode)
+			got, err := format.Source([]byte(result.goCode))
+			if err != nil {
+				t.Fatalf("gofmt failed on generated code: %v\n%s", err, result.goCode)
+			}
+
+			if string(got) != string(expected) {
+				t.Errorf("output mismatch for %s\n--- expected ---\n%s\n--- got ---\n%s", arcaFile, expected, got)
 			}
 		})
 	}

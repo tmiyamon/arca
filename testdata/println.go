@@ -9,4 +9,3 @@ func main() {
 	fmt.Print("world")
 	fmt.Println(42)
 }
-

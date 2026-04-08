@@ -5,7 +5,7 @@ import (
 )
 
 type Pair[A any, B any] struct {
-	First A
+	First  A
 	Second B
 }
 
@@ -14,4 +14,3 @@ func main() {
 	fmt.Println(p.First)
 	fmt.Println(p.Second)
 }
-
