@@ -137,6 +137,12 @@ func (l *Lowerer) TypeAliases() map[string]TypeAliasDecl { return l.typeAliases 
 // Functions returns the collected function declarations.
 func (l *Lowerer) Functions() map[string]FnDecl { return l.functions }
 
+// GoPackages returns the collected Go package imports.
+func (l *Lowerer) GoPackages() map[string]*GoPackage { return l.goPackages }
+
+// TypeResolver returns the type resolver for Go FFI lookups.
+func (l *Lowerer) TypeResolver() TypeResolver { return l.typeResolver }
+
 func (l *Lowerer) Errors() []CompileError {
 	return l.errors
 }

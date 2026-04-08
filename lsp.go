@@ -227,29 +227,33 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 		return ""
 	}
 
-	// Check if this is a field access: receiver.field
+	// Check if this is a field access: receiver.field or receiver.method
 	receiver := getReceiverAt(source, line, col)
 	if receiver != "" {
 		if sym := lowerer.FindSymbolAt(receiver, Pos{line, col}); sym != nil {
+			// Arca field
 			if fieldType := lookupFieldType(lowerer.Types(), sym.Type, word); fieldType != nil {
 				return fmt.Sprintf("```arca\n%s: %s\n```", word, typeName(fieldType))
+			}
+			// Go FFI method or field on typed receiver
+			if hover := lookupGoMemberHover(sym.IRType, word, lowerer); hover != "" {
+				return hover
+			}
+			// Go package-level member (e.g. http.StatusOK)
+			if sym.Kind == SymPackage {
+				if hover := lookupGoPkgMemberHover(sym.Name, word, lowerer); hover != "" {
+					return hover
+				}
 			}
 		}
 	}
 
-	// Look up local variables and parameters (scope-aware)
+	// Look up symbol via scope tree
 	if sym := lowerer.FindSymbolAt(word, Pos{line, col}); sym != nil {
-		typeStr := typeName(sym.Type)
-		if typeStr == "unknown" && sym.IRType != nil {
-			typeStr = irTypeDisplayName(sym.IRType)
-		}
-		if sym.Kind == SymPackage {
-			return fmt.Sprintf("```arca\nimport go \"%s\"\n```", sym.Name)
-		}
-		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeStr)
+		return formatSymbolHover(sym, lowerer)
 	}
 
-	// Look up functions
+	// Look up functions (not in scope — e.g. pub functions from other modules)
 	functions := lowerer.Functions()
 	if fn, ok := functions[word]; ok {
 		return formatFnHover(fn)
@@ -300,6 +304,110 @@ func irTypeDisplayName(t IRType) string {
 	default:
 		return "unknown"
 	}
+}
+
+func lookupGoPkgMemberHover(pkgShort, member string, lowerer *Lowerer) string {
+	pkg, ok := lowerer.GoPackages()[pkgShort]
+	if !ok {
+		return ""
+	}
+	// Try as function
+	if info := lowerer.TypeResolver().ResolveFunc(pkg.FullPath, member); info != nil {
+		params := make([]string, len(info.Params))
+		for i, p := range info.Params {
+			name := p.Name
+			if name == "" {
+				name = fmt.Sprintf("arg%d", i)
+			}
+			params[i] = fmt.Sprintf("%s: %s", name, goTypeToIRName(p.Type))
+		}
+		ret := ""
+		if len(info.Results) > 0 {
+			retTypes := make([]string, len(info.Results))
+			for i, r := range info.Results {
+				retTypes[i] = goTypeToIRName(r.Type)
+			}
+			ret = " -> " + strings.Join(retTypes, ", ")
+		}
+		return fmt.Sprintf("```go\nfun %s.%s(%s)%s\n```", pkgShort, member, strings.Join(params, ", "), ret)
+	}
+	// Try as type
+	if info := lowerer.TypeResolver().ResolveType(pkg.FullPath, member); info != nil {
+		return fmt.Sprintf("```go\ntype %s.%s\n```", pkgShort, member)
+	}
+	// Package-level constant/variable — just show the name
+	return fmt.Sprintf("```go\n%s.%s\n```", pkgShort, member)
+}
+
+func lookupGoMemberHover(irType IRType, member string, lowerer *Lowerer) string {
+	if irType == nil {
+		return ""
+	}
+	// Extract Go package and type name from IR type
+	var named IRNamedType
+	switch tt := irType.(type) {
+	case IRNamedType:
+		named = tt
+	case IRPointerType:
+		if inner, ok := tt.Inner.(IRNamedType); ok {
+			named = inner
+		} else {
+			return ""
+		}
+	default:
+		return ""
+	}
+	if !strings.Contains(named.GoName, ".") {
+		return ""
+	}
+	parts := strings.SplitN(named.GoName, ".", 2)
+	pkg, ok := lowerer.GoPackages()[parts[0]]
+	if !ok {
+		return ""
+	}
+	info := lowerer.TypeResolver().ResolveMethod(pkg.FullPath, parts[1], member)
+	if info == nil {
+		return ""
+	}
+	// Format method signature
+	params := make([]string, len(info.Params))
+	for i, p := range info.Params {
+		name := p.Name
+		if name == "" {
+			name = fmt.Sprintf("arg%d", i)
+		}
+		params[i] = fmt.Sprintf("%s: %s", name, goTypeToIRName(p.Type))
+	}
+	ret := ""
+	if len(info.Results) > 0 {
+		retTypes := make([]string, len(info.Results))
+		for i, r := range info.Results {
+			retTypes[i] = goTypeToIRName(r.Type)
+		}
+		ret = " -> " + strings.Join(retTypes, ", ")
+	}
+	return fmt.Sprintf("```go\nfun %s.%s(%s)%s\n```", parts[1], member, strings.Join(params, ", "), ret)
+}
+
+func formatSymbolHover(sym *SymbolInfo, lowerer *Lowerer) string {
+	switch sym.Kind {
+	case SymPackage:
+		if pkg, ok := lowerer.GoPackages()[sym.Name]; ok {
+			return fmt.Sprintf("```arca\nimport go \"%s\"\n```", pkg.FullPath)
+		}
+		return fmt.Sprintf("```arca\nimport go \"%s\"\n```", sym.Name)
+	case SymFunction:
+		if fn, ok := lowerer.Functions()[sym.Name]; ok {
+			return formatFnHover(fn)
+		}
+	case SymVariable, SymParameter:
+		typeStr := typeName(sym.Type)
+		if typeStr == "unknown" && sym.IRType != nil {
+			typeStr = irTypeDisplayName(sym.IRType)
+		}
+		return fmt.Sprintf("```arca\n%s %s: %s\n```", sym.Kind, sym.Name, typeStr)
+	}
+	return ""
 }
 
 func formatFnHover(fn FnDecl) string {
