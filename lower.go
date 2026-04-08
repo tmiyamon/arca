@@ -842,6 +842,24 @@ func irTypeDisplayStr(t IRType) string {
 	}
 }
 
+// irTypeEmitStr returns a Go type string for an IRType (used for type args).
+func irTypeEmitStr(t IRType) string {
+	switch tt := t.(type) {
+	case IRNamedType:
+		return tt.GoName
+	case IRPointerType:
+		return "*" + irTypeEmitStr(tt.Inner)
+	case IRResultType:
+		return "Result_[" + irTypeEmitStr(tt.Ok) + ", " + irTypeEmitStr(tt.Err) + "]"
+	case IROptionType:
+		return "Option_[" + irTypeEmitStr(tt.Inner) + "]"
+	case IRListType:
+		return "[]" + irTypeEmitStr(tt.Elem)
+	default:
+		return "interface{}"
+	}
+}
+
 // bodyPos extracts start/end position from a function body expression.
 func bodyPos(body Expr) (Pos, Pos) {
 	if b, ok := body.(Block); ok {
@@ -1047,7 +1065,7 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 	case FieldAccess:
 		return l.lowerFieldAccess(e)
 	case ConstructorCall:
-		return l.lowerConstructorCall(e)
+		return l.lowerConstructorCallHint(e, hint)
 	case Block:
 		return l.lowerBlockHint(e, hint)
 	case MatchExpr:
@@ -1622,21 +1640,14 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		return l.lowerLambda(lam)
 	}
 
-	// Resolve expected type for hint-based type checking
+	// Resolve expected type for hint-based type checking and constructor type inference
 	var hint IRType
 	if fnIdent, ok := call.Fn.(Ident); ok {
 		if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
 			hint = l.lowerType(fn.Params[argIndex].Type)
 		}
 	}
-	result := l.lowerExprHint(expr, nil) // lower without hint (avoid double check)
-	if hint != nil && result != nil {
-		pos := exprPos(expr)
-		if pos.Line == 0 {
-			pos = call.Pos // fallback to call site position
-		}
-		l.checkTypeHintPos(result, hint, pos)
-	}
+	result := l.lowerExprHint(expr, hint)
 	return result
 }
 
@@ -1745,21 +1756,40 @@ func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 	}
 }
 
-func (l *Lowerer) lowerConstructorCall(e ConstructorCall) IRExpr {
+func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExpr {
 	// Built-in Result constructors
 	if e.Name == "Ok" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
 		val := l.lowerExpr(e.Fields[0].Value)
 		typeArgs := l.resultTypeArgs()
+		// Use hint to derive type args if resultTypeArgs() is empty
+		if typeArgs == "" {
+			if rt, ok := hint.(IRResultType); ok {
+				typeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
+			}
+		}
 		okType := val.irType()
-		return IROkCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: IRNamedType{GoName: "error"}}}
+		errType := IRType(IRNamedType{GoName: "error"})
+		if rt, ok := hint.(IRResultType); ok {
+			errType = rt.Err
+		}
+		return IROkCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: errType}}
 	}
 	if e.Name == "Error" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
 		val := l.lowerExpr(e.Fields[0].Value)
 		typeArgs := l.resultTypeArgs()
+		if typeArgs == "" {
+			if rt, ok := hint.(IRResultType); ok {
+				typeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
+			}
+		}
 		errType := val.irType()
-		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: IRInterfaceType{}, Err: errType}}
+		okType := IRType(IRInterfaceType{})
+		if rt, ok := hint.(IRResultType); ok {
+			okType = rt.Ok
+		}
+		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: errType}}
 	}
 	// Built-in Option constructors
 	if e.Name == "Some" && len(e.Fields) == 1 {
@@ -1769,7 +1799,13 @@ func (l *Lowerer) lowerConstructorCall(e ConstructorCall) IRExpr {
 	}
 	if e.Name == "None" {
 		l.builtins["option"] = true
-		return IRNoneExpr{TypeArg: "[any]", Type: IROptionType{Inner: IRInterfaceType{}}}
+		typeArg := "[any]"
+		innerType := IRType(IRInterfaceType{})
+		if ot, ok := hint.(IROptionType); ok {
+			typeArg = "[" + irTypeEmitStr(ot.Inner) + "]"
+			innerType = ot.Inner
+		}
+		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
 	}
 
 	return l.lowerUserConstructorCall(e)
