@@ -40,6 +40,10 @@ type IROptionType struct {
 
 type IRInterfaceType struct{} // fallback: interface{}
 
+type IRTypeVar struct {
+	ID int // unique identifier for this type variable
+}
+
 func (IRNamedType) irTypeNode()     {}
 func (IRPointerType) irTypeNode()   {}
 func (IRTupleType) irTypeNode()     {}
@@ -47,6 +51,7 @@ func (IRListType) irTypeNode()      {}
 func (IRResultType) irTypeNode()    {}
 func (IROptionType) irTypeNode()    {}
 func (IRInterfaceType) irTypeNode() {}
+func (IRTypeVar) irTypeNode()       {}
 
 // --- Program ---
 

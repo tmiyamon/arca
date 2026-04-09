@@ -1093,6 +1093,8 @@ func (em *Emitter) irTypeStr(t IRType) string {
 		return fmt.Sprintf("Option_[%s]", em.irTypeStr(tt.Inner))
 	case IRInterfaceType:
 		return "interface{}"
+	case IRTypeVar:
+		return "interface{}" // unresolved type variable
 	default:
 		return "interface{}"
 	}

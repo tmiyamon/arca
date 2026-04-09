@@ -32,6 +32,148 @@ type Lowerer struct {
 	symbols      []SymbolInfo // all symbols (flat, for LSP global list)
 	rootScope    *Scope       // root of scope tree (preserved after lowering)
 	currentScope *Scope       // current scope during lowering
+
+	// HM type inference
+	typeVarCounter int
+	substitution   map[int]IRType // type var ID → resolved type
+}
+
+// --- HM type inference ---
+
+// freshTypeVar creates a new type variable with a unique ID.
+func (l *Lowerer) freshTypeVar() IRTypeVar {
+	l.typeVarCounter++
+	return IRTypeVar{ID: l.typeVarCounter}
+}
+
+// resolve follows the substitution chain to find the concrete type for a type variable.
+func (l *Lowerer) resolve(t IRType) IRType {
+	tv, ok := t.(IRTypeVar)
+	if !ok {
+		return t
+	}
+	if resolved, exists := l.substitution[tv.ID]; exists {
+		r := l.resolve(resolved)
+		l.substitution[tv.ID] = r // path compression
+		return r
+	}
+	return t
+}
+
+// resolveDeep recursively resolves all type variables within a type.
+func (l *Lowerer) resolveDeep(t IRType) IRType {
+	if t == nil {
+		return nil
+	}
+	t = l.resolve(t)
+	switch tt := t.(type) {
+	case IRResultType:
+		return IRResultType{Ok: l.resolveDeep(tt.Ok), Err: l.resolveDeep(tt.Err)}
+	case IROptionType:
+		return IROptionType{Inner: l.resolveDeep(tt.Inner)}
+	case IRListType:
+		return IRListType{Elem: l.resolveDeep(tt.Elem)}
+	case IRTupleType:
+		elems := make([]IRType, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = l.resolveDeep(e)
+		}
+		return IRTupleType{Elements: elems}
+	case IRPointerType:
+		return IRPointerType{Inner: l.resolveDeep(tt.Inner)}
+	case IRNamedType:
+		if len(tt.Params) == 0 {
+			return tt
+		}
+		params := make([]IRType, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = l.resolveDeep(p)
+		}
+		return IRNamedType{GoName: tt.GoName, Params: params}
+	default:
+		return t
+	}
+}
+
+// unify attempts to make two types equal by binding type variables.
+// Returns true if unification succeeds.
+func (l *Lowerer) unify(a, b IRType) bool {
+	a = l.resolve(a)
+	b = l.resolve(b)
+
+	if a == nil || b == nil {
+		return true
+	}
+
+	// Type variable on either side: bind it
+	if av, ok := a.(IRTypeVar); ok {
+		l.substitution[av.ID] = b
+		return true
+	}
+	if bv, ok := b.(IRTypeVar); ok {
+		l.substitution[bv.ID] = a
+		return true
+	}
+
+	// IRInterfaceType matches anything (backward compat)
+	if _, ok := a.(IRInterfaceType); ok {
+		return true
+	}
+	if _, ok := b.(IRInterfaceType); ok {
+		return true
+	}
+
+	// Structural unification
+	switch at := a.(type) {
+	case IRNamedType:
+		bt, ok := b.(IRNamedType)
+		if !ok || at.GoName != bt.GoName || len(at.Params) != len(bt.Params) {
+			return false
+		}
+		for i := range at.Params {
+			if !l.unify(at.Params[i], bt.Params[i]) {
+				return false
+			}
+		}
+		return true
+	case IRResultType:
+		bt, ok := b.(IRResultType)
+		if !ok {
+			return false
+		}
+		return l.unify(at.Ok, bt.Ok) && l.unify(at.Err, bt.Err)
+	case IROptionType:
+		bt, ok := b.(IROptionType)
+		if !ok {
+			return false
+		}
+		return l.unify(at.Inner, bt.Inner)
+	case IRListType:
+		bt, ok := b.(IRListType)
+		if !ok {
+			return false
+		}
+		return l.unify(at.Elem, bt.Elem)
+	case IRTupleType:
+		bt, ok := b.(IRTupleType)
+		if !ok || len(at.Elements) != len(bt.Elements) {
+			return false
+		}
+		for i := range at.Elements {
+			if !l.unify(at.Elements[i], bt.Elements[i]) {
+				return false
+			}
+		}
+		return true
+	case IRPointerType:
+		bt, ok := b.(IRPointerType)
+		if !ok {
+			return false
+		}
+		return l.unify(at.Inner, bt.Inner)
+	}
+
+	return false
 }
 
 func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
@@ -164,6 +306,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		typeResolver: resolver,
 		rootScope:    root,
 		currentScope: root,
+		substitution: make(map[int]IRType),
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -948,6 +1091,8 @@ func irTypeEmitStr(t IRType) string {
 		return "Option_[" + irTypeEmitStr(tt.Inner) + "]"
 	case IRListType:
 		return "[]" + irTypeEmitStr(tt.Elem)
+	case IRTypeVar:
+		return "interface{}" // unresolved type variable falls back to interface{}
 	default:
 		return "interface{}"
 	}
@@ -1902,19 +2047,19 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 			valHint = rt.Ok
 		}
 		val := l.lowerExprHint(e.Fields[0].Value, valHint)
-		typeArgs := l.resultTypeArgs()
-		// Use hint to derive type args if resultTypeArgs() is empty
-		if typeArgs == "" {
-			if rt, ok := hint.(IRResultType); ok {
-				typeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
-			}
-		}
 		okType := val.irType()
 		errType := IRType(IRNamedType{GoName: "error"})
 		if rt, ok := hint.(IRResultType); ok {
+			l.unify(okType, rt.Ok)
 			errType = rt.Err
 		}
-		return IROkCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: errType}}
+		resultType := IRResultType{Ok: okType, Err: errType}
+		typeArgs := l.resultTypeArgs()
+		if typeArgs == "" {
+			resolved := l.resolveDeep(resultType).(IRResultType)
+			typeArgs = "[" + irTypeEmitStr(resolved.Ok) + ", " + irTypeEmitStr(resolved.Err) + "]"
+		}
+		return IROkCall{Value: val, TypeArgs: typeArgs, Type: resultType}
 	}
 	if e.Name == "Error" && len(e.Fields) == 1 {
 		l.builtins["result"] = true
@@ -1923,18 +2068,19 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 			valHint = rt.Err
 		}
 		val := l.lowerExprHint(e.Fields[0].Value, valHint)
-		typeArgs := l.resultTypeArgs()
-		if typeArgs == "" {
-			if rt, ok := hint.(IRResultType); ok {
-				typeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
-			}
-		}
 		errType := val.irType()
-		okType := IRType(IRInterfaceType{})
+		okType := IRType(l.freshTypeVar())
 		if rt, ok := hint.(IRResultType); ok {
+			l.unify(okType, rt.Ok)
 			okType = rt.Ok
 		}
-		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: IRResultType{Ok: okType, Err: errType}}
+		resultType := IRResultType{Ok: okType, Err: errType}
+		typeArgs := l.resultTypeArgs()
+		if typeArgs == "" {
+			resolved := l.resolveDeep(resultType).(IRResultType)
+			typeArgs = "[" + irTypeEmitStr(resolved.Ok) + ", " + irTypeEmitStr(resolved.Err) + "]"
+		}
+		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: resultType}
 	}
 	// Built-in Option constructors
 	if e.Name == "Some" && len(e.Fields) == 1 {
@@ -1944,12 +2090,13 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 	}
 	if e.Name == "None" {
 		l.builtins["option"] = true
-		typeArg := "[any]"
-		innerType := IRType(IRInterfaceType{})
+		innerType := IRType(l.freshTypeVar())
 		if ot, ok := hint.(IROptionType); ok {
-			typeArg = "[" + irTypeEmitStr(ot.Inner) + "]"
+			l.unify(innerType, ot.Inner)
 			innerType = ot.Inner
 		}
+		resolved := l.resolveDeep(innerType)
+		typeArg := "[" + irTypeEmitStr(resolved) + "]"
 		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
 	}
 
