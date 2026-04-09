@@ -134,7 +134,7 @@ type IRWildcardPattern struct {}
 
 ---
 
-## 2026-04-05: Unit in void context generates unused value (open bug)
+## 2026-04-05: Unit in void context generates unused value
 
 **Problem:** `Ok(_) -> Unit` in a match arm emits `struct{}{}` in Go. Go rejects this as an unused value (`struct{}{} (value of type struct{}) is not used`).
 
