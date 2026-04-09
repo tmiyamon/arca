@@ -26,7 +26,18 @@ var prelude = map[string]BuiltinDef{
 			return nil
 		},
 	},
-	"map":    {GoFunc: "Map_", Builtin: "map"},
-	"filter": {GoFunc: "Filter_", Builtin: "filter"},
-	"fold":   {GoFunc: "Fold_", Builtin: "fold"},
+	"map":       {GoFunc: "Map_", Builtin: "map"},
+	"filter":    {GoFunc: "Filter_", Builtin: "filter"},
+	"fold":      {GoFunc: "Fold_", Builtin: "fold"},
+	"take":      {GoFunc: "Take_", Builtin: "take"},
+	"takeWhile": {GoFunc: "TakeWhile_", Builtin: "takeWhile"},
+	"len": {
+		GoFunc: "len",
+		Lower: func(args []IRExpr) IRExpr {
+			if len(args) == 1 {
+				return IRFnCall{Func: "len", Args: args, Type: IRNamedType{GoName: "int"}}
+			}
+			return nil
+		},
+	},
 }

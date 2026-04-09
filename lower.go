@@ -3223,8 +3223,8 @@ func (l *Lowerer) lowerExprs(exprs []Expr) []IRExpr {
 // lowerPreludeArgs lowers arguments for prelude functions (map, filter, fold),
 // inferring lambda parameter types from the list element type.
 func (l *Lowerer) lowerPreludeArgs(fnName string, args []Expr) []IRExpr {
-	// For map/filter: first arg is list, second is lambda
-	if (fnName == "map" || fnName == "filter") && len(args) == 2 {
+	// For map/filter/takeWhile: first arg is list, second is lambda
+	if (fnName == "map" || fnName == "filter" || fnName == "takeWhile") && len(args) == 2 {
 		listArg := l.lowerExpr(args[0])
 		if lam, ok := args[1].(Lambda); ok {
 			if lt, ok := listArg.irType().(IRListType); ok {
@@ -3275,9 +3275,9 @@ func (l *Lowerer) inferPreludeReturnType(name string, args []IRExpr) IRType {
 				return lt
 			}
 		}
-	case "filter":
-		// filter(list, f) → same list type
-		if len(args) == 2 {
+	case "filter", "take", "takeWhile":
+		// filter/take/takeWhile(list, ...) → same list type
+		if len(args) >= 1 {
 			return args[0].irType()
 		}
 	case "fold":

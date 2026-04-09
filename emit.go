@@ -1088,6 +1088,28 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		})
 		w.Line("")
 	}
+	if set["take"] {
+		w.Func("Take_[T any]", "list []T, n int", "[]T", func() {
+			w.If("n > len(list)", func() {
+				w.Stmt("n = len(list)")
+			})
+			w.Return("list[:n]")
+		})
+		w.Line("")
+	}
+	if set["takeWhile"] {
+		w.Func("TakeWhile_[T any]", "list []T, f func(T) bool", "[]T", func() {
+			w.Var("result", "[]T")
+			w.For("_, v := range list", func() {
+				w.If("!f(v)", func() {
+					w.Return("result")
+				})
+				w.Stmt("result = append(result, v)")
+			})
+			w.Return("result")
+		})
+		w.Line("")
+	}
 }
 
 // --- Type Rendering ---
