@@ -1120,6 +1120,26 @@ func (p *Parser) parseTupleOrLambda() (Expr, error) {
 		}
 		if isLambda && p.peek().Kind == TkRParen {
 			p.advance()
+			// Check if all params have no type annotation → shorthand lambda with ->
+			allUntyped := true
+			for _, lp := range lparams {
+				if lp.typ != nil {
+					allUntyped = false
+					break
+				}
+			}
+			if allUntyped && p.peek().Kind == TkArrow {
+				p.advance()
+				body, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				var params []LambdaParam
+				for _, lp := range lparams {
+					params = append(params, LambdaParam{Name: lp.name})
+				}
+				return Lambda{Params: params, Body: body}, nil
+			}
 			var retType Type
 			if p.peek().Kind == TkArrow {
 				p.advance()
