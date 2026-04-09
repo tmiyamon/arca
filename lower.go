@@ -1584,7 +1584,8 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 						return result
 					}
 				} else {
-					return IRFnCall{Func: def.GoFunc, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
+					retType := l.inferPreludeReturnType(ident.Name, args)
+					return IRFnCall{Func: def.GoFunc, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
 				}
 			}
 		}
@@ -3260,6 +3261,34 @@ func (l *Lowerer) lowerPreludeArgs(fnName string, args []Expr) []IRExpr {
 }
 
 // irTypeToASTType converts an IRType back to an AST Type for lambda param inference.
+// inferPreludeReturnType infers the return type of prelude functions from their arguments.
+func (l *Lowerer) inferPreludeReturnType(name string, args []IRExpr) IRType {
+	switch name {
+	case "map":
+		// map(list, f) → []U where U is f's return type
+		if len(args) == 2 {
+			if lam, ok := args[1].(IRLambda); ok && lam.ReturnType != nil {
+				return IRListType{Elem: lam.ReturnType}
+			}
+			// Fallback: same element type as input list
+			if lt, ok := args[0].irType().(IRListType); ok {
+				return lt
+			}
+		}
+	case "filter":
+		// filter(list, f) → same list type
+		if len(args) == 2 {
+			return args[0].irType()
+		}
+	case "fold":
+		// fold(list, init, f) → type of init
+		if len(args) == 3 {
+			return args[1].irType()
+		}
+	}
+	return IRInterfaceType{}
+}
+
 func (l *Lowerer) irTypeToASTType(t IRType) Type {
 	switch tt := t.(type) {
 	case IRNamedType:

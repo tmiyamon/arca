@@ -20,8 +20,11 @@ IR pipeline, lowering, validation, codegen. Newest first.
 - Binary expression type inference from operands
 - Match expression type from arm body unification
 - Lambda return type from body expression
+- Prelude return type inference: map returns list of lambda return type, filter preserves input type
+- Pipe chain type propagation: `[1,2,3] |> filter(x -> x > 2) |> map(x -> x * 10)` fully inferred
+- Let chain propagation: type variables in scope flow through `let y = x` to later usage
 
-**Result:** `let r = Ok(42)`, `let x = None; f(x)`, `let items = []; g(items)` all work without type annotations. Function signatures remain explicit (Rust/Kotlin style).
+**Result:** `let r = Ok(42)`, `let x = None; f(x)`, `let items = []; g(items)`, pipe chains all work without type annotations. Function signatures remain explicit (Rust/Kotlin style).
 
 **Status:** Done
 
