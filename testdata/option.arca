@@ -2,8 +2,8 @@ import go "fmt"
 
 fun greet(name: Option[String]) -> String {
   match name {
-    Some(n) -> "Hello ${n}!"
-    None -> "Hello stranger!"
+    Some(n) => "Hello ${n}!"
+    None => "Hello stranger!"
   }
 }
 

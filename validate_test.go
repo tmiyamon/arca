@@ -117,8 +117,8 @@ type Color {
 
 fun name(c: Color) -> String {
   match c {
-    Red -> "red"
-    _ -> "other"
+    Red => "red"
+    _ => "other"
   }
 }
 `)
@@ -138,9 +138,9 @@ type Color {
 
 fun name(c: Color) -> String {
   match c {
-    Red -> "red"
-    Green -> "green"
-    Blue -> "blue"
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
   }
 }
 `)
@@ -160,8 +160,8 @@ type Color {
 
 fun name(c: Color) -> String {
   match c {
-    Red -> "red"
-    _ -> "other"
+    Red => "red"
+    _ => "other"
   }
 }
 `)
@@ -206,8 +206,8 @@ type User {
 
 pub fun is_active(u: User) -> Bool {
   match u.status {
-    Active -> True
-    Inactive -> False
+    Active => True
+    Inactive => False
   }
 }
 `)
@@ -310,7 +310,7 @@ fun greet(name: String) -> String {
 
 fun use(w: Wrapper) -> String {
   match w {
-    Wrap(value) -> greet(value)
+    Wrap(value) => greet(value)
   }
 }
 `)
@@ -321,7 +321,7 @@ fun use(w: Wrapper) -> String {
 
 func TestValidateConstraintCompatibility(t *testing.T) {
 	t.Parallel()
-	// AdultAge -> Age: compatible (stricter range fits in wider range)
+	// AdultAge => Age: compatible (stricter range fits in wider range)
 	errs := validateSource(`
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
@@ -335,7 +335,7 @@ fun main() {
 		t.Fatalf("expected no errors for AdultAge->Age, got: %v", errs)
 	}
 
-	// Age -> AdultAge: NOT compatible (wider range doesn't fit in stricter)
+	// Age => AdultAge: NOT compatible (wider range doesn't fit in stricter)
 	errs = validateSource(`
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
@@ -371,7 +371,7 @@ func TestExhaustiveness(t *testing.T) {
 fun main() {
   let r = Ok(1)
   match r {
-    Ok(n) -> println(n)
+    Ok(n) => println(n)
   }
 }
 `)
@@ -384,8 +384,8 @@ fun main() {
 fun main() {
   let r = Ok(1)
   match r {
-    Ok(n) -> println(n)
-    Error(e) -> println(e)
+    Ok(n) => println(n)
+    Error(e) => println(e)
   }
 }
 `)
@@ -431,9 +431,9 @@ fun add(a: Int, b: Int) -> Int {
 	errs = validateSource(`
 fun test(x: Int) -> String {
   match x {
-    1 -> "one"
-    2 -> 42
-    _ -> "other"
+    1 => "one"
+    2 => 42
+    _ => "other"
   }
 }
 `)

@@ -1,37 +1,83 @@
 import go "database/sql"
 import go "net/http"
+import go "time"
 import go "github.com/labstack/echo/v5"
 import go _ "github.com/mattn/go-sqlite3"
+
+import arca/stdlib
+
+type App (
+  db: *sql.DB
+) {
+  static fun create() -> Result[Self, error] {
+    let db = sql.Open("sqlite3", "./todo.db")?
+
+    db.Exec("""
+      create table if not exists todo (
+        id          integer   primary key autoincrement, 
+        body        text      not null,
+        started_at  datetime,
+        finished_at datetime
+      )
+    """)?
+
+    Ok(App(db))
+  }
+
+  fun finish() {
+    self.db.Close()
+  }
+}
 
 type Todo (
   id: Int
   body: String { max_length: 255 }
-  isFinished: Bool
-)
+  startedAt: Option[time.Time]
+  finishedAt: Option[time.Time]
+) {
+  tags { json } 
+}
 
-fun getTodo(c: *echo.Context) -> error {
+fun getTodo(app: App, c: *echo.Context) -> error {
+  app.db.Exec("select * from todos order by id")?
+
   c.String(http.StatusOK, "Hello World!")
 }
 
-fun main() {
-  let db = sql.Open("sqlite3", "./todo.db")?
-  defer db.Close()
+fun selectTodo(app: App, c: *echo.Context) -> Result[List[Todo], error] {
+	let rows = app.db.Query("SELECT * FROM todos order by id")?
+	defer rows.Close()
 
-  let r = db.Exec("""
-  create table if not exists todo (
-    id          primary key autoincrement, 
-    body        text not null,
-    is_finished boolean
-  )
-  """)
-  match r { 
-    Ok(_) -> Unit
-    Error(e) -> println("db ddl error: ${e}")
+	for r in rows.Next() {
+    let id: Int = 0
+    let body: String = ""
+    r.Scan(&id, &body)?
+	}
+}
+
+fun postTodo(app: App, c: *echo.Context) -> error {
+  let result = createTodo(app, c)
+  match result {
+    Ok(todo) -> c.JSON(http.StatusOK, todo)
+    Error(e) -> c.JSON(http.StatusBadRequest, None)
   }
+}
+
+fun createTodo(app: App, c: *echo.Context) -> Result[Todo, error] {
+  let todo = Todo(0, "", None, None)?
+  c.Bind(todo)?
+  app.db.Exec("insert into todos (body) values (?)", todo.body)?
+  Ok(todo)
+}
+
+fun main() {
+  let app = App.create()?
+  defer app.finish()
 
   let e = echo.New()
 
-  e.GET("/", getTodo)
+  e.GET("/", c => getTodo(app, c))
+  e.POST("/", c => postTodo(app, c))
 
   let result = e.Start(":8080")
   match result {

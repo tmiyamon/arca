@@ -5,7 +5,7 @@ type Response {
 
 fun unwrap(r: Response) -> String {
   match r {
-    Ok(value) -> value
-    Err(message) -> message
+    Ok(value) => value
+    Err(message) => message
   }
 }

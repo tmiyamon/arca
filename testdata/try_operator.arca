@@ -8,7 +8,7 @@ fun parseAndDouble(s: String) -> Result[Int, error] {
 fun main() {
   let result = parseAndDouble("21")
   match result {
-    Ok(n) -> println(n)
-    Error(err) -> println(err)
+    Ok(n) => println(n)
+    Error(err) => println(err)
   }
 }

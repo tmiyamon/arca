@@ -3,7 +3,7 @@ type Email = String{min_length: 5, max_length: 255}
 fun main() {
   let result = Email("test@example.com")
   match result {
-    Ok(email) -> println(email)
-    Error(err) -> println(err)
+    Ok(email) => println(email)
+    Error(err) => println(err)
   }
 }

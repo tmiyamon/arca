@@ -8,9 +8,9 @@ type Color {
 
 fun colorName(c: Color) -> String {
   match c {
-    Red -> "red"
-    Green -> "green"
-    Blue -> "blue"
+    Red => "red"
+    Green => "green"
+    Blue => "blue"
   }
 }
 

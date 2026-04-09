@@ -955,8 +955,8 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 	case TkIdent:
 		p.advance()
-		// Shorthand lambda: x -> body
-		if p.peek().Kind == TkArrow {
+		// Shorthand lambda: x => body
+		if p.peek().Kind == TkFatArrow {
 			p.advance()
 			body, err := p.parseExpr()
 			if err != nil {
@@ -1176,7 +1176,7 @@ func (p *Parser) parseTupleOrLambda() (Expr, error) {
 					break
 				}
 			}
-			if allUntyped && p.peek().Kind == TkArrow {
+			if allUntyped && p.peek().Kind == TkFatArrow {
 				p.advance()
 				body, err := p.parseExpr()
 				if err != nil {
@@ -1388,7 +1388,7 @@ func (p *Parser) parseMatchArm() (MatchArm, error) {
 	if err != nil {
 		return MatchArm{}, err
 	}
-	if _, err := p.expect(TkArrow); err != nil {
+	if _, err := p.expect(TkFatArrow); err != nil {
 		return MatchArm{}, err
 	}
 	body, err := p.parseExpr()

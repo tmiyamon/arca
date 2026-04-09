@@ -2,8 +2,8 @@ import go "fmt"
 
 fun describe(items: List[String]) -> String {
   match items {
-    [] -> "empty"
-    [first, ..rest] -> "first: ${first}"
+    [] => "empty"
+    [first, ..rest] => "first: ${first}"
   }
 }
 

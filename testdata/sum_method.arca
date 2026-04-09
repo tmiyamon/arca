@@ -6,8 +6,8 @@ type Animal {
 
   fun speak() -> String {
     match self {
-      Dog(name) -> "${name} says woof"
-      Cat(name) -> "${name} says meow"
+      Dog(name) => "${name} says woof"
+      Cat(name) => "${name} says meow"
     }
   }
 }

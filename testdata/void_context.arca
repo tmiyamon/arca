@@ -5,7 +5,7 @@ fun test() -> Result[Int, error] {
 fun main() {
   let result = test()
   match result {
-    Ok(_) -> Unit
-    Error(e) -> println(e)
+    Ok(_) => Unit
+    Error(e) => println(e)
   }
 }

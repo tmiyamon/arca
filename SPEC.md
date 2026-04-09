@@ -71,9 +71,9 @@ type Pair[A, B] {
 ```
 pub fun statusLabel(status: OrderStatus) -> String {
   match status {
-    Pending -> "pending"
-    Confirmed -> "confirmed"
-    Shipped -> "shipped"
+    Pending => "pending"
+    Confirmed => "confirmed"
+    Shipped => "shipped"
   }
 }
 
@@ -120,8 +120,8 @@ let pair: (Int, String) = (1, "hello")
 (x: Int, y: Int) -> Int => x + y
 
 // Shorthand (types inferred from context)
-x -> x + 1
-(x, y) -> x + y
+x => x + 1
+(x, y) => x + y
 ```
 
 ### If Expression
@@ -155,9 +155,9 @@ let item = items[i]
 
 ```
 users
-|> filter(u -> u.age > 20)
-|> map(u -> u.name)
-|> fold(0, (acc, x) -> acc + x)
+|> filter(u => u.age > 20)
+|> map(u => u.name)
+|> fold(0, (acc, x) => acc + x)
 ```
 
 ### String Interpolation
@@ -252,8 +252,8 @@ let items = []                     // []T — T resolved from later usage
 fun process(r: Result[Int, error]) { ... }
 process(r)                          // r's type variable resolved to Result[Int, error]
 
-map(nums, x -> x * 2)              // x type inferred from list element type
-sort.Slice(s, (i, j) -> s[i] < s[j])  // i, j inferred from Go FFI signature
+map(nums, x => x * 2)              // x type inferred from list element type
+sort.Slice(s, (i, j) => s[i] < s[j])  // i, j inferred from Go FFI signature
 ```
 
 Function signatures require explicit types (Rust/Kotlin style). Inference operates within function bodies.
@@ -433,8 +433,8 @@ type Greeting {
 
   static fun from(s: String) -> Greeting {
     match s {
-      "Hello" -> Self.Hello(name: "World")
-      _ -> Self.Goodbye(name: "World")
+      "Hello" => Self.Hello(name: "World")
+      _ => Self.Goodbye(name: "World")
     }
   }
 }

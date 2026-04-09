@@ -264,8 +264,8 @@ type Greeting {
 
   static fun from(s: String) -> Greeting {
     match s {
-      "Hello" -> Self.Hello(name: "World")
-      _ -> Self.Goodbye(name: "World")
+      "Hello" => Self.Hello(name: "World")
+      _ => Self.Goodbye(name: "World")
     }
   }
 }

@@ -327,7 +327,7 @@ func (f *Formatter) formatMatchExpr(me MatchExpr) string {
 	f.indent++
 	for _, arm := range me.Arms {
 		buf.WriteString(strings.Repeat("  ", f.indent))
-		buf.WriteString(f.formatPattern(arm.Pattern) + " -> " + f.formatExpr(arm.Body) + "\n")
+		buf.WriteString(f.formatPattern(arm.Pattern) + " => " + f.formatExpr(arm.Body) + "\n")
 	}
 	f.indent--
 	buf.WriteString(strings.Repeat("  ", f.indent) + "}")
