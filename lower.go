@@ -2432,7 +2432,7 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
-		Type:       retType,
+		Type:       IRInterfaceType{}, // lambda type is opaque to Go FFI arg checking
 	}
 }
 
