@@ -218,6 +218,16 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 			expr.Arms[i].Body = l.resolveExprTypes(arm.Body)
 		}
 		return expr
+	case IRListLit:
+		resolved := l.resolveDeep(expr.Type)
+		if lt, ok := resolved.(IRListType); ok {
+			expr.ElemType = irTypeEmitStr(lt.Elem)
+		}
+		expr.Type = resolved
+		for i, e := range expr.Elements {
+			expr.Elements[i] = l.resolveExprTypes(e)
+		}
+		return expr
 	case IRFnCall:
 		for i, arg := range expr.Args {
 			expr.Args[i] = l.resolveExprTypes(arg)
@@ -238,6 +248,16 @@ func (l *Lowerer) resolveStmtTypes(s IRStmt) IRStmt {
 	switch stmt := s.(type) {
 	case IRLetStmt:
 		stmt.Value = l.resolveExprTypes(stmt.Value)
+		// For empty lists with inferred type, set Type so emit generates `var x []T`
+		if stmt.Type == nil {
+			if ll, ok := stmt.Value.(IRListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
+				if lt, ok := ll.Type.(IRListType); ok {
+					if _, isTV := lt.Elem.(IRTypeVar); !isTV {
+						stmt.Type = ll.Type
+					}
+				}
+			}
+		}
 		return stmt
 	case IRExprStmt:
 		stmt.Expr = l.resolveExprTypes(stmt.Expr)
@@ -2437,9 +2457,10 @@ func (l *Lowerer) lowerForExpr(fe ForExpr) IRExpr {
 
 func (l *Lowerer) lowerListLit(ll ListLit) IRExpr {
 	if len(ll.Elements) == 0 && ll.Spread == nil {
+		elemTV := l.freshTypeVar()
 		return IRListLit{
-			ElemType: "interface{}",
-			Type:     IRListType{Elem: IRInterfaceType{}},
+			ElemType: irTypeEmitStr(elemTV),
+			Type:     IRListType{Elem: elemTV},
 		}
 	}
 
