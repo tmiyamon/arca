@@ -4,6 +4,28 @@ Language syntax, naming, import system. Newest first.
 
 ---
 
+## 2026-04-10: Arrow convention
+
+**Context:** `->` was used for match arms, lambda return type, and shorthand lambda. Three meanings for one symbol. Shorthand lambda `x -> body` collided visually with match arm `pattern -> body`.
+
+**Decision:** Scala-style separation. `->` for type-level (function return types, lambda return type annotations). `=>` for value-level (match arms, lambda body). "Given this input, produce this value."
+
+**Examples:**
+```
+// -> is type world
+fun process(x: Int) -> String { ... }
+(x: Int) -> Int => x + 1
+
+// => is value world
+match r { Ok(v) => v * 2 }
+x => x + 1
+(x, y) => x + y
+```
+
+**Status:** Done
+
+---
+
 ## 2026-04-09: If expression
 
 **Context:** Arca had no if/else. Conditional logic required match on bool.

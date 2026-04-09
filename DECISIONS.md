@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-10
+
+- [Arrow convention](decisions/syntax.md#2026-04-10-arrow-convention) — Scala-style: -> for types, => for values (match arms + lambdas)
+
 ## 2026-04-09
 
 - [HM type inference](decisions/transpiler.md#2026-04-09-hm-type-inference) — Type variables, unification, resolution pass. Ok/Error/None/empty list infer from usage
