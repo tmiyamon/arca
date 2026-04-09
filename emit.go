@@ -17,7 +17,6 @@ type Emitter struct {
 func (em *Emitter) Emit(prog IRProgram) string {
 	// Generate body first so we know what's needed
 	bodyWriter := NewGoWriter()
-	prevW := em.w
 	em.w = bodyWriter
 
 	for _, td := range prog.Types {
@@ -32,9 +31,6 @@ func (em *Emitter) Emit(prog IRProgram) string {
 	bodyStr := em.w.String()
 
 	em.w = NewGoWriter()
-	if prevW != nil {
-		em.w = prevW
-	}
 
 	w := em.w
 	pkg := prog.Package
