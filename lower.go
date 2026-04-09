@@ -1568,7 +1568,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		default:
 			// Check prelude builtins
 			if def, ok := prelude[ident.Name]; ok {
-				args := l.lowerExprs(e.Args)
+				args := l.lowerPreludeArgs(ident.Name, e.Args)
 				if def.Import != "" {
 					l.builtins[def.Import] = true
 				}
@@ -2411,11 +2411,15 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 	l.withScope(sp, ep, lamSymbols, func() {
 		body = l.lowerExpr(lam.Body)
 	})
+	// Infer return type from body if not explicitly annotated
+	if retType == nil {
+		retType = body.irType()
+	}
 	return IRLambda{
 		Params:     params,
 		ReturnType: retType,
 		Body:       body,
-		Type:       IRInterfaceType{},
+		Type:       retType,
 	}
 }
 
@@ -3156,6 +3160,60 @@ func (l *Lowerer) lowerExprs(exprs []Expr) []IRExpr {
 		result[i] = l.lowerExpr(e)
 	}
 	return result
+}
+
+// lowerPreludeArgs lowers arguments for prelude functions (map, filter, fold),
+// inferring lambda parameter types from the list element type.
+func (l *Lowerer) lowerPreludeArgs(fnName string, args []Expr) []IRExpr {
+	// For map/filter: first arg is list, second is lambda
+	if (fnName == "map" || fnName == "filter") && len(args) == 2 {
+		listArg := l.lowerExpr(args[0])
+		if lam, ok := args[1].(Lambda); ok {
+			if lt, ok := listArg.irType().(IRListType); ok {
+				// Set lambda param type from list element type
+				for i := range lam.Params {
+					if lam.Params[i].Type == nil {
+						lam.Params[i].Type = l.irTypeToASTType(lt.Elem)
+					}
+				}
+			}
+			return []IRExpr{listArg, l.lowerLambda(lam)}
+		}
+		return []IRExpr{listArg, l.lowerExpr(args[1])}
+	}
+	// For fold: first arg is list, second is init, third is lambda
+	if fnName == "fold" && len(args) == 3 {
+		listArg := l.lowerExpr(args[0])
+		initArg := l.lowerExpr(args[1])
+		if lam, ok := args[2].(Lambda); ok {
+			if lt, ok := listArg.irType().(IRListType); ok {
+				// fold lambda: (acc, elem) -> acc
+				if len(lam.Params) >= 1 && lam.Params[0].Type == nil {
+					lam.Params[0].Type = l.irTypeToASTType(initArg.irType())
+				}
+				if len(lam.Params) >= 2 && lam.Params[1].Type == nil {
+					lam.Params[1].Type = l.irTypeToASTType(lt.Elem)
+				}
+			}
+			return []IRExpr{listArg, initArg, l.lowerLambda(lam)}
+		}
+		return []IRExpr{listArg, initArg, l.lowerExpr(args[2])}
+	}
+	return l.lowerExprs(args)
+}
+
+// irTypeToASTType converts an IRType back to an AST Type for lambda param inference.
+func (l *Lowerer) irTypeToASTType(t IRType) Type {
+	switch tt := t.(type) {
+	case IRNamedType:
+		return NamedType{Name: tt.GoName}
+	case IRListType:
+		inner := l.irTypeToASTType(tt.Elem)
+		if inner != nil {
+			return NamedType{Name: "List", Params: []Type{inner}}
+		}
+	}
+	return nil
 }
 
 func (l *Lowerer) findTypeName(ctorName string) string {

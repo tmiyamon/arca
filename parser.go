@@ -952,6 +952,18 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 
 	case TkIdent:
 		p.advance()
+		// Shorthand lambda: x -> body
+		if p.peek().Kind == TkArrow {
+			p.advance()
+			body, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			return Lambda{
+				Params: []LambdaParam{{Name: tok.Lit}},
+				Body:   body,
+			}, nil
+		}
 		expr := Expr(Ident{Name: tok.Lit, NodePos: AtTok(tok)})
 		for {
 			if p.peek().Kind == TkLParen {
