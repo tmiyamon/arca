@@ -176,6 +176,80 @@ func (l *Lowerer) unify(a, b IRType) bool {
 	return false
 }
 
+// resolveExprTypes walks an IR expression tree and resolves type variables
+// to their concrete types after unification.
+func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
+	if e == nil {
+		return nil
+	}
+	switch expr := e.(type) {
+	case IRNoneExpr:
+		resolved := l.resolveDeep(expr.Type)
+		if ot, ok := resolved.(IROptionType); ok {
+			expr.TypeArg = "[" + irTypeEmitStr(ot.Inner) + "]"
+		}
+		expr.Type = resolved
+		return expr
+	case IROkCall:
+		resolved := l.resolveDeep(expr.Type)
+		if rt, ok := resolved.(IRResultType); ok {
+			expr.TypeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
+		}
+		expr.Type = resolved
+		expr.Value = l.resolveExprTypes(expr.Value)
+		return expr
+	case IRErrorCall:
+		resolved := l.resolveDeep(expr.Type)
+		if rt, ok := resolved.(IRResultType); ok {
+			expr.TypeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
+		}
+		expr.Type = resolved
+		expr.Value = l.resolveExprTypes(expr.Value)
+		return expr
+	case IRBlock:
+		for i, stmt := range expr.Stmts {
+			expr.Stmts[i] = l.resolveStmtTypes(stmt)
+		}
+		expr.Expr = l.resolveExprTypes(expr.Expr)
+		return expr
+	case IRMatch:
+		expr.Subject = l.resolveExprTypes(expr.Subject)
+		for i, arm := range expr.Arms {
+			expr.Arms[i].Body = l.resolveExprTypes(arm.Body)
+		}
+		return expr
+	case IRFnCall:
+		for i, arg := range expr.Args {
+			expr.Args[i] = l.resolveExprTypes(arg)
+		}
+		return expr
+	case IRMethodCall:
+		expr.Receiver = l.resolveExprTypes(expr.Receiver)
+		for i, arg := range expr.Args {
+			expr.Args[i] = l.resolveExprTypes(arg)
+		}
+		return expr
+	default:
+		return e
+	}
+}
+
+func (l *Lowerer) resolveStmtTypes(s IRStmt) IRStmt {
+	switch stmt := s.(type) {
+	case IRLetStmt:
+		stmt.Value = l.resolveExprTypes(stmt.Value)
+		return stmt
+	case IRExprStmt:
+		stmt.Expr = l.resolveExprTypes(stmt.Expr)
+		return stmt
+	case IRTryLetStmt:
+		stmt.CallExpr = l.resolveExprTypes(stmt.CallExpr)
+		return stmt
+	default:
+		return s
+	}
+}
+
 func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
 	l.errors = append(l.errors, CompileError{
 		Pos:   pos,
@@ -658,6 +732,9 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	})
 	l.currentRetType = nil
 
+	// Resolution pass: resolve type variables in function body
+	body = l.resolveExprTypes(body)
+
 	return IRFuncDecl{
 		GoName:     name,
 		Params:     params,
@@ -697,6 +774,8 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	l.currentReceiver = ""
 	l.currentTypeName = ""
 	l.currentRetType = nil
+
+	body = l.resolveExprTypes(body)
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -1337,11 +1416,14 @@ func (l *Lowerer) lowerIdentHint(e Ident, hint IRType) IRExpr {
 	// None with hint: use hint to resolve inner type
 	if e.Name == "None" {
 		l.builtins["option"] = true
+		innerType := IRType(l.freshTypeVar())
 		if ot, ok := hint.(IROptionType); ok {
-			typeArg := "[" + irTypeEmitStr(ot.Inner) + "]"
-			return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: ot.Inner}}
+			l.unify(innerType, ot.Inner)
+			innerType = ot.Inner
 		}
-		return IRNoneExpr{TypeArg: "[any]", Type: IROptionType{Inner: IRInterfaceType{}}}
+		resolved := l.resolveDeep(innerType)
+		typeArg := "[" + irTypeEmitStr(resolved) + "]"
+		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
 	}
 	return l.lowerIdent(e)
 }
@@ -1358,7 +1440,10 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	// None bare identifier
 	if e.Name == "None" {
 		l.builtins["option"] = true
-		return IRNoneExpr{TypeArg: "[any]", Type: IROptionType{Inner: IRInterfaceType{}}}
+		innerType := IRType(l.freshTypeVar())
+		resolved := l.resolveDeep(innerType)
+		typeArg := "[" + irTypeEmitStr(resolved) + "]"
+		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
 	}
 	// Enum variant bare reference: e.g. `Red` resolves to `ColorRed`
 	if typeName := l.findTypeName(e.Name); typeName != "" {
@@ -1536,8 +1621,17 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 		var fnType IRType = IRInterfaceType{}
 		var goMultiReturn bool
 		if id, ok := e.Fn.(Ident); ok {
-			if fn, ok := l.functions[id.Name]; ok && fn.ReturnType != nil {
-				fnType = l.lowerType(fn.ReturnType)
+			if fn, ok := l.functions[id.Name]; ok {
+				// Unify argument types with parameter types
+				for i, arg := range args {
+					if i < len(fn.Params) {
+						paramType := l.lowerType(fn.Params[i].Type)
+						l.unify(arg.irType(), paramType)
+					}
+				}
+				if fn.ReturnType != nil {
+					fnType = l.lowerType(fn.ReturnType)
+				}
 			}
 		}
 		// Fall back to Go FFI resolution
@@ -2050,9 +2144,12 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 		okType := val.irType()
 		errType := IRType(IRNamedType{GoName: "error"})
 		if rt, ok := hint.(IRResultType); ok {
-			l.unify(okType, rt.Ok)
+			okType = rt.Ok
 			errType = rt.Err
+		} else if _, isIface := okType.(IRInterfaceType); isIface {
+			okType = l.freshTypeVar()
 		}
+		l.unify(okType, val.irType())
 		resultType := IRResultType{Ok: okType, Err: errType}
 		typeArgs := l.resultTypeArgs()
 		if typeArgs == "" {
