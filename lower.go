@@ -1403,6 +1403,8 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 		return l.lowerFieldAccess(e)
 	case IndexAccess:
 		return l.lowerIndexAccess(e)
+	case IfExpr:
+		return l.lowerIfExpr(e)
 	case ConstructorCall:
 		return l.lowerConstructorCallHint(e, hint)
 	case Block:
@@ -2152,6 +2154,22 @@ func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 		Field: capitalize(e.Field),
 		Type:  fieldType,
 	}
+}
+
+func (l *Lowerer) lowerIfExpr(e IfExpr) IRExpr {
+	cond := l.lowerExpr(e.Cond)
+	then := l.lowerExpr(e.Then)
+	var elseBody IRExpr
+	if e.Else != nil {
+		elseBody = l.lowerExpr(e.Else)
+	}
+	// Unify then/else types
+	var typ IRType = then.irType()
+	if elseBody != nil {
+		l.unify(typ, elseBody.irType())
+		typ = l.resolveDeep(typ)
+	}
+	return IRIfExpr{Cond: cond, Then: then, Else: elseBody, Type: typ}
 }
 
 func (l *Lowerer) lowerIndexAccess(e IndexAccess) IRExpr {

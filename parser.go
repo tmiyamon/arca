@@ -912,6 +912,9 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 	case TkMatch:
 		return p.parseMatchExpr()
 
+	case TkIf:
+		return p.parseIfExpr()
+
 	case TkUpperIdent:
 		expr, err := p.parseConstructorOrIdent()
 		if err != nil {
@@ -1062,6 +1065,40 @@ func (p *Parser) parseStringInterp() (Expr, error) {
 	}
 	p.advance() // skip InterpEnd
 	return StringInterp{Parts: parts, Multiline: multiline}, nil
+}
+
+func (p *Parser) parseIfExpr() (Expr, error) {
+	tok := p.advance() // skip 'if'
+	cond, err := p.parseExpr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind != TkLBrace {
+		return nil, fmt.Errorf("%d:%d: expected '{' after if condition", p.peek().Line, p.peek().Col)
+	}
+	then, err := p.parseBlockExpr()
+	if err != nil {
+		return nil, err
+	}
+	var elseBody Expr
+	if p.peek().Kind == TkElse {
+		p.advance()
+		if p.peek().Kind == TkIf {
+			// else if
+			elseBody, err = p.parseIfExpr()
+			if err != nil {
+				return nil, err
+			}
+		} else if p.peek().Kind == TkLBrace {
+			elseBody, err = p.parseBlockExpr()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, fmt.Errorf("%d:%d: expected '{' or 'if' after else", p.peek().Line, p.peek().Col)
+		}
+	}
+	return IfExpr{NodePos: AtTok(tok), Cond: cond, Then: then, Else: elseBody}, nil
 }
 
 func (p *Parser) parseTupleOrLambda() (Expr, error) {

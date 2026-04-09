@@ -480,6 +480,8 @@ func (em *Emitter) emitReturnExpr(e IRExpr) {
 		}
 	case IRMatch:
 		em.emitMatch(expr, true)
+	case IRIfExpr:
+		em.emitIfExpr(expr, true)
 	default:
 		w.Return(em.emitExpr(e))
 	}
@@ -502,6 +504,8 @@ func (em *Emitter) emitVoidBody(e IRExpr) {
 		}
 	case IRMatch:
 		em.emitMatch(expr, false)
+	case IRIfExpr:
+		em.emitIfExpr(expr, false)
 	case IRForRange:
 		em.emitForRange(expr)
 	case IRForEach:
@@ -728,6 +732,21 @@ func (em *Emitter) emitForEach(fe IRForEach) {
 }
 
 // --- Match ---
+
+func (em *Emitter) emitIfExpr(e IRIfExpr, isReturn bool) {
+	w := em.w
+	if e.Else != nil {
+		w.IfElse(em.emitExpr(e.Cond), func() {
+			em.emitArmBody(e.Then, isReturn)
+		}, func() {
+			em.emitArmBody(e.Else, isReturn)
+		})
+	} else {
+		w.If(em.emitExpr(e.Cond), func() {
+			em.emitArmBody(e.Then, isReturn)
+		})
+	}
+}
 
 func (em *Emitter) emitMatch(m IRMatch, isReturn bool) {
 	if len(m.Arms) == 0 {

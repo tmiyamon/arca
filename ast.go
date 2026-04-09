@@ -101,6 +101,13 @@ type IndexAccess struct {
 	Index Expr
 }
 
+type IfExpr struct {
+	NodePos
+	Cond Expr
+	Then Expr // block
+	Else Expr // block or nil
+}
+
 type MatchExpr struct {
 	NodePos
 	Subject Expr
@@ -185,6 +192,7 @@ func (Ident) exprNode()           {}
 func (FnCall) exprNode()          {}
 func (FieldAccess) exprNode()     {}
 func (IndexAccess) exprNode()     {}
+func (IfExpr) exprNode()          {}
 func (MatchExpr) exprNode()       {}
 func (Block) exprNode()           {}
 func (ConstructorCall) exprNode() {}
