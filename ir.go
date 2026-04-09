@@ -240,6 +240,12 @@ type IRFieldAccess struct {
 	Type  IRType
 }
 
+type IRIndexAccess struct {
+	Expr  IRExpr
+	Index IRExpr
+	Type  IRType
+}
+
 // Block: statements + optional final expression
 type IRBlock struct {
 	Stmts []IRStmt
@@ -490,6 +496,8 @@ func (e IRMethodCall) irExprNode()      {}
 func (e IRMethodCall) irType() IRType   { return e.Type }
 func (e IRFieldAccess) irExprNode()     {}
 func (e IRFieldAccess) irType() IRType  { return e.Type }
+func (e IRIndexAccess) irExprNode()     {}
+func (e IRIndexAccess) irType() IRType  { return e.Type }
 func (e IRBlock) irExprNode()           {}
 func (e IRBlock) irType() IRType        { return e.Type }
 func (e IRConstructorCall) irExprNode()    {}

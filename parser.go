@@ -988,6 +988,17 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					return nil, fmt.Errorf("%d:%d: expected field name, got %s", field.Line, field.Col, field)
 				}
 				expr = FieldAccess{Expr: expr, Field: field.Lit}
+			} else if p.peek().Kind == TkLBracket {
+				p.advance()
+				index, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				if p.peek().Kind != TkRBracket {
+					return nil, fmt.Errorf("%d:%d: expected ']', got %s", p.peek().Line, p.peek().Col, p.peek())
+				}
+				p.advance()
+				expr = IndexAccess{NodePos: AtTok(tok), Expr: expr, Index: index}
 			} else {
 				break
 			}

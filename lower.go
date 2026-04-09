@@ -1401,6 +1401,8 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 		return l.lowerFnCallHint(e, hint)
 	case FieldAccess:
 		return l.lowerFieldAccess(e)
+	case IndexAccess:
+		return l.lowerIndexAccess(e)
 	case ConstructorCall:
 		return l.lowerConstructorCallHint(e, hint)
 	case Block:
@@ -2150,6 +2152,17 @@ func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 		Field: capitalize(e.Field),
 		Type:  fieldType,
 	}
+}
+
+func (l *Lowerer) lowerIndexAccess(e IndexAccess) IRExpr {
+	expr := l.lowerExpr(e.Expr)
+	index := l.lowerExpr(e.Index)
+	// Infer element type from list type
+	var elemType IRType = IRInterfaceType{}
+	if lt, ok := expr.irType().(IRListType); ok {
+		elemType = lt.Elem
+	}
+	return IRIndexAccess{Expr: expr, Index: index, Type: elemType}
 }
 
 func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExpr {

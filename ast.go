@@ -95,6 +95,12 @@ type FieldAccess struct {
 	Field string
 }
 
+type IndexAccess struct {
+	NodePos
+	Expr  Expr
+	Index Expr
+}
+
 type MatchExpr struct {
 	NodePos
 	Subject Expr
@@ -178,6 +184,7 @@ func (BoolLit) exprNode()         {}
 func (Ident) exprNode()           {}
 func (FnCall) exprNode()          {}
 func (FieldAccess) exprNode()     {}
+func (IndexAccess) exprNode()     {}
 func (MatchExpr) exprNode()       {}
 func (Block) exprNode()           {}
 func (ConstructorCall) exprNode() {}

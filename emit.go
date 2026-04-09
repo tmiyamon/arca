@@ -351,6 +351,8 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		return fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, strings.Join(args, ", "))
 	case IRFieldAccess:
 		return fmt.Sprintf("%s.%s", em.emitExpr(expr.Expr), expr.Field)
+	case IRIndexAccess:
+		return fmt.Sprintf("%s[%s]", em.emitExpr(expr.Expr), em.emitExpr(expr.Index))
 	case IRConstructorCall:
 		return em.emitConstructorCall(expr)
 	case IROkCall:
