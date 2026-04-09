@@ -2185,7 +2185,10 @@ func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExp
 			valHint = rt.Err
 		}
 		val := l.lowerExprHint(e.Fields[0].Value, valHint)
-		errType := val.irType()
+		errType := IRType(IRNamedType{GoName: "error"})
+		if rt, ok := hint.(IRResultType); ok {
+			errType = rt.Err
+		}
 		okType := IRType(l.freshTypeVar())
 		if rt, ok := hint.(IRResultType); ok {
 			l.unify(okType, rt.Ok)
@@ -2490,11 +2493,23 @@ func (l *Lowerer) lowerListLit(ll ListLit) IRExpr {
 func (l *Lowerer) lowerBinaryExpr(be BinaryExpr) IRExpr {
 	left := l.lowerExpr(be.Left)
 	right := l.lowerExpr(be.Right)
+	var typ IRType
+	switch be.Op {
+	case "==", "!=", "<", ">", "<=", ">=", "&&", "||":
+		typ = IRNamedType{GoName: "bool"}
+	case "+", "-", "*", "/", "%":
+		typ = left.irType()
+		if _, ok := typ.(IRInterfaceType); ok {
+			typ = right.irType()
+		}
+	default:
+		typ = IRInterfaceType{}
+	}
 	return IRBinaryExpr{
 		Op:    be.Op,
 		Left:  left,
 		Right: right,
-		Type:  IRInterfaceType{},
+		Type:  typ,
 	}
 }
 

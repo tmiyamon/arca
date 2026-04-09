@@ -356,7 +356,14 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IROkCall:
 		return fmt.Sprintf("Ok_%s(%s)", expr.TypeArgs, em.emitExpr(expr.Value))
 	case IRErrorCall:
-		return fmt.Sprintf("Err_%s(%s)", expr.TypeArgs, em.emitExpr(expr.Value))
+		valStr := em.emitExpr(expr.Value)
+		// Wrap string values in fmt.Errorf to produce error type
+		if _, ok := expr.Value.(IRStringLit); ok {
+			valStr = fmt.Sprintf("fmt.Errorf(%s)", valStr)
+		} else if _, ok := expr.Value.(IRStringInterp); ok {
+			valStr = fmt.Sprintf("fmt.Errorf(\"%%v\", %s)", valStr)
+		}
+		return fmt.Sprintf("Err_%s(%s)", expr.TypeArgs, valStr)
 	case IRSomeCall:
 		return fmt.Sprintf("Some_(%s)", em.emitExpr(expr.Value))
 	case IRNoneExpr:
