@@ -33,61 +33,71 @@ type Lowerer struct {
 	rootScope    *Scope       // root of scope tree (preserved after lowering)
 	currentScope *Scope       // current scope during lowering
 
-	// HM type inference
-	typeVarCounter int
-	substitution   map[int]IRType // type var ID → resolved type
+	// HM type inference — per-function scope
+	infer *InferScope
 }
 
 // --- HM type inference ---
 
-// freshTypeVar creates a new type variable with a unique ID.
-func (l *Lowerer) freshTypeVar() IRTypeVar {
-	l.typeVarCounter++
-	return IRTypeVar{ID: l.typeVarCounter}
+// InferScope holds type inference state for a single function body.
+type InferScope struct {
+	varCounter    int
+	substitution  map[int]IRType
+	typeParamVars map[string]int
 }
 
-// resolve follows the substitution chain to find the concrete type for a type variable.
-func (l *Lowerer) resolve(t IRType) IRType {
+func NewInferScope() *InferScope {
+	return &InferScope{
+		substitution:  make(map[int]IRType),
+		typeParamVars: make(map[string]int),
+	}
+}
+
+func (s *InferScope) freshTypeVar() IRTypeVar {
+	s.varCounter++
+	return IRTypeVar{ID: s.varCounter}
+}
+
+func (s *InferScope) resolve(t IRType) IRType {
 	tv, ok := t.(IRTypeVar)
 	if !ok {
 		return t
 	}
-	if resolved, exists := l.substitution[tv.ID]; exists {
-		r := l.resolve(resolved)
-		l.substitution[tv.ID] = r // path compression
+	if resolved, exists := s.substitution[tv.ID]; exists {
+		r := s.resolve(resolved)
+		s.substitution[tv.ID] = r // path compression
 		return r
 	}
 	return t
 }
 
-// resolveDeep recursively resolves all type variables within a type.
-func (l *Lowerer) resolveDeep(t IRType) IRType {
+func (s *InferScope) resolveDeep(t IRType) IRType {
 	if t == nil {
 		return nil
 	}
-	t = l.resolve(t)
+	t = s.resolve(t)
 	switch tt := t.(type) {
 	case IRResultType:
-		return IRResultType{Ok: l.resolveDeep(tt.Ok), Err: l.resolveDeep(tt.Err)}
+		return IRResultType{Ok: s.resolveDeep(tt.Ok), Err: s.resolveDeep(tt.Err)}
 	case IROptionType:
-		return IROptionType{Inner: l.resolveDeep(tt.Inner)}
+		return IROptionType{Inner: s.resolveDeep(tt.Inner)}
 	case IRListType:
-		return IRListType{Elem: l.resolveDeep(tt.Elem)}
+		return IRListType{Elem: s.resolveDeep(tt.Elem)}
 	case IRTupleType:
 		elems := make([]IRType, len(tt.Elements))
 		for i, e := range tt.Elements {
-			elems[i] = l.resolveDeep(e)
+			elems[i] = s.resolveDeep(e)
 		}
 		return IRTupleType{Elements: elems}
 	case IRPointerType:
-		return IRPointerType{Inner: l.resolveDeep(tt.Inner)}
+		return IRPointerType{Inner: s.resolveDeep(tt.Inner)}
 	case IRNamedType:
 		if len(tt.Params) == 0 {
 			return tt
 		}
 		params := make([]IRType, len(tt.Params))
 		for i, p := range tt.Params {
-			params[i] = l.resolveDeep(p)
+			params[i] = s.resolveDeep(p)
 		}
 		return IRNamedType{GoName: tt.GoName, Params: params}
 	default:
@@ -95,27 +105,23 @@ func (l *Lowerer) resolveDeep(t IRType) IRType {
 	}
 }
 
-// unify attempts to make two types equal by binding type variables.
-// Returns true if unification succeeds.
-func (l *Lowerer) unify(a, b IRType) bool {
-	a = l.resolve(a)
-	b = l.resolve(b)
+func (s *InferScope) unify(a, b IRType) bool {
+	a = s.resolve(a)
+	b = s.resolve(b)
 
 	if a == nil || b == nil {
 		return true
 	}
 
-	// Type variable on either side: bind it
 	if av, ok := a.(IRTypeVar); ok {
-		l.substitution[av.ID] = b
+		s.substitution[av.ID] = b
 		return true
 	}
 	if bv, ok := b.(IRTypeVar); ok {
-		l.substitution[bv.ID] = a
+		s.substitution[bv.ID] = a
 		return true
 	}
 
-	// IRInterfaceType matches anything (backward compat)
 	if _, ok := a.(IRInterfaceType); ok {
 		return true
 	}
@@ -123,7 +129,6 @@ func (l *Lowerer) unify(a, b IRType) bool {
 		return true
 	}
 
-	// Structural unification
 	switch at := a.(type) {
 	case IRNamedType:
 		bt, ok := b.(IRNamedType)
@@ -131,7 +136,7 @@ func (l *Lowerer) unify(a, b IRType) bool {
 			return false
 		}
 		for i := range at.Params {
-			if !l.unify(at.Params[i], bt.Params[i]) {
+			if !s.unify(at.Params[i], bt.Params[i]) {
 				return false
 			}
 		}
@@ -141,26 +146,26 @@ func (l *Lowerer) unify(a, b IRType) bool {
 		if !ok {
 			return false
 		}
-		return l.unify(at.Ok, bt.Ok) && l.unify(at.Err, bt.Err)
+		return s.unify(at.Ok, bt.Ok) && s.unify(at.Err, bt.Err)
 	case IROptionType:
 		bt, ok := b.(IROptionType)
 		if !ok {
 			return false
 		}
-		return l.unify(at.Inner, bt.Inner)
+		return s.unify(at.Inner, bt.Inner)
 	case IRListType:
 		bt, ok := b.(IRListType)
 		if !ok {
 			return false
 		}
-		return l.unify(at.Elem, bt.Elem)
+		return s.unify(at.Elem, bt.Elem)
 	case IRTupleType:
 		bt, ok := b.(IRTupleType)
 		if !ok || len(at.Elements) != len(bt.Elements) {
 			return false
 		}
 		for i := range at.Elements {
-			if !l.unify(at.Elements[i], bt.Elements[i]) {
+			if !s.unify(at.Elements[i], bt.Elements[i]) {
 				return false
 			}
 		}
@@ -170,10 +175,34 @@ func (l *Lowerer) unify(a, b IRType) bool {
 		if !ok {
 			return false
 		}
-		return l.unify(at.Inner, bt.Inner)
+		return s.unify(at.Inner, bt.Inner)
 	}
 
 	return false
+}
+
+func (s *InferScope) typeParamVar(name string) IRTypeVar {
+	if id, ok := s.typeParamVars[name]; ok {
+		return IRTypeVar{ID: id}
+	}
+	tv := s.freshTypeVar()
+	s.typeParamVars[name] = tv.ID
+	return tv
+}
+
+// Lowerer convenience methods that delegate to current InferScope.
+func (l *Lowerer) freshTypeVar() IRTypeVar   { return l.infer.freshTypeVar() }
+func (l *Lowerer) resolve(t IRType) IRType    { return l.infer.resolve(t) }
+func (l *Lowerer) resolveDeep(t IRType) IRType { return l.infer.resolveDeep(t) }
+func (l *Lowerer) unify(a, b IRType) bool     { return l.infer.unify(a, b) }
+func (l *Lowerer) typeParamVar(name string) IRTypeVar { return l.infer.typeParamVar(name) }
+
+// withInferScope runs fn with a fresh InferScope, restoring the previous scope after.
+func (l *Lowerer) withInferScope(fn func()) {
+	saved := l.infer
+	l.infer = NewInferScope()
+	fn()
+	l.infer = saved
 }
 
 // resolveExprTypes walks an IR expression tree and resolves type variables
@@ -400,7 +429,6 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		typeResolver: resolver,
 		rootScope:    root,
 		currentScope: root,
-		substitution: make(map[int]IRType),
 	}
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
@@ -747,13 +775,13 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	l.currentRetType = fd.ReturnType
 	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
-	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
-		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	l.withInferScope(func() {
+		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
+			body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+		})
+		body = l.resolveExprTypes(body)
 	})
 	l.currentRetType = nil
-
-	// Resolution pass: resolve type variables in function body
-	body = l.resolveExprTypes(body)
 
 	return IRFuncDecl{
 		GoName:     name,
@@ -788,14 +816,15 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	}
 	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
-	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
-		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+	l.withInferScope(func() {
+		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
+			body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
+		})
+		body = l.resolveExprTypes(body)
 	})
 	l.currentReceiver = ""
 	l.currentTypeName = ""
 	l.currentRetType = nil
-
-	body = l.resolveExprTypes(body)
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -1016,13 +1045,14 @@ func (l *Lowerer) irTypesMatch(a, b IRType) bool {
 		return true
 	}
 	switch at := a.(type) {
+	case IRTypeVar:
+		return true // type variables match anything
 	case IRNamedType:
+		if _, ok := b.(IRTypeVar); ok {
+			return true
+		}
 		if bt, ok := b.(IRNamedType); ok {
 			if at.GoName == bt.GoName {
-				return true
-			}
-			// Type parameters match anything
-			if l.isTypeParam(at.GoName) || l.isTypeParam(bt.GoName) {
 				return true
 			}
 			// Constraint compatibility: stricter alias → wider alias
@@ -1303,6 +1333,10 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		}
 		return IRNamedType{GoName: "Self"}
 	default:
+		// Type parameter → IRTypeVar (only outside type definitions)
+		if l.infer != nil && l.isTypeParam(nt.Name) {
+			return l.typeParamVar(nt.Name)
+		}
 		params := make([]IRType, len(nt.Params))
 		for i, p := range nt.Params {
 			params[i] = l.lowerType(p)
