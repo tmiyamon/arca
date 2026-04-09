@@ -12,6 +12,14 @@ This document records language design decisions, their rationale, and trade-offs
 - **Types**: `PascalCase` in both Arca and Go
 - **Constructors**: `PascalCase` in Arca
 
+## Arrow Convention
+
+Scala-style separation: `->` for types, `=>` for values.
+
+- `->` — function return type: `fun f(x: Int) -> String`
+- `=>` — match arm: `Ok(v) => v * 2`
+- `=>` — lambda body: `x => x + 1`, `(x: Int) -> Int => x + 1`
+
 ## Constructor Qualification
 
 Constructors require type qualification depending on the type definition:

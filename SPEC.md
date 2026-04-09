@@ -333,9 +333,15 @@ let _ = db.Exec("INSERT ...")?   // discard success value, propagate error
 ```
 println("hello")         // print with newline
 print("hello")           // print without newline
+len(items)               // list length
+map(list, x => x * 2)   // transform elements
+filter(list, x => x > 0) // select elements
+fold(list, 0, (acc, x) => acc + x) // reduce
+take(list, 3)            // first n elements
+takeWhile(list, x => x > 0) // elements while predicate holds
 ```
 
-Available without import. Maps to Go's `fmt.Println` / `fmt.Print`.
+Available without import.
 
 ### Side Effects
 

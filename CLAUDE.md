@@ -43,11 +43,12 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **Lexical Scope tree**: `withScope(startPos, endPos, symbols, fn)` manages scope push/pop + symbol registration. All symbols (variables, params, functions, packages) go through `registerSymbol` → `NewSymbolInfo`. GoName auto-resolved by kind. Scope tree preserved for LSP `FindSymbolAt`.
 - **Variable shadowing**: Lower RHS before declaring variable name.
 - **Sum type methods**: Lowered as normal methods, then expanded to per-variant Go methods by `expandSumTypeMethods` IR post-pass.
-- **Prelude**: Built-in functions defined in one map. Adding a builtin = one line.
+- **Arrow convention**: `->` for types (return type annotations), `=>` for values (match arms, lambda body). Scala-style separation.
+- **Prelude**: Built-in functions defined in one map. Adding a builtin = one line. Includes map, filter, fold, take, takeWhile, len.
 - **TypeResolver boundary**: Lowerer never imports go/types directly.
 - **GoMultiReturn**: Go FFI calls carry `GoMultiReturn` flag + `IRResultType`/`IROptionType`. `goFuncReturnType` maps `(T, error)` → Result, `(T, bool)` → Option, 3+ → Tuple. Consumption sites read IR types, no ad-hoc detection.
 - **Project go.mod**: TypeResolver uses nearest go.mod (walked up from .arca file) for package resolution. `goModule` read from go.mod, not hardcoded.
-- **HM type inference**: `IRTypeVar` for unresolved types, `unify(a, b)` for constraint solving, `resolveDeep` for substitution. `freshTypeVar()` generates type variables for Ok/Error/None/empty list. Call-site unification resolves variables from function parameter types. Resolution pass after function body lowering patches TypeArgs strings. Supersedes simple bidirectional hints for these cases.
+- **HM type inference**: `InferScope` struct (per-function) holds type variables, substitution, and type param vars. `withInferScope(fn)` creates fresh scope. `unify(a, b)` for constraint solving, `resolveDeep` for substitution. Ok/Error/None/empty list use type variables resolved from call-site argument-parameter unification. Type parameters become `IRTypeVar` inside function bodies.
 - **Bidirectional type checking**: `lowerExprHint(expr, hint)` propagates expected types top-down. Covers function args, let annotations, return types, match arms, constructor fields. Constraint compatibility checked in `irTypesMatch`. Lambda param types inferred from Go FFI call context and prelude functions.
 - **GoWriter**: Structured Go code builder in `gowriter.go`. `emit.go` uses GoWriter methods (`If`, `Switch`, `Func`, `Method`, `For`, `Assign`, etc.) instead of manual string formatting. Auto-indentation eliminates `indent string` parameter threading. Output is `gofmt`-normalized in tests.
 
