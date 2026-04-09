@@ -2858,7 +2858,7 @@ func (l *Lowerer) lowerResultMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
 }
 
 func (l *Lowerer) isOptionMatch(me MatchExpr) bool {
@@ -2915,7 +2915,7 @@ func (l *Lowerer) lowerOptionMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
 }
 
 func (l *Lowerer) isListMatch(me MatchExpr) bool {
@@ -3011,7 +3011,7 @@ func (l *Lowerer) lowerListMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
 }
 
 func (l *Lowerer) isLiteralMatch(me MatchExpr) bool {
@@ -3039,7 +3039,7 @@ func (l *Lowerer) lowerLiteralMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
 }
 
 func (l *Lowerer) litPatternGoStr(lp LitPattern) string {
@@ -3086,7 +3086,7 @@ func (l *Lowerer) lowerEnumMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
 }
 
 func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
@@ -3162,7 +3162,33 @@ func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 		}
 	}
 
-	return IRMatch{Subject: subject, Arms: arms, Type: IRInterfaceType{}, Pos: me.Pos}
+	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: me.Pos}
+}
+
+// inferMatchType unifies all arm body types to determine the match expression type.
+func (l *Lowerer) inferMatchType(arms []IRMatchArm) IRType {
+	var result IRType
+	for _, arm := range arms {
+		if arm.Body == nil {
+			continue
+		}
+		t := arm.Body.irType()
+		if _, ok := t.(IRInterfaceType); ok {
+			continue
+		}
+		if _, ok := t.(IRTypeVar); ok {
+			continue
+		}
+		if result == nil {
+			result = t
+		} else {
+			l.unify(result, t)
+		}
+	}
+	if result == nil {
+		return IRInterfaceType{}
+	}
+	return l.resolveDeep(result)
 }
 
 // --- Helpers ---
