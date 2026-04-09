@@ -4,6 +4,29 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-09: HM type inference
+
+**Context:** Bidirectional hint system couldn't resolve types when no hint was available. `let r = Ok(42)` required explicit annotation. `let x = None` needed usage context but hints only flow top-down.
+
+**Decision:** Add HM-style type inference with type variables and unification.
+
+**Implementation:**
+- `IRTypeVar` in IR for unresolved type variables
+- `freshTypeVar()`, `unify(a, b)`, `resolve(t)`, `resolveDeep(t)` in Lowerer
+- Ok/Error default error type to `error`, Ok type uses type variable when no hint
+- None and empty `[]` use type variables for inner/element type
+- Call-site unification: function args unified with parameter types
+- Resolution pass after function body lowering: walks IR, resolves type variables, recomputes TypeArgs strings
+- Binary expression type inference from operands
+- Match expression type from arm body unification
+- Lambda return type from body expression
+
+**Result:** `let r = Ok(42)`, `let x = None; f(x)`, `let items = []; g(items)` all work without type annotations. Function signatures remain explicit (Rust/Kotlin style).
+
+**Status:** Done
+
+---
+
 ## 2026-04-09: GoWriter integration into emit
 
 **Context:** `emit.go` used `writeln(fmt.Sprintf("%s...", indent, ...))` with manual `\t` indentation. Every body/stmt/match function threaded an `indent string` parameter. Error-prone (easy to forget indent level) and hard to read.

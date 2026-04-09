@@ -8,6 +8,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-09
 
+- [HM type inference](decisions/transpiler.md#2026-04-09-hm-type-inference) — Type variables, unification, resolution pass. Ok/Error/None/empty list infer from usage
+- [If expression](decisions/syntax.md#2026-04-09-if-expression) — if/else as expression with branch type unification
+- [Index access](decisions/syntax.md#2026-04-09-index-access) — expr[index] for list element access
+- [Shorthand lambda](decisions/syntax.md#2026-04-09-shorthand-lambda) — x -> body and (x, y) -> body without type annotations
 - [GoWriter integration into emit](decisions/transpiler.md#2026-04-09-gowriter-integration-into-emit) — Replace manual writeln+indent with structured GoWriter methods. gofmt-normalized snapshots
 
 ## 2026-04-08

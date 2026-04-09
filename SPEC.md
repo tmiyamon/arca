@@ -115,18 +115,49 @@ let pair: (Int, String) = (1, "hello")
 ### Lambdas
 
 ```
-(x) => x + 1
-(x, y) => x + y
-() => 42
+// Full form with type annotations
+(x: Int) -> Int => x + 1
+(x: Int, y: Int) -> Int => x + y
+
+// Shorthand (types inferred from context)
+x -> x + 1
+(x, y) -> x + y
+```
+
+### If Expression
+
+```
+let result = if x > 0 { "positive" } else { "negative" }
+
+// else if chains
+if n > 0 {
+    "positive"
+} else if n < 0 {
+    "negative"
+} else {
+    "zero"
+}
+
+// Without else (void context)
+if condition {
+    doSomething()
+}
+```
+
+### Index Access
+
+```
+let first = nums[0]
+let item = items[i]
 ```
 
 ### Pipe Operator (first argument)
 
 ```
 users
-|> filter((u) => u.age > 20)
-|> map((u) => u.name)
-|> fold(0, (acc, x) => acc + x)
+|> filter(u -> u.age > 20)
+|> map(u -> u.name)
+|> fold(0, (acc, x) -> acc + x)
 ```
 
 ### String Interpolation
@@ -211,22 +242,21 @@ import go _ "modernc.org/sqlite"
 
 ### Type Inference
 
-Arca uses bidirectional type inference. Types flow both bottom-up (from values) and top-down (from context).
+Arca uses HM-style type inference with type variables and unification. Types flow bottom-up (from values), top-down (from context), and forward (from usage).
 
 ```
-fun fetch() -> Result[Int, error] {
-  Ok(42)                          // Ok type args inferred from return type
-}
+let r = Ok(42)                     // Result[Int, error] — error type defaults
+let x = None                       // Option[T] — T resolved from later usage
+let items = []                     // []T — T resolved from later usage
 
 fun process(r: Result[Int, error]) { ... }
-process(Ok(42))                    // inferred from parameter type
+process(r)                          // r's type variable resolved to Result[Int, error]
 
-let r: Result[Int, error] = Ok(42) // inferred from annotation
-
-(c) -> error => handler(c)         // lambda param type inferred from call context
+map(nums, x -> x * 2)              // x type inferred from list element type
+sort.Slice(s, (i, j) -> s[i] < s[j])  // i, j inferred from Go FFI signature
 ```
 
-Type annotations required when context is absent: `let r = Ok(42)` (no annotation, no usage context).
+Function signatures require explicit types (Rust/Kotlin style). Inference operates within function bodies.
 
 ### Built-in Types
 

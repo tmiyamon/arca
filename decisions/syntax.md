@@ -4,6 +4,36 @@ Language syntax, naming, import system. Newest first.
 
 ---
 
+## 2026-04-09: If expression
+
+**Context:** Arca had no if/else. Conditional logic required match on bool.
+
+**Decision:** Add if/else as expression. `if cond { body } else { body }`. Supports else if chains. Both branches' types unified for expression result.
+
+**Status:** Done
+
+---
+
+## 2026-04-09: Index access
+
+**Context:** No list element access syntax. `nums[0]` wasn't parseable.
+
+**Decision:** Add `expr[index]` as postfix operator on identifiers. Element type inferred from list type. AST `IndexAccess`, IR `IRIndexAccess`.
+
+**Status:** Done
+
+---
+
+## 2026-04-09: Shorthand lambda
+
+**Context:** Lambdas required full type annotations: `(x: Int) -> Int => x * 2`. Verbose for simple cases like map/filter.
+
+**Decision:** Add shorthand forms: `x -> body` (single param), `(x, y) -> body` (multi param). Types inferred from call context (prelude map/filter/fold infer from list element type, Go FFI infers from function signature).
+
+**Status:** Done
+
+---
+
 ## 2026-04-06: Triple-quoted multiline strings
 
 **Context:** Needed multiline strings for SQL, templates, etc. Single-line `"..."` can't contain literal newlines.
