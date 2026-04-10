@@ -2653,39 +2653,7 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	// Try operator: let x = expr?
 	if call, ok := s.Value.(FnCall); ok {
 		if ident, ok := call.Fn.(Ident); ok && ident.Name == "__try" && len(call.Args) == 1 {
-			// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
-			// Pass hint from let type annotation (try unwraps Result, so wrap hint in ResultType)
-			var tryHint IRType
-			if s.Type != nil {
-				tryHint = IRResultType{Ok: l.lowerType(s.Type), Err: IRNamedType{GoName: "error"}}
-			}
-			loweredExpr := l.lowerExprHint(call.Args[0], tryHint)
-			goVarName := "_"
-			if s.Name != "_" {
-				// Try unwraps Result: the variable gets the Ok type
-				var irType IRType
-				if rt, ok := loweredExpr.irType().(IRResultType); ok {
-					irType = rt.Ok
-				}
-				goVarName = l.registerSymbol(SymbolRegInfo{
-					Name:     s.Name,
-					ArcaType: l.inferASTType(call.Args[0]),
-					IRType:   irType,
-					Kind:     SymVariable,
-				})
-			}
-			var retType IRType
-			if l.currentRetType != nil {
-				retType = l.lowerType(l.currentRetType)
-			}
-			if isIRResultType(retType) {
-				l.builtins["result"] = true
-			}
-			return []IRStmt{IRTryLetStmt{
-				GoName:     goVarName,
-				CallExpr:   loweredExpr,
-				ReturnType: retType,
-			}}
+			return l.lowerTryLetStmt(s, call.Args[0])
 		}
 	}
 
@@ -2697,30 +2665,71 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 		}}
 	}
 
-	// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
-	var hint IRType
-	if s.Type != nil {
-		hint = l.lowerType(s.Type)
-	}
-	loweredValue := l.lowerExprHint(s.Value, hint)
+	return l.lowerNormalLetStmt(s)
+}
 
-	// GoMultiReturn calls that return Result need builtins
-	if isGoMultiReturn(loweredValue) {
-		if _, ok := loweredValue.irType().(IRResultType); ok {
-			l.builtins["result"] = true
-		}
-		if _, ok := loweredValue.irType().(IROptionType); ok {
-			l.builtins["option"] = true
-		}
+// lowerTryLetStmt lowers `let x = expr?` into IRTryLetStmt.
+func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
+	// Pass hint from let type annotation (try unwraps Result, so wrap hint in ResultType)
+	var tryHint IRType
+	if s.Type != nil {
+		tryHint = IRResultType{Ok: l.lowerType(s.Type), Err: IRNamedType{GoName: "error"}}
 	}
+	loweredExpr := l.lowerExprHint(inner, tryHint)
+
+	goVarName := "_"
+	if s.Name != "_" {
+		// Try unwraps Result: the variable gets the Ok type
+		var irType IRType
+		if rt, ok := loweredExpr.irType().(IRResultType); ok {
+			irType = rt.Ok
+		}
+		goVarName = l.registerSymbol(SymbolRegInfo{
+			Name:     s.Name,
+			ArcaType: l.inferASTType(inner),
+			IRType:   irType,
+			Kind:     SymVariable,
+		})
+	}
+
+	var retType IRType
+	if l.currentRetType != nil {
+		retType = l.lowerType(l.currentRetType)
+	}
+	if isIRResultType(retType) {
+		l.builtins["result"] = true
+	}
+
+	return []IRStmt{IRTryLetStmt{
+		GoName:     goVarName,
+		CallExpr:   loweredExpr,
+		ReturnType: retType,
+	}}
+}
+
+// lowerNormalLetStmt lowers `let x: Type = expr` (the common case).
+func (l *Lowerer) lowerNormalLetStmt(s LetStmt) []IRStmt {
+	// Lower the type annotation once (used as hint and as IR type)
 	var loweredType IRType
 	if s.Type != nil {
 		loweredType = l.lowerType(s.Type)
 	}
-	var arcaType Type
-	if s.Type != nil {
-		arcaType = s.Type
-	} else {
+
+	// Lower value BEFORE declaring variable (shadowing must not affect the RHS)
+	loweredValue := l.lowerExprHint(s.Value, loweredType)
+
+	// GoMultiReturn calls that return Result/Option need builtins
+	if isGoMultiReturn(loweredValue) {
+		switch loweredValue.irType().(type) {
+		case IRResultType:
+			l.builtins["result"] = true
+		case IROptionType:
+			l.builtins["option"] = true
+		}
+	}
+
+	arcaType := s.Type
+	if arcaType == nil {
 		arcaType = l.inferASTType(s.Value)
 	}
 	goVarName := l.registerSymbol(SymbolRegInfo{
