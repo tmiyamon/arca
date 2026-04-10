@@ -307,6 +307,27 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 
 // --- Expressions ---
 
+// emitArgs lowers a slice of IRExprs to a comma-separated argument string.
+func (em *Emitter) emitArgs(args []IRExpr) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = em.emitExpr(a)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// wrapErrorValue wraps a string-like Error value in fmt.Errorf to produce error type.
+func (em *Emitter) wrapErrorValue(value IRExpr) string {
+	valStr := em.emitExpr(value)
+	switch value.(type) {
+	case IRStringLit:
+		return fmt.Sprintf("fmt.Errorf(%s)", valStr)
+	case IRStringInterp:
+		return fmt.Sprintf("fmt.Errorf(\"%%v\", %s)", valStr)
+	}
+	return valStr
+}
+
 func (em *Emitter) emitExpr(e IRExpr) string {
 	if e == nil {
 		return ""
@@ -329,26 +350,15 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IRIdent:
 		return expr.GoName
 	case IRStringInterp:
-		args := make([]string, len(expr.Args))
-		for i, a := range expr.Args {
-			args[i] = em.emitExpr(a)
-		}
+		args := em.emitArgs(expr.Args)
 		if expr.Multiline && !strings.Contains(expr.Format, "`") {
-			return fmt.Sprintf("fmt.Sprintf(`%s`, %s)", expr.Format, strings.Join(args, ", "))
+			return fmt.Sprintf("fmt.Sprintf(`%s`, %s)", expr.Format, args)
 		}
-		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, strings.Join(args, ", "))
+		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, args)
 	case IRFnCall:
-		args := make([]string, len(expr.Args))
-		for i, a := range expr.Args {
-			args[i] = em.emitExpr(a)
-		}
-		return fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, strings.Join(args, ", "))
+		return fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, em.emitArgs(expr.Args))
 	case IRMethodCall:
-		args := make([]string, len(expr.Args))
-		for i, a := range expr.Args {
-			args[i] = em.emitExpr(a)
-		}
-		return fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, strings.Join(args, ", "))
+		return fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
 	case IRFieldAccess:
 		return fmt.Sprintf("%s.%s", em.emitExpr(expr.Expr), expr.Field)
 	case IRIndexAccess:
@@ -358,14 +368,7 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IROkCall:
 		return fmt.Sprintf("Ok_%s(%s)", expr.TypeArgs, em.emitExpr(expr.Value))
 	case IRErrorCall:
-		valStr := em.emitExpr(expr.Value)
-		// Wrap string values in fmt.Errorf to produce error type
-		if _, ok := expr.Value.(IRStringLit); ok {
-			valStr = fmt.Sprintf("fmt.Errorf(%s)", valStr)
-		} else if _, ok := expr.Value.(IRStringInterp); ok {
-			valStr = fmt.Sprintf("fmt.Errorf(\"%%v\", %s)", valStr)
-		}
-		return fmt.Sprintf("Err_%s(%s)", expr.TypeArgs, valStr)
+		return fmt.Sprintf("Err_%s(%s)", expr.TypeArgs, em.wrapErrorValue(expr.Value))
 	case IRSomeCall:
 		return fmt.Sprintf("Some_(%s)", em.emitExpr(expr.Value))
 	case IRNoneExpr:
@@ -388,11 +391,11 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
 	if cc.GoMultiReturn {
 		// Constrained constructor: NewType(args...)
-		args := make([]string, len(cc.Fields))
+		fieldValues := make([]IRExpr, len(cc.Fields))
 		for i, f := range cc.Fields {
-			args[i] = em.emitExpr(f.Value)
+			fieldValues[i] = f.Value
 		}
-		return fmt.Sprintf("%s(%s)", cc.GoName, strings.Join(args, ", "))
+		return fmt.Sprintf("%s(%s)", cc.GoName, em.emitArgs(fieldValues))
 	}
 
 	// Struct literal (named or positional)
@@ -431,22 +434,14 @@ func (em *Emitter) emitListLit(l IRListLit) string {
 	if len(l.Elements) == 0 && l.Spread == nil {
 		return fmt.Sprintf("[]%s{}", l.ElemType)
 	}
-	// Spread: append([]T{elems}, spread...)
+	if l.Spread != nil && len(l.Elements) == 0 {
+		return em.emitExpr(l.Spread)
+	}
+	elems := em.emitArgs(l.Elements)
 	if l.Spread != nil {
-		if len(l.Elements) == 0 {
-			return em.emitExpr(l.Spread)
-		}
-		elems := make([]string, len(l.Elements))
-		for i, e := range l.Elements {
-			elems[i] = em.emitExpr(e)
-		}
-		return fmt.Sprintf("append([]%s{%s}, %s...)", l.ElemType, strings.Join(elems, ", "), em.emitExpr(l.Spread))
+		return fmt.Sprintf("append([]%s{%s}, %s...)", l.ElemType, elems, em.emitExpr(l.Spread))
 	}
-	elems := make([]string, len(l.Elements))
-	for i, e := range l.Elements {
-		elems[i] = em.emitExpr(e)
-	}
-	return fmt.Sprintf("[]%s{%s}", l.ElemType, strings.Join(elems, ", "))
+	return fmt.Sprintf("[]%s{%s}", l.ElemType, elems)
 }
 
 func (em *Emitter) emitTupleLit(t IRTupleLit) string {
@@ -456,11 +451,7 @@ func (em *Emitter) emitTupleLit(t IRTupleLit) string {
 		return fmt.Sprintf("struct{ First %s; Second %s }{%s, %s}",
 			t1, t2, em.emitExpr(t.Elements[0]), em.emitExpr(t.Elements[1]))
 	}
-	elems := make([]string, len(t.Elements))
-	for i, e := range t.Elements {
-		elems[i] = em.emitExpr(e)
-	}
-	return fmt.Sprintf("/* tuple(%s) */", strings.Join(elems, ", "))
+	return fmt.Sprintf("/* tuple(%s) */", em.emitArgs(t.Elements))
 }
 
 // --- Return/Void Body Modes ---
