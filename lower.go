@@ -207,6 +207,22 @@ func (l *Lowerer) withInferScope(fn func()) {
 
 // resolveExprTypes walks an IR expression tree and resolves type variables
 // to their concrete types after unification.
+// resolveResultExprTypeArgs resolves a Result-typed builtin call's TypeArgs string.
+func (l *Lowerer) resolveResultExprTypeArgs(t IRType) (IRType, string) {
+	resolved := l.resolveDeep(t)
+	if rt, ok := resolved.(IRResultType); ok {
+		return resolved, "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
+	}
+	return resolved, ""
+}
+
+// resolveExprs applies resolveExprTypes to a slice in place.
+func (l *Lowerer) resolveExprs(es []IRExpr) {
+	for i := range es {
+		es[i] = l.resolveExprTypes(es[i])
+	}
+}
+
 func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 	if e == nil {
 		return nil
@@ -220,19 +236,15 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 		expr.Type = resolved
 		return expr
 	case IROkCall:
-		resolved := l.resolveDeep(expr.Type)
-		if rt, ok := resolved.(IRResultType); ok {
-			expr.TypeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
-		}
-		expr.Type = resolved
+		expr.Type, expr.TypeArgs = l.resolveResultExprTypeArgs(expr.Type)
 		expr.Value = l.resolveExprTypes(expr.Value)
 		return expr
 	case IRErrorCall:
-		resolved := l.resolveDeep(expr.Type)
-		if rt, ok := resolved.(IRResultType); ok {
-			expr.TypeArgs = "[" + irTypeEmitStr(rt.Ok) + ", " + irTypeEmitStr(rt.Err) + "]"
-		}
-		expr.Type = resolved
+		expr.Type, expr.TypeArgs = l.resolveResultExprTypeArgs(expr.Type)
+		expr.Value = l.resolveExprTypes(expr.Value)
+		return expr
+	case IRSomeCall:
+		expr.Type = l.resolveDeep(expr.Type)
 		expr.Value = l.resolveExprTypes(expr.Value)
 		return expr
 	case IRBlock:
@@ -243,9 +255,16 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 		return expr
 	case IRMatch:
 		expr.Subject = l.resolveExprTypes(expr.Subject)
-		for i, arm := range expr.Arms {
-			expr.Arms[i].Body = l.resolveExprTypes(arm.Body)
+		for i := range expr.Arms {
+			expr.Arms[i].Body = l.resolveExprTypes(expr.Arms[i].Body)
 		}
+		expr.Type = l.resolveDeep(expr.Type)
+		return expr
+	case IRIfExpr:
+		expr.Cond = l.resolveExprTypes(expr.Cond)
+		expr.Then = l.resolveExprTypes(expr.Then)
+		expr.Else = l.resolveExprTypes(expr.Else)
+		expr.Type = l.resolveDeep(expr.Type)
 		return expr
 	case IRListLit:
 		resolved := l.resolveDeep(expr.Type)
@@ -253,20 +272,22 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 			expr.ElemType = irTypeEmitStr(lt.Elem)
 		}
 		expr.Type = resolved
-		for i, e := range expr.Elements {
-			expr.Elements[i] = l.resolveExprTypes(e)
-		}
+		l.resolveExprs(expr.Elements)
 		return expr
 	case IRFnCall:
-		for i, arg := range expr.Args {
-			expr.Args[i] = l.resolveExprTypes(arg)
-		}
+		l.resolveExprs(expr.Args)
 		return expr
 	case IRMethodCall:
 		expr.Receiver = l.resolveExprTypes(expr.Receiver)
-		for i, arg := range expr.Args {
-			expr.Args[i] = l.resolveExprTypes(arg)
-		}
+		l.resolveExprs(expr.Args)
+		return expr
+	case IRBinaryExpr:
+		expr.Left = l.resolveExprTypes(expr.Left)
+		expr.Right = l.resolveExprTypes(expr.Right)
+		expr.Type = l.resolveDeep(expr.Type)
+		return expr
+	case IRLambda:
+		expr.Body = l.resolveExprTypes(expr.Body)
 		return expr
 	default:
 		return e
