@@ -213,7 +213,11 @@ let u = user.find(1)
 ### Imports
 
 ```
-// Arca modules — qualified access
+// Arca built-in packages — bundled with the arca binary
+import stdlib
+stdlib.Encode(value)
+
+// Arca modules — qualified access (same-directory .arca files)
 import user
 user.find(1)
 

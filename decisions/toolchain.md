@@ -4,6 +4,33 @@ LSP, project structure, build pipeline, dependency management. Newest first.
 
 ---
 
+## 2026-04-11: Arca package system
+
+**Context:** stdlib was treated as a Go module (`import go "github.com/tmiyamon/arca/stdlib"`), forcing users to set up go.mod and `go get` to use it. Other languages bundle stdlib with the toolchain — Python, Rust, Go itself. Arca should do the same.
+
+**Decision:** Introduce an Arca package system, parallel to Go modules. Built-in packages are bundled with the arca binary via `go:embed`. `import stdlib` works in any script without go.mod setup.
+
+**Implementation:**
+- `arca_packages.go` defines `ArcaPackage` registry; `stdlib` is the first entry
+- Embed stdlib source via `//go:embed stdlib/*.go`
+- Parser unchanged; `lookupArcaPackage` distinguishes Arca packages from same-directory module files
+- `GoTypeResolver.loadPackage` detects Arca packages and uses `loadArcaPackageTypes` (parses embedded sources with `go/parser` + `go/types` directly, no temp dir)
+- `writeBuildDir` extracts used Arca packages to `build/<pkg>/` and adds `require` + `replace` directives so `go run` succeeds
+
+**Three import kinds coexist:**
+- `import go "fmt"` — Go FFI (existing)
+- `import stdlib` — Arca built-in package (new)
+- `import user` — Arca module (same-directory file, existing)
+
+**Benefits:**
+- `arca run script.arca` with stdlib usage works without project setup
+- Type resolution is fully in-memory for Arca packages
+- Foundation for future external Arca packages (third-party libraries)
+
+**Status:** Done
+
+---
+
 ## 2026-04-07: Lexical scope tree for symbol resolution
 
 **Context:** LSP hover showed wrong type for shadowed variables (e.g. match arm `Error(e)` showed `*echo.Echo` from outer `let e`). Flat symbol list had no scoping — `LookupSymbol` returned last-defined symbol regardless of position.

@@ -26,7 +26,8 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 | `validate.go` | IR validation (exhaustiveness, existence checks, arg count) |
 | `emit.go` | IR → Go output via GoWriter (mechanical, no feature-specific logic) |
 | `gowriter.go` | Structured Go code builder with auto-indentation |
-| `prelude.go` | Built-in function definitions (println, map, filter, etc.) |
+| `prelude.go` | Built-in function definitions (println, map, filter, take, takeWhile, len, etc.) |
+| `arca_packages.go` | Arca package registry: bundles built-in packages (stdlib) via go:embed |
 | `type_resolver.go` | TypeResolver interface |
 | `go_type_resolver.go` | go/types implementation |
 | `lsp.go` | LSP server (diagnostics, hover) |
@@ -51,6 +52,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 - **HM type inference**: `InferScope` struct (per-function) holds type variables, substitution, and type param vars. `withInferScope(fn)` creates fresh scope. `unify(a, b)` for constraint solving, `resolveDeep` for substitution. Ok/Error/None/empty list use type variables resolved from call-site argument-parameter unification. Type parameters become `IRTypeVar` inside function bodies.
 - **Bidirectional type checking**: `lowerExprHint(expr, hint)` propagates expected types top-down. Covers function args, let annotations, return types, match arms, constructor fields. Constraint compatibility checked in `irTypesMatch`. Lambda param types inferred from Go FFI call context and prelude functions.
 - **GoWriter**: Structured Go code builder in `gowriter.go`. `emit.go` uses GoWriter methods (`If`, `Switch`, `Func`, `Method`, `For`, `Assign`, etc.) instead of manual string formatting. Auto-indentation eliminates `indent string` parameter threading. Output is `gofmt`-normalized in tests.
+- **Arca packages**: Built-in packages bundled with the arca binary via `go:embed`. `arca_packages.go` defines the registry. `import stdlib` works without any go.mod setup. Type resolution loads from embed.FS via `go/parser` + `go/types`. Build extracts to `build/<pkg>/` with `replace` directive for `go run`.
 
 ## Adding a New Language Feature
 

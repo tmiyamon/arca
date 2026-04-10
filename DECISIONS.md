@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-11
 
+- [Arca package system](decisions/toolchain.md#2026-04-11-arca-package-system) — Built-in packages bundled via go:embed. `import stdlib` works without go.mod
 - [Trait system design (proposal)](decisions/ideas.md#2026-04-11-trait-system-design-proposal) — Kotlin/Swift hybrid, `impl User: Display`, `&` for multiple bounds. Design only, not implemented
 
 ## 2026-04-10
