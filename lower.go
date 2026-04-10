@@ -652,7 +652,7 @@ func (l *Lowerer) lowerTypeAliasDecl(d TypeAliasDecl) IRTypeAliasDecl {
 	if !ok {
 		return IRTypeAliasDecl{GoName: d.Name, GoBase: "interface{}"}
 	}
-	goBase := l.goTypeStr(NamedType{Name: nt.Name, Params: nt.Params})
+	goBase := irTypeEmitStr(l.lowerType(NamedType{Name: nt.Name, Params: nt.Params}))
 
 	var validator *IRValidator
 	if len(nt.Constraints) > 0 {
@@ -1236,6 +1236,11 @@ func irTypeEmitStr(t IRType) string {
 		return "Option_[" + irTypeEmitStr(tt.Inner) + "]"
 	case IRListType:
 		return "[]" + irTypeEmitStr(tt.Elem)
+	case IRTupleType:
+		if len(tt.Elements) == 2 {
+			return fmt.Sprintf("struct{ First %s; Second %s }", irTypeEmitStr(tt.Elements[0]), irTypeEmitStr(tt.Elements[1]))
+		}
+		return "interface{}"
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable falls back to interface{}
 	default:
@@ -1358,61 +1363,6 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 			params[i] = l.lowerType(p)
 		}
 		return IRNamedType{GoName: nt.Name, Params: params}
-	}
-}
-
-// goTypeStr renders a Type as a Go type string. Used for validator zero values etc.
-func (l *Lowerer) goTypeStr(t Type) string {
-	switch tt := t.(type) {
-	case NamedType:
-		switch tt.Name {
-		case "Unit":
-			return "struct{}"
-		case "Int":
-			return "int"
-		case "Float":
-			return "float64"
-		case "String":
-			return "string"
-		case "Bool":
-			return "bool"
-		case "List":
-			if len(tt.Params) > 0 {
-				return "[]" + l.goTypeStr(tt.Params[0])
-			}
-			return "[]interface{}"
-		case "Option":
-			l.builtins["option"] = true
-			if len(tt.Params) > 0 {
-				return "Option_[" + l.goTypeStr(tt.Params[0]) + "]"
-			}
-			return "interface{}"
-		case "Result":
-			l.builtins["result"] = true
-			if len(tt.Params) >= 2 {
-				return "Result_[" + l.goTypeStr(tt.Params[0]) + ", " + l.goTypeStr(tt.Params[1]) + "]"
-			}
-			if len(tt.Params) == 1 {
-				return "Result_[" + l.goTypeStr(tt.Params[0]) + ", error]"
-			}
-			return "Result_[interface{}, error]"
-		case "Self":
-			if l.currentTypeName != "" {
-				return l.currentTypeName
-			}
-			return "Self"
-		default:
-			return tt.Name
-		}
-	case PointerType:
-		return "*" + l.goTypeStr(tt.Inner)
-	case TupleType:
-		if len(tt.Elements) == 2 {
-			return fmt.Sprintf("struct{ First %s; Second %s }", l.goTypeStr(tt.Elements[0]), l.goTypeStr(tt.Elements[1]))
-		}
-		return "interface{}"
-	default:
-		return "interface{}"
 	}
 }
 
@@ -2011,10 +1961,10 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		if isFnIdent {
 			if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
 				if nt, ok := fn.Params[argIndex].Type.(NamedType); ok && nt.Name == "List" && len(nt.Params) > 0 {
-					elemTypeStr := l.goTypeStr(nt.Params[0])
+					elemType := l.lowerType(nt.Params[0])
 					return IRListLit{
-						ElemType: elemTypeStr,
-						Type:     IRListType{Elem: l.lowerType(nt.Params[0])},
+						ElemType: irTypeEmitStr(elemType),
+						Type:     IRListType{Elem: elemType},
 					}
 				}
 			}
@@ -2026,11 +1976,10 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		if isFnIdent {
 			if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
 				if nt, ok := fn.Params[argIndex].Type.(NamedType); ok && nt.Name == "Option" && len(nt.Params) > 0 {
-					l.builtins["option"] = true
-					innerTypeStr := l.goTypeStr(nt.Params[0])
+					innerType := l.lowerType(nt.Params[0])
 					return IRNoneExpr{
-						TypeArg: "[" + innerTypeStr + "]",
-						Type:    IROptionType{Inner: l.lowerType(nt.Params[0])},
+						TypeArg: "[" + irTypeEmitStr(innerType) + "]",
+						Type:    IROptionType{Inner: innerType},
 					}
 				}
 			}
@@ -3355,10 +3304,10 @@ func (l *Lowerer) resultTypeArgs() string {
 	}
 	if nt, ok := l.currentRetType.(NamedType); ok && nt.Name == "Result" {
 		if len(nt.Params) >= 2 {
-			return "[" + l.goTypeStr(nt.Params[0]) + ", " + l.goTypeStr(nt.Params[1]) + "]"
+			return "[" + irTypeEmitStr(l.lowerType(nt.Params[0])) + ", " + irTypeEmitStr(l.lowerType(nt.Params[1])) + "]"
 		}
 		if len(nt.Params) == 1 {
-			return "[" + l.goTypeStr(nt.Params[0]) + ", error]"
+			return "[" + irTypeEmitStr(l.lowerType(nt.Params[0])) + ", error]"
 		}
 	}
 	return ""
