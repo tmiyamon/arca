@@ -33,6 +33,15 @@ func (r *GoTypeResolver) loadPackage(pkg string) *types.Package {
 		return cached
 	}
 
+	// Arca built-in packages: load from embed.FS via go/parser + go/types
+	for _, ap := range arcaPackages {
+		if pkg == ap.GoModPath {
+			tp := loadArcaPackageTypes(&ap)
+			r.cache[pkg] = tp
+			return tp
+		}
+	}
+
 	cfg := &packages.Config{
 		Mode: packages.NeedTypes | packages.NeedName,
 		Dir:  r.dir,
@@ -176,6 +185,12 @@ func (r *GoTypeResolver) ResolveUnderlying(goType string) string {
 func (r *GoTypeResolver) CanLoadPackage(pkg string) bool {
 	if isStdLib(pkg) {
 		return r.loadPackage(pkg) != nil
+	}
+	// Arca built-in packages: bundled with arca binary
+	for _, ap := range arcaPackages {
+		if pkg == ap.GoModPath {
+			return true
+		}
 	}
 	// Same-module subpackage: always available
 	if r.isSameModule(pkg) {

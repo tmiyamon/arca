@@ -461,10 +461,6 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		case TypeAliasDecl:
 			l.typeAliases[d.Name] = d
 		case ImportDecl:
-			if !strings.HasPrefix(d.Path, "go/") {
-				parts := strings.Split(d.Path, ".")
-				l.moduleNames[parts[len(parts)-1]] = true
-			}
 			if strings.HasPrefix(d.Path, "go/") {
 				pkg := NewGoPackage(d.Path[3:])
 				if l.goPackages == nil {
@@ -476,11 +472,26 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 					Path:       pkg.FullPath,
 					SideEffect: d.SideEffect,
 				})
-				// Check if the package can be loaded
 				if !isStdLib(pkg.FullPath) && !l.typeResolver.CanLoadPackage(pkg.FullPath) {
 					l.addCompileError(ErrPackageNotFound, d.Pos, PackageNotFoundData{Path: pkg.FullPath})
 				}
+				break
 			}
+			// Arca built-in package: import stdlib, import stdlib.db, etc.
+			rootName := strings.Split(d.Path, ".")[0]
+			if pkg := lookupArcaPackage(rootName); pkg != nil {
+				if l.goPackages == nil {
+					l.goPackages = make(map[string]*GoPackage)
+				}
+				goPkg := NewGoPackage(pkg.GoModPath)
+				l.goPackages[pkg.Name] = goPkg
+				l.registerSymbol(SymbolRegInfo{Name: pkg.Name, Kind: SymPackage})
+				l.imports = append(l.imports, IRImport{Path: pkg.GoModPath})
+				break
+			}
+			// Arca module: import user, import user.{find}
+			parts := strings.Split(d.Path, ".")
+			l.moduleNames[parts[len(parts)-1]] = true
 		case FnDecl:
 			l.functions[d.Name] = d
 			if d.Public {

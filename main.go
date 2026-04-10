@@ -182,6 +182,13 @@ func resolveImports(inputPath string, prog *Program, loaded map[string]bool) (*P
 			continue
 		}
 
+		// Arca built-in package: pass through, no file lookup
+		rootName := strings.Split(imp.Path, ".")[0]
+		if lookupArcaPackage(rootName) != nil {
+			merged.Decls = append(merged.Decls, decl)
+			continue
+		}
+
 		// Arca module import — keep in merged for codegen to know module names
 		merged.Decls = append(merged.Decls, decl)
 
@@ -497,6 +504,11 @@ func collectAllModules(dir string, prog *Program, subModules map[string]*Program
 		if !ok || strings.HasPrefix(imp.Path, "go/") {
 			continue
 		}
+		// Skip Arca built-in packages
+		rootName := strings.Split(imp.Path, ".")[0]
+		if lookupArcaPackage(rootName) != nil {
+			continue
+		}
 
 		modulePath := filepath.Join(dir, strings.ReplaceAll(imp.Path, ".", "/") + ".arca")
 		if loaded[modulePath] {
@@ -657,6 +669,18 @@ func writeBuildDir(inputPath string, result *transpileResult) (string, error) {
 			if err := cmd.Run(); err != nil {
 				return "", fmt.Errorf("go mod init failed: %w", err)
 			}
+		}
+	}
+
+	// Extract any Arca built-in packages used by the program and add replace directives
+	if pkgs := usedArcaPackages(result); len(pkgs) > 0 {
+		for _, pkg := range pkgs {
+			if err := pkg.extractTo(dir); err != nil {
+				return "", fmt.Errorf("failed to extract arca package %s: %w", pkg.Name, err)
+			}
+		}
+		if err := addArcaPackagesToGoMod(filepath.Join(dir, "go.mod"), pkgs); err != nil {
+			return "", fmt.Errorf("failed to update go.mod: %w", err)
 		}
 	}
 
