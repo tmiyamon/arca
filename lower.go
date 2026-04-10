@@ -819,7 +819,10 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 		retType = l.lowerType(fd.ReturnType)
 	}
 
-	sp, ep := bodyPos(fd.Body)
+	// Scope spans from the function declaration start (so parameters are
+	// hover-able in the signature) through the body end.
+	_, ep := bodyPos(fd.Body)
+	sp := fd.Pos
 	var body IRExpr
 	l.withInferScope(func() {
 		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {

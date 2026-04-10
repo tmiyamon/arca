@@ -553,7 +553,7 @@ func posToRange(pos Pos) protocol.Range {
 	}
 	return protocol.Range{
 		Start: protocol.Position{Line: line, Character: char},
-		End:   protocol.Position{Line: line, Character: char},
+		End:   protocol.Position{Line: line, Character: char + 1},
 	}
 }
 

@@ -647,9 +647,7 @@ func (p *Parser) parseBlockExpr() (Expr, error) {
 	closeTok := p.advance() // skip '}'
 	endPos := Pos{closeTok.Line, closeTok.Col}
 
-	if len(stmts) == 0 && lastExpr != nil {
-		return lastExpr, nil
-	}
+	// Always return a Block so that bodyPos can use start/end positions for scope tracking.
 	return Block{NodePos: AtPos(startPos), EndPos: endPos, Stmts: stmts, Expr: lastExpr}, nil
 }
 

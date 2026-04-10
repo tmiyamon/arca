@@ -4,7 +4,7 @@ import go "time"
 import go "github.com/labstack/echo/v5"
 import go _ "github.com/mattn/go-sqlite3"
 
-import arca/stdlib
+import stdlib
 
 type App (
   db: *sql.DB
@@ -58,8 +58,8 @@ fun selectTodo(app: App, c: *echo.Context) -> Result[List[Todo], error] {
 fun postTodo(app: App, c: *echo.Context) -> error {
   let result = createTodo(app, c)
   match result {
-    Ok(todo) -> c.JSON(http.StatusOK, todo)
-    Error(e) -> c.JSON(http.StatusBadRequest, None)
+    Ok(todo) => c.JSON(http.StatusOK, todo)
+    Error(e) => c.JSON(http.StatusBadRequest, None)
   }
 }
 
@@ -81,8 +81,8 @@ fun main() {
 
   let result = e.Start(":8080")
   match result {
-    Ok(_) -> Unit
-    Error(e) -> println("error: ${e}")
+    Ok(_) => Unit
+    Error(e) => println("error: ${e}")
   }
 }
 
