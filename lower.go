@@ -1418,22 +1418,25 @@ func (l *Lowerer) goTypeStr(t Type) string {
 
 // --- Expressions ---
 
+// lowerExpr lowers an expression with no type hint.
 func (l *Lowerer) lowerExpr(expr Expr) IRExpr {
 	return l.lowerExprHint(expr, nil)
 }
 
+// lowerExprHint lowers an expression with an optional type hint for bidirectional inference.
+// Dispatches to type-specific lowering functions and validates against the hint when given.
 func (l *Lowerer) lowerExprHint(expr Expr, hint IRType) IRExpr {
-	result := l.lowerExprInner(expr, hint)
+	if expr == nil {
+		return nil
+	}
+	result := l.dispatchLowerExpr(expr, hint)
 	if hint != nil && result != nil {
 		l.checkTypeHint(result, hint, expr)
 	}
 	return result
 }
 
-func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
-	if expr == nil {
-		return nil
-	}
+func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 	switch e := expr.(type) {
 	case IntLit:
 		return IRIntLit{Value: e.Value, Type: IRNamedType{GoName: "int"}}
