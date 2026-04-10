@@ -760,10 +760,25 @@ func (l *Lowerer) genStructTagFromRules(fieldName string, rules []TagRule) strin
 
 // --- Functions ---
 
-func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
-	name := fd.Name
-	if fd.Public {
-		name = snakeToPascal(name)
+// loweredFn holds the common lowered parts of a function declaration.
+type loweredFn struct {
+	params  []IRParamDecl
+	retType IRType
+	body    IRExpr
+}
+
+// lowerFnCommon lowers the signature and body of a function-like declaration,
+// managing per-function state (currentRetType, currentReceiver, currentTypeName,
+// lexical scope, type inference scope).
+func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn {
+	prevRet := l.currentRetType
+	prevRecv := l.currentReceiver
+	prevType := l.currentTypeName
+
+	l.currentRetType = fd.ReturnType
+	l.currentReceiver = receiver
+	if typeName != "" {
+		l.currentTypeName = typeName
 	}
 
 	params := l.lowerParams(fd.Params)
@@ -772,7 +787,6 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 		retType = l.lowerType(fd.ReturnType)
 	}
 
-	l.currentRetType = fd.ReturnType
 	sp, ep := bodyPos(fd.Body)
 	var body IRExpr
 	l.withInferScope(func() {
@@ -781,13 +795,27 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 		})
 		body = l.resolveExprTypes(body)
 	})
-	l.currentRetType = nil
+
+	l.currentRetType = prevRet
+	l.currentReceiver = prevRecv
+	l.currentTypeName = prevType
+
+	return loweredFn{params: params, retType: retType, body: body}
+}
+
+func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
+	name := fd.Name
+	if fd.Public {
+		name = snakeToPascal(name)
+	}
+
+	lf := l.lowerFnCommon(fd, "", "")
 
 	return IRFuncDecl{
 		GoName:     name,
-		Params:     params,
-		ReturnType: retType,
-		Body:       body,
+		Params:     lf.params,
+		ReturnType: lf.retType,
+		Body:       lf.body,
 		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}
 }
@@ -805,26 +833,7 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	}
 
 	receiver := strings.ToLower(td.Name[:1])
-	l.currentRetType = fd.ReturnType
-	l.currentReceiver = receiver
-	l.currentTypeName = td.Name
-
-	params := l.lowerParams(fd.Params)
-	var retType IRType
-	if fd.ReturnType != nil {
-		retType = l.lowerType(fd.ReturnType)
-	}
-	sp, ep := bodyPos(fd.Body)
-	var body IRExpr
-	l.withInferScope(func() {
-		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
-			body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
-		})
-		body = l.resolveExprTypes(body)
-	})
-	l.currentReceiver = ""
-	l.currentTypeName = ""
-	l.currentRetType = nil
+	lf := l.lowerFnCommon(fd, td.Name, receiver)
 
 	return []IRFuncDecl{{
 		GoName: methodName,
@@ -832,9 +841,9 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 			GoName: receiver,
 			Type:   td.Name,
 		},
-		Params:     params,
-		ReturnType: retType,
-		Body:       body,
+		Params:     lf.params,
+		ReturnType: lf.retType,
+		Body:       lf.body,
 		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}}
 }
@@ -943,27 +952,13 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 		funcName = strings.ToLower(td.Name[:1]) + td.Name[1:] + capitalize(fd.Name)
 	}
 
-	l.currentRetType = fd.ReturnType
-	l.currentTypeName = td.Name
-
-	params := l.lowerParams(fd.Params)
-	var retType IRType
-	if fd.ReturnType != nil {
-		retType = l.lowerType(fd.ReturnType)
-	}
-	sp, ep := bodyPos(fd.Body)
-	var body IRExpr
-	l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
-		body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
-	})
-	l.currentTypeName = ""
-	l.currentRetType = nil
+	lf := l.lowerFnCommon(fd, td.Name, "")
 
 	return IRFuncDecl{
 		GoName:     funcName,
-		Params:     params,
-		ReturnType: retType,
-		Body:       body,
+		Params:     lf.params,
+		ReturnType: lf.retType,
+		Body:       lf.body,
 		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}
 }
@@ -1471,17 +1466,8 @@ func (l *Lowerer) lowerExprInner(expr Expr, hint IRType) IRExpr {
 }
 
 func (l *Lowerer) lowerIdentHint(e Ident, hint IRType) IRExpr {
-	// None with hint: use hint to resolve inner type
 	if e.Name == "None" {
-		l.builtins["option"] = true
-		innerType := IRType(l.freshTypeVar())
-		if ot, ok := hint.(IROptionType); ok {
-			l.unify(innerType, ot.Inner)
-			innerType = ot.Inner
-		}
-		resolved := l.resolveDeep(innerType)
-		typeArg := "[" + irTypeEmitStr(resolved) + "]"
-		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
+		return l.lowerNoneCall(hint)
 	}
 	return l.lowerIdent(e)
 }
@@ -1497,11 +1483,7 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	}
 	// None bare identifier
 	if e.Name == "None" {
-		l.builtins["option"] = true
-		innerType := IRType(l.freshTypeVar())
-		resolved := l.resolveDeep(innerType)
-		typeArg := "[" + irTypeEmitStr(resolved) + "]"
-		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
+		return l.lowerNoneCall(nil)
 	}
 	// Enum variant bare reference: e.g. `Red` resolves to `ColorRed`
 	if typeName := l.findTypeName(e.Name); typeName != "" {
@@ -2221,72 +2203,90 @@ func (l *Lowerer) lowerIndexAccess(e IndexAccess) IRExpr {
 func (l *Lowerer) lowerConstructorCallHint(e ConstructorCall, hint IRType) IRExpr {
 	// Built-in Result constructors
 	if e.Name == "Ok" && len(e.Fields) == 1 {
-		l.builtins["result"] = true
-		var valHint IRType
-		if rt, ok := hint.(IRResultType); ok {
-			valHint = rt.Ok
-		}
-		val := l.lowerExprHint(e.Fields[0].Value, valHint)
-		okType := val.irType()
-		errType := IRType(IRNamedType{GoName: "error"})
-		if rt, ok := hint.(IRResultType); ok {
-			okType = rt.Ok
-			errType = rt.Err
-		} else if _, isIface := okType.(IRInterfaceType); isIface {
-			okType = l.freshTypeVar()
-		}
-		l.unify(okType, val.irType())
-		resultType := IRResultType{Ok: okType, Err: errType}
-		typeArgs := l.resultTypeArgs()
-		if typeArgs == "" {
-			resolved := l.resolveDeep(resultType).(IRResultType)
-			typeArgs = "[" + irTypeEmitStr(resolved.Ok) + ", " + irTypeEmitStr(resolved.Err) + "]"
-		}
-		return IROkCall{Value: val, TypeArgs: typeArgs, Type: resultType}
+		return l.lowerOkCall(e.Fields[0].Value, hint)
 	}
 	if e.Name == "Error" && len(e.Fields) == 1 {
-		l.builtins["result"] = true
-		var valHint IRType
-		if rt, ok := hint.(IRResultType); ok {
-			valHint = rt.Err
-		}
-		val := l.lowerExprHint(e.Fields[0].Value, valHint)
-		errType := IRType(IRNamedType{GoName: "error"})
-		if rt, ok := hint.(IRResultType); ok {
-			errType = rt.Err
-		}
-		okType := IRType(l.freshTypeVar())
-		if rt, ok := hint.(IRResultType); ok {
-			l.unify(okType, rt.Ok)
-			okType = rt.Ok
-		}
-		resultType := IRResultType{Ok: okType, Err: errType}
-		typeArgs := l.resultTypeArgs()
-		if typeArgs == "" {
-			resolved := l.resolveDeep(resultType).(IRResultType)
-			typeArgs = "[" + irTypeEmitStr(resolved.Ok) + ", " + irTypeEmitStr(resolved.Err) + "]"
-		}
-		return IRErrorCall{Value: val, TypeArgs: typeArgs, Type: resultType}
+		return l.lowerErrorCall(e.Fields[0].Value, hint)
 	}
 	// Built-in Option constructors
 	if e.Name == "Some" && len(e.Fields) == 1 {
-		l.builtins["option"] = true
-		val := l.lowerExpr(e.Fields[0].Value)
-		return IRSomeCall{Value: val, Type: IROptionType{Inner: val.irType()}}
+		return l.lowerSomeCall(e.Fields[0].Value)
 	}
 	if e.Name == "None" {
-		l.builtins["option"] = true
-		innerType := IRType(l.freshTypeVar())
-		if ot, ok := hint.(IROptionType); ok {
-			l.unify(innerType, ot.Inner)
-			innerType = ot.Inner
-		}
-		resolved := l.resolveDeep(innerType)
-		typeArg := "[" + irTypeEmitStr(resolved) + "]"
-		return IRNoneExpr{TypeArg: typeArg, Type: IROptionType{Inner: innerType}}
+		return l.lowerNoneCall(hint)
 	}
 
 	return l.lowerUserConstructorCall(e)
+}
+
+// resolveResultTypeArgs computes the type args string for a Result constructor,
+// resolving type variables via the current infer scope.
+func (l *Lowerer) resolveResultTypeArgs(rt IRResultType) string {
+	if ta := l.resultTypeArgs(); ta != "" {
+		return ta
+	}
+	resolved := l.resolveDeep(rt).(IRResultType)
+	return "[" + irTypeEmitStr(resolved.Ok) + ", " + irTypeEmitStr(resolved.Err) + "]"
+}
+
+// hintResultType extracts Ok/Err types from a Result hint, or defaults.
+// defaultOk is used when hint is not a Result. errorType is always `error`.
+func (l *Lowerer) hintResultType(hint IRType, defaultOk IRType) (okType, errType IRType) {
+	errType = IRNamedType{GoName: "error"}
+	okType = defaultOk
+	if rt, ok := hint.(IRResultType); ok {
+		okType = rt.Ok
+		errType = rt.Err
+	}
+	return
+}
+
+func (l *Lowerer) lowerOkCall(valExpr Expr, hint IRType) IRExpr {
+	l.builtins["result"] = true
+	var valHint IRType
+	if rt, ok := hint.(IRResultType); ok {
+		valHint = rt.Ok
+	}
+	val := l.lowerExprHint(valExpr, valHint)
+	okType, errType := l.hintResultType(hint, val.irType())
+	if _, isIface := okType.(IRInterfaceType); isIface {
+		okType = l.freshTypeVar()
+	}
+	l.unify(okType, val.irType())
+	rt := IRResultType{Ok: okType, Err: errType}
+	return IROkCall{Value: val, TypeArgs: l.resolveResultTypeArgs(rt), Type: rt}
+}
+
+func (l *Lowerer) lowerErrorCall(valExpr Expr, hint IRType) IRExpr {
+	l.builtins["result"] = true
+	var valHint IRType
+	if rt, ok := hint.(IRResultType); ok {
+		valHint = rt.Err
+	}
+	val := l.lowerExprHint(valExpr, valHint)
+	okType, errType := l.hintResultType(hint, l.freshTypeVar())
+	rt := IRResultType{Ok: okType, Err: errType}
+	return IRErrorCall{Value: val, TypeArgs: l.resolveResultTypeArgs(rt), Type: rt}
+}
+
+func (l *Lowerer) lowerSomeCall(valExpr Expr) IRExpr {
+	l.builtins["option"] = true
+	val := l.lowerExpr(valExpr)
+	return IRSomeCall{Value: val, Type: IROptionType{Inner: val.irType()}}
+}
+
+func (l *Lowerer) lowerNoneCall(hint IRType) IRExpr {
+	l.builtins["option"] = true
+	innerType := IRType(l.freshTypeVar())
+	if ot, ok := hint.(IROptionType); ok {
+		l.unify(innerType, ot.Inner)
+		innerType = ot.Inner
+	}
+	resolved := l.resolveDeep(innerType)
+	return IRNoneExpr{
+		TypeArg: "[" + irTypeEmitStr(resolved) + "]",
+		Type:    IROptionType{Inner: innerType},
+	}
 }
 
 func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
