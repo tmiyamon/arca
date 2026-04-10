@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-11
+
+- [Trait system design (proposal)](decisions/ideas.md#2026-04-11-trait-system-design-proposal) — Kotlin/Swift hybrid, `impl User: Display`, `&` for multiple bounds. Design only, not implemented
+
 ## 2026-04-10
 
 - [Arrow convention](decisions/syntax.md#2026-04-10-arrow-convention) — Scala-style: -> for types, => for values (match arms + lambdas)

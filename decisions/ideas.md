@@ -4,6 +4,65 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-11: Trait system design (proposal)
+
+**Context:** Arca needs some form of polymorphism to scale beyond simple scripts. Research showed Kotlin/Rust-style traits fit Arca's positioning (Go ecosystem + type safety). But Arca isn't yet at the size where trait absence blocks development — more fundamental features (module system, error handling) come first.
+
+**Proposed design (not yet implemented):**
+
+- **Nominal traits** — explicit implementation required
+- **Arca-defined types only** — Go FFI trait implementation deferred
+- **No higher-kinded types** — library authors only need it, aligns with Rust/Kotlin
+- **Compiles to Go interfaces** — structural interface is the underlying target
+- **Trait bounds on generics** — `fun f[T: Display & Eq](x: T)`
+- **Multiple constraints with `&`** — Swift/Scala 3/TypeScript style, avoids `+` arithmetic confusion
+- **Default implementations** — in trait body, copy-pasted to each impl (Go embedding can't do open recursion)
+- **Trait inheritance** — `trait Ord: Eq` requires supertrait
+- **Value receivers only** — Arca is immutable, Go compiler optimizes via escape analysis
+- **No static trait functions, no associated types** — use type-level `static fun` or regular functions instead
+
+**Proposed syntax (Swift/Rust hybrid):**
+
+```
+trait Display {
+    fun display(self) -> String
+}
+
+trait Ord: Eq {
+    fun compare(self, other: Self) -> Order
+}
+
+type User {
+    User(name: String)
+    fun hello() -> String { "Hello!" }
+}
+
+impl User: Display {
+    fun display(self) -> String { self.name }
+}
+
+impl User: Greeter {
+    fun greet(self) -> String { self.display() }
+}
+
+fun show[T: Display & Eq](x: T) -> String {
+    x.display()
+}
+```
+
+Key choices from design discussion:
+- `with` chaining rejected: whitespace separation breaks visual attachment
+- Integrated `impl` blocks inside type rejected: `impl` blocks look like scopes but share type scope
+- Separated `impl User: Display` chosen: matches Rust/Swift model, LSP can show all impls
+- `&` over `+` for multiple bounds: set-theoretic reading, no arithmetic conflict
+- `:` for constraint declarations (trait bounds, trait inheritance), different from `with` for extension (but extension style was rejected)
+
+**Why not yet:** Arca is still at the level where simple scripts work. Traits matter when code grows beyond single-file apps. Module system, better error handling, and stdlib richness come first. Discussion recorded so future implementation starts from a known design baseline.
+
+**Status:** Design only, no implementation. Revisit when trait absence blocks real work.
+
+---
+
 ## 2026-04-06: Tag-based snapshot and migration system (idea)
 
 **Context:** While building a todo app with sqlite, realized DB schema should be auto-generated from type definitions. Generalized beyond DB: any external system mapped via tags can benefit from snapshots and migration.
