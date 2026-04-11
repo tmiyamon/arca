@@ -52,6 +52,30 @@ fun main() {
 	}
 }
 
+// Test go to definition for Arca stdlib
+func TestDefinitionStdlib(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+import stdlib
+
+fun main() {
+    let data = stdlib.Encode("hello")
+    fmt.Println(data)
+}
+`
+	file, pos := getDefinitionLocation(source, "/tmp/def_stdlib_test.arca", 5, 24)
+	t.Logf("stdlib.Encode → file=%q pos=%v", file, pos)
+	if file == "" {
+		t.Fatal("expected a file path")
+	}
+	// Simulate LSP path resolution
+	resolved := resolveEmbedFilePath(file)
+	t.Logf("resolved: %q", resolved)
+	if _, err := os.Stat(resolved); err != nil {
+		t.Errorf("resolved path should exist: %v", err)
+	}
+}
+
 // Test go to definition for Go FFI members
 func TestDefinitionFFI(t *testing.T) {
 	t.Parallel()

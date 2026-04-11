@@ -47,6 +47,56 @@ func lookupArcaPackage(name string) *ArcaPackage {
 	return nil
 }
 
+// arcaCacheDir returns the persistent cache dir for Arca packages.
+// Packages are extracted here on first LSP access so go-to-definition
+// can return real file paths.
+func arcaCacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".cache", "arca", "packages")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// ensurePackageExtracted extracts the package to the cache dir if not already
+// present, and returns the directory path. Returns "" on failure.
+func (p *ArcaPackage) ensureExtracted() string {
+	cache, err := arcaCacheDir()
+	if err != nil {
+		return ""
+	}
+	pkgDir := filepath.Join(cache, p.Name)
+	// Check if already extracted
+	if _, err := os.Stat(pkgDir); err == nil {
+		return pkgDir
+	}
+	if err := p.extractTo(cache); err != nil {
+		return ""
+	}
+	return pkgDir
+}
+
+// resolveEmbedFilePath maps a file path from loadArcaPackageTypes (which uses
+// embed.FS paths like "stdlib/db.go") to an absolute path in the cache dir.
+// Returns the original path if no mapping applies.
+func resolveEmbedFilePath(path string) string {
+	for _, pkg := range arcaPackages {
+		prefix := pkg.SourceDir + "/"
+		if strings.HasPrefix(path, prefix) {
+			cacheDir := pkg.ensureExtracted()
+			if cacheDir == "" {
+				return path
+			}
+			return filepath.Join(cacheDir, strings.TrimPrefix(path, prefix))
+		}
+	}
+	return path
+}
+
 // loadArcaPackageTypes parses the package's embedded Go source files and
 // type-checks them, returning a *types.Package and its *token.FileSet usable
 // by GoTypeResolver. No filesystem extraction needed.

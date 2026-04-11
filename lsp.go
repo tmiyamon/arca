@@ -216,6 +216,8 @@ func lspDefinition(ctx *glsp.Context, params *protocol.DefinitionParams) (any, e
 	// Default to the current file's URI; override if definition is elsewhere (Go FFI)
 	defURI := uri
 	if defFile != "" && defFile != filePath {
+		// Map Arca package embed paths (e.g. "stdlib/db.go") to extracted cache paths
+		defFile = resolveEmbedFilePath(defFile)
 		defURI = "file://" + defFile
 	}
 
