@@ -27,18 +27,18 @@ Net effect: hint-based type checks didn't feed substitution back into HM inferen
 
 ---
 
-## 2026-04-12: unify takes an explicit silent flag
+## 2026-04-12: Lowerer.unify always reports; substitution-only uses l.infer.unify
 
-**Context:** `Lowerer.unify(a, b) bool` was silent by default — callers had to remember to check the return value and emit `ErrTypeMismatch` themselves. Out of 11 existing call sites only 2 did, and I forgot to do so myself when adding the Arca generic constructor path (caught by the user). The pattern is a foot-gun: the right thing costs four extra lines at every call site, so it gets skipped.
+**Context:** `Lowerer.unify(a, b) bool` was silent by default, so all 11 call sites had to remember to check the return value and emit `ErrTypeMismatch` themselves. Only 2 did, and I forgot the same check when adding the Arca generic constructor path. A transitional `silent bool` flag was added to force every caller to pick explicitly, but after folding `irTypesMatch` into `unify` and auditing the silent sites one more time it became clear that every remaining silent call was either (a) vacuous (binding a fresh type var that can't fail) or (b) dead (redundant with `checkTypeHint → unify`). There was no legitimate "silent type check" caller left.
 
-**Decision:** Make the choice part of the signature. `Lowerer.unify(a, b IRType, pos Pos, silent bool) bool` — the caller must pick reporting (`false`) or silent (`true`) explicitly at every site. Forgetting is impossible because you can't call the function without naming the mode.
+**Decision:** Drop the flag entirely. `Lowerer.unify(a, b, pos) bool` always reports on failure. For the legitimate raw-substitution sites (explicit type args binding, hint propagation into generic return types, fresh-var binding inside `lowerOkCall` / `lowerNoneCall`), call the underlying `l.infer.unify(a, b)` directly — intent becomes visible in the call itself: `l.unify(...)` means type-check, `l.infer.unify(...)` means rewrite substitution for codegen.
 
 **Implementation:**
-- `unify` now takes `pos Pos` and `silent bool`; when `silent == false`, auto-emits `ErrTypeMismatch` with `resolveDeep`-rendered expected/actual strings on failure. `pos` is ignored when silent.
-- The 8 pre-existing non-reporting sites pass `Pos{}, true` (explicit type args, Go FFI hint propagation, Arca fn call args, if/else branch unification, Ok/None hint unification, match arm result unification). These may be promoted to reporting case-by-case once each gets a position source.
-- Two reporting sites (`resolveGoCall` generic args, `lowerUserConstructorCall` generic fields) pass `pos, false` and drop their manual `addCompileError`.
+- 2 sites deleted as dead code: the Arca-fn-call arg unification loop in `lowerFnCallWithHint` (already done by `lowerArgWithContext → lowerExprHint → checkTypeHint → unify`), and the match-arm-result unification loop in `unifyMatchArmTypes` (covered by the outer match hint pass).
+- 5 sites kept but switched to `l.infer.unify`: `unifyExplicitTypeArgs`, both Go FFI hint propagation sites, `lowerOkCall` okType binding, `lowerNoneCall` inner binding. Each has a comment noting it is substitution-only.
+- The `silent bool` parameter is removed from `Lowerer.unify`. Three reporting call sites (`checkTypeHintPos`, `resolveGoCall` generic args, `lowerIfExpr` branch unification) now call `l.unify(a, b, pos)`.
 
-**Grep contract:** `rg 'unify\(.*, true\)'` locates every non-reporting unification site for future audits.
+**Grep contract:** `rg 'l\.infer\.unify\('` locates every raw substitution site; `rg 'l\.unify\('` locates every type check. The distinction is visible without reading the bool arg.
 
 **Status:** Done
 

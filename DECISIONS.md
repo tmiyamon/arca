@@ -9,8 +9,8 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 ## 2026-04-12
 
 - [unify is the single type-check path](decisions/transpiler.md#2026-04-12-unify-is-the-single-type-check-path) — delete `irTypesMatch`, fold constraint compatibility into `Lowerer.unify`, `checkTypeHint` routes hints through HM. Fixes a silent `IRMapType` gap caught by Phase-1 fallback flip.
-- [unify takes an explicit silent flag](decisions/transpiler.md#2026-04-12-unify-takes-an-explicit-silent-flag) — `Lowerer.unify(a, b, pos, silent)` forces callers to pick reporting vs silent at every site; forgetting becomes impossible.
-- [if/else branch mismatch reported](decisions/transpiler.md#2026-04-12-unify-takes-an-explicit-silent-flag) — covered by the above audit, if/else promoted to reporting.
+- [Lowerer.unify always reports](decisions/transpiler.md#2026-04-12-lowererunify-always-reports-substitution-only-uses-linferunify) — the silent flag is gone; type checks go through `l.unify(a, b, pos)`, raw substitution through `l.infer.unify(a, b)`. 2 dead unify sites deleted, 5 demoted to raw substitution.
+- [if/else branch mismatch reported](decisions/transpiler.md#2026-04-12-lowererunify-always-reports-substitution-only-uses-linferunify) — covered by the unify cleanup; if/else promoted to reporting.
 - [Arca generic constructors use HM](decisions/transpiler.md#2026-04-12-unify-arca-generic-constructors-with-go-ffi-hm) — per-call fresh type vars via `instantiateGenericType`, same shape as Go FFI. Removes `inferGoType` and the `isTypeParam` fallback.
 
 ## 2026-04-11
