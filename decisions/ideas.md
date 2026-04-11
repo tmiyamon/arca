@@ -4,6 +4,57 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-12: `error` as `Option[Error]`, nullable out of `Result` (idea)
+
+**Context:** Go `error`-returning functions are currently mapped to `Result[Unit, error]` and `(T, error)`-returning functions to `Result[T, error]`. Writing `fun handler() -> error` to mirror Go handlers produces a confusing mismatch because the body evaluates to `Result[Unit, error]`, and users see errors like `expected error, got Result[Unit, error]` that don't map to their mental model. The friction points at a deeper representation question: Go's `error` is nullable (an `interface { Error() string }` value that may be `nil`), and `Result[Unit, error]` is an awkward way to model "nil or some error".
+
+**Proposed representation:**
+
+- `Error` — a **trait** (interface-like), represents "a failure value". Non-nullable. Blocked on the trait system landing.
+- `error` — a **type alias** for `Option[Error]` (nullable failure value). The Arca-side name mirrors Go's `error` so Go users find it familiar, but its shape is "nullable around a non-nullable trait".
+- **Rule:** nullability is always expressed with `Option`, never baked into another type. `Result`'s `Err` side is `Error` (non-nullable), not `error` (nullable). Mixing them would be "`Option[Error]` inside `Result`", two nested nullability layers.
+
+**Revised Go → Arca type mapping:**
+
+| Go signature      | Current Arca           | Proposed Arca       |
+| ----------------- | ---------------------- | ------------------- |
+| `func() error`    | `Result[Unit, error]`  | `Option[Error]` (= `error`) |
+| `func() (T, error)` | `Result[T, error]`   | `Result[T, Error]`  |
+| `func() (T, bool)` | `Option[T]`           | `Option[T]`         |
+
+The asymmetry is intentional: `(T, error)` is "value or failure" (Result); `error` alone is "failure or nothing" (Option). Each case picks the container that matches its semantics.
+
+**Usage example (hypothetical, after the change):**
+
+```arca
+fun getTodo(app: App, c: *echo.Context) -> error {
+  let todos = stdlib.QueryAs[Todo](app.db, "...")?   // Result[List[Todo], Error] unwrap
+  c.JSON(http.StatusOK, todos)                        // Option[Error] = error, matches
+}
+```
+
+The body's last expression `c.JSON(...)` has type `Option[Error]`, which matches the declared `-> error`.
+
+**`?` and null safety:**
+
+- Keep `?` as the propagation operator, extended to work on both `Result[T, E]` and `Option[T]`.
+- Consider adding Kotlin-style null-safety operators on `Option`: `x?.foo()` (safe navigation), `x ?: default` (elvis), `x!!` (force unwrap, panics on `None`).
+- Open question: whether `?` for Result and `?` for Option should share the same symbol or be separated (e.g. `?` for Result, `?.` for Option). Shared is simpler; separated is stricter about intent.
+
+**Hard constraint:** `error = Option[error]` (self-referential surface alias) is forbidden — mentally unstable and certain to confuse. The alias must go through `Error` as a trait. That means this idea is **blocked on the trait system being implemented**.
+
+**Migration implications (when implemented):**
+
+- `goFuncReturnType` change in `lower.go`
+- `?` semantics extended to `Option`
+- Codegen for `Option[Error]` must emit to Go's nullable `error`
+- Existing testdata and memory entries using `Result[Unit, error]` / `Result[T, error]` need rewriting
+- Surface `error` identifier is now a type alias, not a concrete type
+
+**Status:** Idea only. Blocked on trait system. Current `Result[Unit, error]` representation stays in place until both are revisited together.
+
+---
+
 ## 2026-04-11: Trait system design (proposal)
 
 **Context:** Arca needs some form of polymorphism to scale beyond simple scripts. Research showed Kotlin/Rust-style traits fit Arca's positioning (Go ecosystem + type safety). But Arca isn't yet at the size where trait absence blocks development — more fundamental features (module system, error handling) come first.
