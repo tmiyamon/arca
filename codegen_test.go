@@ -302,6 +302,49 @@ fun main() {
 		}
 	})
 
+	t.Run("unresolved_type_param_try", func(t *testing.T) {
+		t.Parallel()
+		// stdlib.BindJSON[T any](r *http.Request) (T, error): T does not
+		// appear in the parameter list, so HM has nothing to unify it
+		// with. Without a hint or explicit type args, Arca must reject
+		// the call instead of letting `todo: interface{}` leak into Go.
+		_, err := transpileSource(`
+import go "net/http"
+import stdlib
+
+fun handle(r: *http.Request) -> Result[Int, error] {
+  let todo = stdlib.BindJSON(r)?
+  Ok(0)
+}
+`)
+		if err == nil {
+			t.Fatal("expected error for unresolved type parameter")
+		}
+		if !strings.Contains(err.Error(), "cannot infer type of todo") {
+			t.Errorf("unexpected error: %s", err)
+		}
+		if !strings.Contains(err.Error(), "BindJSON") {
+			t.Errorf("error should name the function in the suggestion: %s", err)
+		}
+	})
+
+	t.Run("unresolved_type_param_fixed_by_explicit_args", func(t *testing.T) {
+		t.Parallel()
+		// Same call but with explicit [Int]: T is pinned, no error.
+		_, err := transpileSource(`
+import go "net/http"
+import stdlib
+
+fun handle(r: *http.Request) -> Result[Int, error] {
+  let n = stdlib.BindJSON[Int](r)?
+  Ok(n)
+}
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("wrong_arg_type_generic_type_param", func(t *testing.T) {
 		t.Parallel()
 		// Once a type parameter is bound by an earlier argument, later

@@ -309,16 +309,117 @@ func (l *Lowerer) resolveStmtTypes(s IRStmt) IRStmt {
 				}
 			}
 		}
+		// An unresolved HM type variable in a generic-call RHS means the
+		// type parameter could not be inferred. Report it here instead of
+		// letting `interface{}` flow to Go, which would surface downstream
+		// as confusing method or field errors on `interface{}`. Skipped
+		// when the user provided an explicit annotation or when the RHS is
+		// a bare collection literal (empty `[]` / `{}` are allowed to
+		// default to interface element types).
+		if stmt.GoName != "_" && stmt.Type == nil && isGenericCall(stmt.Value) {
+			resolved := l.resolveDeep(stmt.Value.irType())
+			if containsUnresolvedTypeVar(resolved) {
+				l.addCompileError(ErrCannotInferTypeParam, stmt.Pos, CannotInferTypeParamData{
+					Binding:    stmt.GoName,
+					Suggestion: callFuncName(stmt.Value),
+				})
+			}
+		}
 		return stmt
 	case IRExprStmt:
 		stmt.Expr = l.resolveExprTypes(stmt.Expr)
 		return stmt
 	case IRTryLetStmt:
 		stmt.CallExpr = l.resolveExprTypes(stmt.CallExpr)
+		// Same unresolved-type-var check as IRLetStmt: `let x = f()?` where
+		// f's generic T can't be inferred would otherwise hand `x` to the
+		// rest of the function with an unresolved type. Try always wraps a
+		// call, so no literal-value exception is needed here.
+		if stmt.GoName != "_" && isGenericCall(stmt.CallExpr) {
+			unwrapped := l.resolveDeep(stmt.CallExpr.irType())
+			if rt, ok := unwrapped.(IRResultType); ok {
+				unwrapped = rt.Ok
+			}
+			if containsUnresolvedTypeVar(unwrapped) {
+				pos := callExprPos(stmt.CallExpr)
+				l.addCompileError(ErrCannotInferTypeParam, pos, CannotInferTypeParamData{
+					Binding:    stmt.GoName,
+					Suggestion: callFuncName(stmt.CallExpr),
+				})
+			}
+		}
 		return stmt
 	default:
 		return s
 	}
+}
+
+// containsUnresolvedTypeVar reports whether an IR type (after resolveDeep)
+// still contains an HM type variable anywhere. Used to detect let bindings
+// whose generic type parameter was never pinned down.
+func containsUnresolvedTypeVar(t IRType) bool {
+	switch tt := t.(type) {
+	case IRTypeVar:
+		return true
+	case IRPointerType:
+		return containsUnresolvedTypeVar(tt.Inner)
+	case IRListType:
+		return containsUnresolvedTypeVar(tt.Elem)
+	case IRMapType:
+		return containsUnresolvedTypeVar(tt.Key) || containsUnresolvedTypeVar(tt.Value)
+	case IROptionType:
+		return containsUnresolvedTypeVar(tt.Inner)
+	case IRResultType:
+		return containsUnresolvedTypeVar(tt.Ok) || containsUnresolvedTypeVar(tt.Err)
+	case IRTupleType:
+		for _, e := range tt.Elements {
+			if containsUnresolvedTypeVar(e) {
+				return true
+			}
+		}
+		return false
+	case IRNamedType:
+		for _, p := range tt.Params {
+			if containsUnresolvedTypeVar(p) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// callFuncName extracts the function name from an IRFnCall (possibly wrapped
+// in a block/if/etc.), for use in diagnostic suggestions.
+func callFuncName(e IRExpr) string {
+	switch expr := e.(type) {
+	case IRFnCall:
+		return expr.Func
+	case IRMethodCall:
+		return expr.Method
+	}
+	return "<call>"
+}
+
+// isGenericCall reports whether an expression is a direct function or method
+// call — the only RHS kinds where an unresolved type variable legitimately
+// points to an uninferrable generic type parameter. Literals like empty `[]`
+// default to interface element types and must not trigger the check.
+func isGenericCall(e IRExpr) bool {
+	switch e.(type) {
+	case IRFnCall, IRMethodCall:
+		return true
+	}
+	return false
+}
+
+// callExprPos returns the source position of a call expression's origin.
+// Falls back to zero Pos when the expression is not a recognized call.
+func callExprPos(e IRExpr) Pos {
+	if call, ok := e.(IRFnCall); ok {
+		return call.Source.Pos
+	}
+	return Pos{}
 }
 
 func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
@@ -2827,6 +2928,7 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 		return []IRStmt{IRLetStmt{
 			GoName: "_",
 			Value:  l.lowerExpr(s.Value),
+			Pos:    s.Pos,
 		}}
 	}
 
@@ -2910,6 +3012,7 @@ func (l *Lowerer) lowerNormalLetStmt(s LetStmt) []IRStmt {
 		GoName: goVarName,
 		Value:  loweredValue,
 		Type:   loweredType,
+		Pos:    s.Pos,
 	}}
 }
 

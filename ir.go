@@ -452,6 +452,7 @@ type IRLetStmt struct {
 	GoName string
 	Value  IRExpr
 	Type   IRType
+	Pos    Pos // source position of the `let` keyword, used for diagnostics
 }
 
 // Try let: let x = expr? — error propagation

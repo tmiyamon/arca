@@ -25,6 +25,7 @@ const (
 	ErrReturnTypeMismatch
 	ErrCannotInferType
 	ErrUnusedPackage
+	ErrCannotInferTypeParam
 )
 
 type CompileError struct {
@@ -61,6 +62,11 @@ func (e CompileError) Message() string {
 		return fmt.Sprintf("cannot infer %s type for match subject", d.TypeName)
 	case UnusedPackageData:
 		return fmt.Sprintf("unused package: %s", d.Name)
+	case CannotInferTypeParamData:
+		if d.Binding != "" {
+			return fmt.Sprintf("cannot infer type of %s — add explicit type args, e.g. %s[T](...)", d.Binding, d.Suggestion)
+		}
+		return fmt.Sprintf("cannot infer type parameter — add explicit type args, e.g. %s[T](...)", d.Suggestion)
 	case MessageData:
 		return d.Text
 	default:
@@ -109,6 +115,15 @@ type CannotInferTypeData struct {
 
 type UnusedPackageData struct {
 	Name string // short name as used in Arca source (e.g. "time", "stdlib")
+}
+
+// CannotInferTypeParamData describes a let binding whose inferred type still
+// contains an unresolved HM type variable after lowering, typically from a
+// generic call where no type argument could be derived from arguments, hint,
+// or explicit type args.
+type CannotInferTypeParamData struct {
+	Binding    string // `let x = ...` → "x"
+	Suggestion string // function name to show in the explicit-type-args hint
 }
 
 // MessageData is a fallback for errors not yet structured

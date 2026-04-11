@@ -4,6 +4,25 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-11: Detect unresolved generic type parameters at the binding site
+
+**Context:** `let todo = stdlib.BindJSON(req)?` called a generic function whose `T any` type parameter did not appear in the parameter list, so HM had no argument to unify `T` with. The Arca compiler silently let `T` flow as an unresolved `IRTypeVar`, which then decayed to `interface{}` in codegen. Downstream usage like `todo.body` surfaced as confusing `type interface{} has no field or method Body` errors from the Go compiler — wrong layer, wrong source positions.
+
+**Decision:** Report `ErrCannotInferTypeParam` at the `let` binding site when the RHS is a generic call whose type parameter is still unresolved after lowering.
+
+**Implementation:**
+- New error code `ErrCannotInferTypeParam` with `CannotInferTypeParamData{Binding, Suggestion}`. Message: `cannot infer type of <name> — add explicit type args, e.g. f[T](...)`.
+- Added `Pos` to `IRLetStmt` (previously the node had no position) so the diagnostic anchors at the `let` keyword.
+- `resolveStmtTypes` checks every `IRLetStmt` and `IRTryLetStmt`: after `resolveDeep`, if the value type still contains an `IRTypeVar`, emit the error.
+- Guard: only fires when the RHS is a direct call (`IRFnCall`/`IRMethodCall`) and there is no explicit `let` annotation, so legitimate uses like `let users: List[User] = []` and `let empty = []` keep working.
+- New helper `containsUnresolvedTypeVar(IRType)` walks pointer/list/map/option/result/tuple/named types.
+
+**Why the binding site:** errors can fire at the call expression, but binding-site anchoring matches how the user reads and fixes the code — they see `let todo = ...` and add `[Todo]` directly. The explicit-type-args suggestion in the message names the function (from `callFuncName`) to guide the fix.
+
+**Status:** Done
+
+---
+
 ## 2026-04-11: `if`/`match` in value position via body-mode refactor
 
 **Context:** `let x = if cond { a } else { b }` and `let x = match ... { ... }` emitted `/* unsupported expr */` because `emitExpr` had no case for `IRIfExpr`/`IRMatch`. The Arca spec advertises `if` and `match` as expressions, so this was a latent gap caught while writing regression tests.
