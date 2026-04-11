@@ -4,6 +4,25 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-12: Unify Arca generic constructors with Go FFI HM
+
+**Context:** Arca generic types (`type Pair[A, B]`) and Go FFI generics resolved type parameters by different mechanisms despite both going through the same InferScope. Go FFI used `instantiateGeneric` to allocate fresh `IRTypeVar` per call site. Arca constructors reused `typeParamVar` which caches by name in the InferScope, so `Pair(1, "a")` and `Pair(2.5, 42)` in the same function shared the same `A` type var. Actual `typeArgs` strings were built by a separate `inferGoType` walk over the AST argument literals, so call-site substitution conflicts went unnoticed — HM was effectively check-only for this path.
+
+**Decision:** Run Arca generic constructor calls through the same HM shape as Go FFI: per-call fresh type vars, substitution into the constructor's expected field types, unify-on-lower, resolve-deep for the emitted type args.
+
+**Implementation:**
+- `instantiateGenericType(td)` mirrors `instantiateGeneric`, returning a name→IRTypeVar map with freshly allocated IDs.
+- `lowerTypeWithVars(t, vars)` substitutes bare `NamedType` refs matching a vars key; `substituteTypeVars` patches composite IR types after a plain lower. Falls back to `lowerType` when vars is nil.
+- `lowerFieldValuesWithHints(fields, hints)` takes pre-lowered hint types so the fresh vars flow into per-field hints. `lowerFieldValuesWithTypes` now delegates.
+- `lowerUserConstructorCall` pipeline: instantiate → lower field types via vars → lower args with hints → explicit `l.unify(arg, hint)` for each field (since `checkTypeHint` only tests compatibility and doesn't record substitutions) → build `typeArgs` by `resolveDeep(vars[p])` in declaration order.
+- Removed `inferGoType` (only call site was the old constructor path) and the "check all types" fallback in `isTypeParam`. Method bodies still resolve their own params via the `currentTypeName` path.
+
+**Side effects:** Two `Pair(...)` calls with different arg types in the same function now work (previously depended on `inferGoType` being independent of substitution), and `Pair[A,B]` vs `Foo[A,C]` no longer collide on the `A` param name.
+
+**Status:** Done
+
+---
+
 ## 2026-04-11: Detect unresolved generic type parameters at the binding site
 
 **Context:** `let todo = stdlib.BindJSON(req)?` called a generic function whose `T any` type parameter did not appear in the parameter list, so HM had no argument to unify `T` with. The Arca compiler silently let `T` flow as an unresolved `IRTypeVar`, which then decayed to `interface{}` in codegen. Downstream usage like `todo.body` surfaced as confusing `type interface{} has no field or method Body` errors from the Go compiler — wrong layer, wrong source positions.

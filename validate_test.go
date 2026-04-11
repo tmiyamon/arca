@@ -280,6 +280,25 @@ fun make() -> Point {
 	}
 }
 
+func TestGenericConstructorSameParamMismatch(t *testing.T) {
+	t.Parallel()
+	// `Pair[A]` with two fields of type A must unify both args to the
+	// same concrete type. Passing Int and String must fail at the second
+	// field, not silently accept and leak to Go.
+	errs := validateSource(`
+type Pair[A] {
+  Pair(first: A, second: A)
+}
+
+fun main() {
+  let _ = Pair(first: 1, second: "hello")
+}
+`)
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatalf("expected ErrTypeMismatch, got: %v", errs)
+	}
+}
+
 func TestValidateLetInference(t *testing.T) {
 	t.Parallel()
 	errs := validateSource(`

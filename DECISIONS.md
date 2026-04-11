@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-12
+
+- [Arca generic constructors use HM](decisions/transpiler.md#2026-04-12-unify-arca-generic-constructors-with-go-ffi-hm) — per-call fresh type vars via `instantiateGenericType`, same shape as Go FFI. Removes `inferGoType` and the `isTypeParam` fallback.
+
 ## 2026-04-11
 
 - [Unresolved type parameter detection](decisions/transpiler.md#2026-04-11-detect-unresolved-generic-type-parameters-at-the-binding-site) — `ErrCannotInferTypeParam` on `let todo = stdlib.BindJSON(req)?` when T can't be inferred; stops `interface{}` leaking to Go

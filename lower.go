@@ -1318,27 +1318,124 @@ func (l *Lowerer) checkMethodArgCount(receiver IRExpr, method string, argCount i
 	}
 }
 
-// isTypeParam checks if a name is a type parameter of the current type or any known type.
+// isTypeParam checks if a name is a type parameter of the current type.
+// Only looks at the enclosing type's declaration so method bodies resolve
+// their own params consistently. External constructor calls never hit this
+// path: lowerUserConstructorCall instantiates fresh type vars per call via
+// instantiateGenericType.
 func (l *Lowerer) isTypeParam(name string) bool {
-	// Check current type's params
-	if l.currentTypeName != "" {
-		if td, ok := l.types[l.currentTypeName]; ok {
-			for _, p := range td.Params {
-				if p == name {
-					return true
-				}
-			}
-		}
+	if l.currentTypeName == "" {
+		return false
 	}
-	// Check all types' params (for when not inside a type definition)
-	for _, td := range l.types {
-		for _, p := range td.Params {
-			if p == name {
-				return true
-			}
+	td, ok := l.types[l.currentTypeName]
+	if !ok {
+		return false
+	}
+	for _, p := range td.Params {
+		if p == name {
+			return true
 		}
 	}
 	return false
+}
+
+// instantiateGenericType creates a fresh IRTypeVar for each type parameter of
+// a generic Arca type declaration, returning the name→var map. Mirrors
+// instantiateGeneric for Go FFI: each constructor call site gets its own
+// independent vars so two `Pair(...)` calls in the same function can bind to
+// different argument types without sharing substitution entries.
+func (l *Lowerer) instantiateGenericType(td TypeDecl) map[string]IRType {
+	if len(td.Params) == 0 || l.infer == nil {
+		return nil
+	}
+	vars := make(map[string]IRType, len(td.Params))
+	for _, p := range td.Params {
+		vars[p] = l.freshTypeVar()
+	}
+	return vars
+}
+
+// lowerTypeWithVars lowers an AST type while substituting type parameter
+// references from the supplied vars map. Used by generic constructor calls
+// so fresh per-call type vars flow into the constructor's field hints.
+// Falls back to lowerType when vars is nil.
+func (l *Lowerer) lowerTypeWithVars(t Type, vars map[string]IRType) IRType {
+	if vars == nil || t == nil {
+		return l.lowerType(t)
+	}
+	switch tt := t.(type) {
+	case NamedType:
+		if len(tt.Params) == 0 {
+			if tv, ok := vars[tt.Name]; ok {
+				return tv
+			}
+		}
+		// Recurse into params for composite types like Option[A], List[A]
+		if len(tt.Params) > 0 {
+			params := make([]Type, len(tt.Params))
+			for i, p := range tt.Params {
+				// Substitute bare param refs; leave other types to lowerType.
+				if n, ok := p.(NamedType); ok && len(n.Params) == 0 {
+					if _, hit := vars[n.Name]; hit {
+						// Keep as NamedType for now; lowerType handles the leaf
+						// via a recursive call through the switch above.
+					}
+				}
+				params[i] = p
+			}
+			// Lower the outer type normally, then patch substituted leaves.
+			lowered := l.lowerType(NamedType{Name: tt.Name, Params: params})
+			return substituteTypeVars(lowered, vars)
+		}
+		return l.lowerType(t)
+	case PointerType:
+		return IRPointerType{Inner: l.lowerTypeWithVars(tt.Inner, vars)}
+	case TupleType:
+		elems := make([]IRType, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = l.lowerTypeWithVars(e, vars)
+		}
+		return IRTupleType{Elements: elems}
+	default:
+		return l.lowerType(t)
+	}
+}
+
+// substituteTypeVars walks an IR type and replaces IRNamedType leaves whose
+// name matches a key in vars with the mapped type var. Used after lowering a
+// composite like Option[A] to patch A → TypeVar.
+func substituteTypeVars(t IRType, vars map[string]IRType) IRType {
+	switch tt := t.(type) {
+	case IRNamedType:
+		if len(tt.Params) == 0 {
+			if tv, ok := vars[tt.GoName]; ok {
+				return tv
+			}
+			return tt
+		}
+		params := make([]IRType, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = substituteTypeVars(p, vars)
+		}
+		return IRNamedType{GoName: tt.GoName, Params: params}
+	case IRPointerType:
+		return IRPointerType{Inner: substituteTypeVars(tt.Inner, vars)}
+	case IRListType:
+		return IRListType{Elem: substituteTypeVars(tt.Elem, vars)}
+	case IROptionType:
+		return IROptionType{Inner: substituteTypeVars(tt.Inner, vars)}
+	case IRResultType:
+		return IRResultType{Ok: substituteTypeVars(tt.Ok, vars), Err: substituteTypeVars(tt.Err, vars)}
+	case IRMapType:
+		return IRMapType{Key: substituteTypeVars(tt.Key, vars), Value: substituteTypeVars(tt.Value, vars)}
+	case IRTupleType:
+		elems := make([]IRType, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = substituteTypeVars(e, vars)
+		}
+		return IRTupleType{Elements: elems}
+	}
+	return t
 }
 
 // irTypeEmitStr returns a Go type string for an IRType (used for type args).
@@ -2582,14 +2679,44 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			}
 		}
 
-		fields := l.lowerFieldValuesWithTypes(cc.Fields, ctorFields, cc.Pos)
+		// Instantiate generic type params with fresh type vars per call so
+		// two independent constructor calls don't share substitution
+		// entries. For non-generic types vars is nil and lowerTypeWithVars
+		// falls through to plain lowerType.
+		vars := l.instantiateGenericType(td)
+		hints := make([]IRType, len(ctorFields))
+		for i, cf := range ctorFields {
+			hints[i] = l.lowerTypeWithVars(cf.Type, vars)
+		}
+		fields := l.lowerFieldValuesWithHints(cc.Fields, hints)
+		// Unify each arg with its hint so the fresh type vars actually bind.
+		// lowerExprHint's checkTypeHint only tests compatibility via
+		// irTypesMatch, which treats type vars as wildcards and never records
+		// the binding. Explicit unify here writes into the substitution so
+		// resolveDeep below can render the concrete typeArgs. Reporting the
+		// failure also catches the case where the same type param appears in
+		// multiple fields with incompatible arg types (e.g. `Pair[A](1, "x")`).
+		if vars != nil {
+			for i, f := range fields {
+				if i >= len(hints) {
+					break
+				}
+				if !l.unify(f.Value.irType(), hints[i]) {
+					l.addCompileError(ErrTypeMismatch, cc.Fields[i].Value.exprPos(), TypeMismatchData{
+						Expected: irTypeEmitStr(l.resolveDeep(hints[i])),
+						Actual:   irTypeEmitStr(l.resolveDeep(f.Value.irType())),
+					})
+				}
+			}
+		}
+
 		typeArgs := ""
 		if len(td.Params) > 0 {
-			inferredArgs := make([]string, len(cc.Fields))
-			for i, f := range cc.Fields {
-				inferredArgs[i] = l.inferGoType(f.Value)
+			args := make([]string, len(td.Params))
+			for i, p := range td.Params {
+				args[i] = irTypeEmitStr(l.resolveDeep(vars[p]))
 			}
-			typeArgs = "[" + strings.Join(inferredArgs, ", ") + "]"
+			typeArgs = "[" + strings.Join(args, ", ") + "]"
 		}
 		return IRConstructorCall{
 			GoName:   goName,
@@ -2638,6 +2765,17 @@ func (l *Lowerer) lowerFieldValues(fields []FieldValue) []IRFieldValue {
 // lowerFieldValuesWithTypes lowers field values with hint-based type checking
 // against the expected constructor field types.
 func (l *Lowerer) lowerFieldValuesWithTypes(fields []FieldValue, ctorFields []Field, ctorPos Pos) []IRFieldValue {
+	hints := make([]IRType, len(ctorFields))
+	for i, cf := range ctorFields {
+		hints[i] = l.lowerType(cf.Type)
+	}
+	return l.lowerFieldValuesWithHints(fields, hints)
+}
+
+// lowerFieldValuesWithHints lowers field values against pre-lowered hint
+// types. Used by generic constructor calls so the hints can carry type-var
+// substitutions from instantiateGenericType.
+func (l *Lowerer) lowerFieldValuesWithHints(fields []FieldValue, hints []IRType) []IRFieldValue {
 	result := make([]IRFieldValue, len(fields))
 	for i, f := range fields {
 		goName := ""
@@ -2645,8 +2783,8 @@ func (l *Lowerer) lowerFieldValuesWithTypes(fields []FieldValue, ctorFields []Fi
 			goName = capitalize(f.Name)
 		}
 		var hint IRType
-		if ctorFields != nil && i < len(ctorFields) {
-			hint = l.lowerType(ctorFields[i].Type)
+		if i < len(hints) {
+			hint = hints[i]
 		}
 		value := l.lowerExprHint(f.Value, hint)
 		result[i] = IRFieldValue{
@@ -3643,36 +3781,6 @@ func (l *Lowerer) resolveMethodName(name string) string {
 		}
 	}
 	return capitalize(name)
-}
-
-func (l *Lowerer) inferGoType(expr Expr) string {
-	switch e := expr.(type) {
-	case IntLit:
-		return "int"
-	case FloatLit:
-		return "float64"
-	case StringLit, StringInterp:
-		return "string"
-	case BoolLit:
-		return "bool"
-	case ConstructorCall:
-		if _, ok := l.typeAliases[e.Name]; ok {
-			return e.Name
-		}
-		typeName := e.TypeName
-		if typeName == "Self" && l.currentTypeName != "" {
-			typeName = l.currentTypeName
-		}
-		if typeName != "" {
-			return typeName
-		}
-		if tn, ok := l.ctorTypes[e.Name]; ok {
-			return tn
-		}
-		return e.Name
-	default:
-		return "interface{}"
-	}
 }
 
 func (l *Lowerer) inferGoElemType(expr Expr) string {

@@ -4,8 +4,15 @@ type Pair[A, B] {
   Pair(first: A, second: B)
 }
 
+type Foo[A, C] {
+  Foo(x: A, y: C)
+}
+
 fun main() {
-  let p = Pair(first: 1, second: "hello")
-  fmt.Println(p.first)
-  fmt.Println(p.second)
+  let p1 = Pair(first: 1, second: "hello")
+  let p2 = Pair(first: 2.5, second: 42)
+  let f = Foo(x: "world", y: 3.14)
+  fmt.Println(p1.first)
+  fmt.Println(p2.second)
+  fmt.Println(f.x)
 }
