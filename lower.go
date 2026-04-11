@@ -1575,6 +1575,19 @@ func (l *Lowerer) lowerFnCallHint(e FnCall, hint IRType) IRExpr {
 	return result
 }
 
+// explicitTypeArgsStr renders explicit type arguments as a Go type args string.
+// Returns empty string if no type args were provided.
+func (l *Lowerer) explicitTypeArgsStr(typeArgs []Type) string {
+	if len(typeArgs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(typeArgs))
+	for i, ta := range typeArgs {
+		parts[i] = irTypeEmitStr(l.lowerType(ta))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 	// Builtin functions
 	if ident, ok := e.Fn.(Ident); ok {
@@ -1616,7 +1629,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
-				return IRFnCall{Func: goCallName, Args: args, Type: ret.Type, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
+				return IRFnCall{Func: goCallName, Args: args, Type: ret.Type, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -1682,7 +1695,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			fnType = ret.Type
 			goMultiReturn = ret.GoMultiReturn
 		}
-		return IRFnCall{Func: ident.GoName, Args: args, Type: fnType, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		return IRFnCall{Func: ident.GoName, Args: args, Type: fnType, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}

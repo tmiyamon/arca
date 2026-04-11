@@ -991,6 +991,46 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				}
 				expr = FieldAccess{Expr: expr, Field: field.Lit}
 			} else if p.peek().Kind == TkLBracket {
+				// Distinguish type args `f[T](x)` from index access `a[i]`.
+				// Type args: `[` followed by an UpperIdent. Otherwise index access.
+				if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkUpperIdent {
+					// Try parsing as type arguments followed by a call
+					savedPos := p.pos
+					p.advance() // skip '['
+					var typeArgs []Type
+					for p.peek().Kind != TkRBracket {
+						t, err := p.parseType()
+						if err != nil {
+							p.pos = savedPos
+							goto parseIndex
+						}
+						typeArgs = append(typeArgs, t)
+						if p.peek().Kind == TkComma {
+							p.advance()
+						}
+					}
+					p.advance() // skip ']'
+					if p.peek().Kind != TkLParen {
+						p.pos = savedPos
+						goto parseIndex
+					}
+					p.advance() // skip '('
+					var args []Expr
+					for p.peek().Kind != TkRParen {
+						arg, err := p.parseExpr()
+						if err != nil {
+							return nil, err
+						}
+						args = append(args, arg)
+						if p.peek().Kind == TkComma {
+							p.advance()
+						}
+					}
+					p.advance() // skip ')'
+					expr = FnCall{NodePos: AtTok(tok), Fn: expr, Args: args, TypeArgs: typeArgs}
+					continue
+				}
+			parseIndex:
 				p.advance()
 				index, err := p.parseExpr()
 				if err != nil {

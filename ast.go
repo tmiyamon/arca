@@ -85,8 +85,9 @@ type StringInterp struct {
 
 type FnCall struct {
 	NodePos
-	Fn   Expr
-	Args []Expr
+	Fn       Expr
+	Args     []Expr
+	TypeArgs []Type // explicit type arguments: f[Int, String](args)
 }
 
 type FieldAccess struct {
