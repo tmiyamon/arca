@@ -7,6 +7,51 @@ import (
 	"testing"
 )
 
+// Test go to definition
+func TestDefinitionBasic(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+
+type User {
+    User(name: String)
+}
+
+fun greet(u: User) -> String {
+    u.name
+}
+
+fun main() {
+    let alice = User(name: "Alice")
+    fmt.Println(greet(alice))
+}
+`
+	cases := []struct {
+		desc      string
+		line, col int
+		wantLine  int
+		wantCol   int
+	}{
+		{"User type in greet param", 7, 15, 3, 6},
+		{"greet call", 13, 17, 7, 5},
+		{"alice var usage", 13, 23, 12, 9},
+		{"u param in body", 8, 5, 7, 11},
+		{"fmt package usage", 13, 5, 1, 1}, // fmt.Println → import line
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := getDefinitionPos(source, "/tmp/def_test.arca", tc.line, tc.col)
+			if got.Line == 0 {
+				t.Errorf("definition at line %d col %d returned nothing", tc.line, tc.col)
+				return
+			}
+			if got.Line != tc.wantLine || got.Col != tc.wantCol {
+				t.Errorf("[%s] at %d:%d → got %d:%d, want %d:%d",
+					tc.desc, tc.line, tc.col, got.Line, got.Col, tc.wantLine, tc.wantCol)
+			}
+		})
+	}
+}
+
 // Debug: print scope tree
 func TestScopeTreeDebug(t *testing.T) {
 	source := `import go "fmt"

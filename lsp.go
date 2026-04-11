@@ -34,6 +34,7 @@ func lspCmd() int {
 		TextDocumentDidClose:   lspDidClose,
 		TextDocumentDidSave:    lspDidSave,
 		TextDocumentHover:      lspHover,
+		TextDocumentDefinition: lspDefinition,
 	}
 
 	srv := server.NewServer(&lspHandler, lspName, false)
@@ -53,7 +54,8 @@ func lspInitialize(ctx *glsp.Context, params *protocol.InitializeParams) (any, e
 				Change:    &syncKind,
 				Save:      &protocol.SaveOptions{IncludeText: boolPtr(true)},
 			},
-			HoverProvider: &protocol.HoverOptions{},
+			HoverProvider:      &protocol.HoverOptions{},
+			DefinitionProvider: &protocol.DefinitionOptions{},
 		},
 		ServerInfo: &protocol.InitializeResultServerInfo{
 			Name:    lspName,
@@ -177,6 +179,68 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 }
 
 // --- Hover ---
+
+func lspDefinition(ctx *glsp.Context, params *protocol.DefinitionParams) (any, error) {
+	uri := params.TextDocument.URI
+	source, ok := fileStore[uri]
+	if !ok {
+		return nil, nil
+	}
+
+	line := int(params.Position.Line) + 1
+	col := int(params.Position.Character) + 1
+
+	filePath := strings.TrimPrefix(string(uri), "file://")
+	defPos := getDefinitionPos(source, filePath, line, col)
+	if defPos.Line == 0 {
+		return nil, nil
+	}
+
+	return protocol.Location{
+		URI:   uri,
+		Range: posToRange(defPos),
+	}, nil
+}
+
+func getDefinitionPos(source string, filePath string, line, col int) Pos {
+	// Parse and lower
+	lexer := NewLexer(source)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		return Pos{}
+	}
+	parser := NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		return Pos{}
+	}
+	goModDir := findGoModDir(filepath.Dir(filePath))
+	resolver := NewGoTypeResolver(goModDir)
+	lowerer := NewLowerer(prog, "", resolver)
+	lowerer.Lower(prog, "main", false)
+
+	word := getWordAt(source, line, col)
+	if word == "" {
+		return Pos{}
+	}
+
+	// Look up symbol via scope tree
+	if sym := lowerer.FindSymbolAt(word, Pos{line, col}); sym != nil {
+		return sym.Pos
+	}
+
+	// Function lookup (for calls to pub functions etc.)
+	if fn, ok := lowerer.Functions()[word]; ok {
+		return fn.NamePos
+	}
+
+	// Type lookup
+	if td, ok := lowerer.Types()[word]; ok {
+		return td.Pos
+	}
+
+	return Pos{}
+}
 
 func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
 	uri := params.TextDocument.URI

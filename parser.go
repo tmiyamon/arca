@@ -139,6 +139,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
+	namePos := Pos{name.Line, name.Col}
 	// Type parameters: type Pair[A, B] { ... }
 	var params []string
 	if p.peek().Kind == TkLBracket {
@@ -163,7 +164,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		if err != nil {
 			return nil, err
 		}
-		return TypeAliasDecl{Name: name.Lit, Type: typ}, nil
+		return TypeAliasDecl{Pos: namePos, Name: name.Lit, Type: typ}, nil
 	}
 
 	// Short record: type Name(fields...)
@@ -227,7 +228,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			}
 			p.advance() // skip '}'
 		}
-		return TypeDecl{Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}, Methods: methods, Tags: tags}, nil
+		return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}, Methods: methods, Tags: tags}, nil
 	}
 
 	if _, err := p.expect(TkLBrace); err != nil {
@@ -287,7 +288,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		}
 	}
 	p.advance() // skip '}'
-	return TypeDecl{Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags}, nil
+	return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags}, nil
 }
 
 func (p *Parser) parseTagsBlock() ([]TagRule, error) {
@@ -539,7 +540,7 @@ func (p *Parser) parseMethodDecl(receiverType string, public bool) (FnDecl, erro
 	if err != nil {
 		return FnDecl{}, err
 	}
-	return FnDecl{Pos: pos, Name: name.Lit, Public: public, ReceiverType: receiverType, Params: params, ReturnType: retType, Body: body}, nil
+	return FnDecl{Pos: pos, NamePos: Pos{name.Line, name.Col}, Name: name.Lit, Public: public, ReceiverType: receiverType, Params: params, ReturnType: retType, Body: body}, nil
 }
 
 func (p *Parser) parseFnDecl(public bool) (Decl, error) {
@@ -578,7 +579,7 @@ func (p *Parser) parseFnDecl(public bool) (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
-	return FnDecl{Pos: pos, Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
+	return FnDecl{Pos: pos, NamePos: Pos{name.Line, name.Col}, Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
 }
 
 func (p *Parser) parseFnParam() (FnParam, error) {
@@ -593,7 +594,7 @@ func (p *Parser) parseFnParam() (FnParam, error) {
 	if err != nil {
 		return FnParam{}, err
 	}
-	return FnParam{Name: name.Lit, Type: typ}, nil
+	return FnParam{Pos: Pos{name.Line, name.Col}, Name: name.Lit, Type: typ}, nil
 }
 
 func (p *Parser) parseBlockExpr() (Expr, error) {
@@ -738,7 +739,7 @@ func (p *Parser) parseLetStmt() (Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return LetStmt{Name: name.Lit, Type: typ, Value: value}, nil
+	return LetStmt{Pos: Pos{name.Line, name.Col}, Name: name.Lit, Type: typ, Value: value}, nil
 }
 
 func (p *Parser) parseForExpr() (Expr, error) {

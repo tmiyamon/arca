@@ -297,6 +297,7 @@ type TagRule struct {
 }
 
 type TypeDecl struct {
+	Pos          Pos
 	Name         string
 	Params       []string
 	Constructors []Constructor
@@ -305,6 +306,7 @@ type TypeDecl struct {
 }
 
 type TypeAliasDecl struct {
+	Pos  Pos
 	Name string
 	Type Type
 }
@@ -320,7 +322,8 @@ type Field struct {
 }
 
 type FnDecl struct {
-	Pos          Pos
+	Pos          Pos // position of 'fun' keyword (used for scope start)
+	NamePos      Pos // position of function name (used for go-to-definition)
 	Name         string
 	Public       bool
 	Static       bool   // static fun = associated function (no self)
@@ -331,6 +334,7 @@ type FnDecl struct {
 }
 
 type FnParam struct {
+	Pos  Pos
 	Name string
 	Type Type
 }

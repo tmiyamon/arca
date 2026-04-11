@@ -359,6 +359,7 @@ func (l *Lowerer) registerSymbol(info SymbolRegInfo) string {
 			sym.IRType = info.IRType
 		}
 	}
+	sym.Pos = info.Pos
 
 	// Record in lexical scope
 	if l.currentScope != nil {
@@ -376,6 +377,7 @@ type SymbolRegInfo struct {
 	ArcaType Type   // nullable
 	IRType   IRType // nullable
 	Kind     string // SymVariable, SymParameter, etc.
+	Pos      Pos    // definition position (for LSP go to definition)
 }
 
 func (l *Lowerer) withScope(startPos, endPos Pos, symbols []SymbolRegInfo, fn func()) {
@@ -467,7 +469,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 					l.goPackages = make(map[string]*GoPackage)
 				}
 				l.goPackages[pkg.ShortName] = pkg
-				l.registerSymbol(SymbolRegInfo{Name: pkg.ShortName, Kind: SymPackage})
+				l.registerSymbol(SymbolRegInfo{Name: pkg.ShortName, Kind: SymPackage, Pos: d.Pos})
 				l.imports = append(l.imports, IRImport{
 					Path:       pkg.FullPath,
 					SideEffect: d.SideEffect,
@@ -485,7 +487,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 				}
 				goPkg := NewGoPackage(pkg.GoModPath)
 				l.goPackages[pkg.Name] = goPkg
-				l.registerSymbol(SymbolRegInfo{Name: pkg.Name, Kind: SymPackage})
+				l.registerSymbol(SymbolRegInfo{Name: pkg.Name, Kind: SymPackage, Pos: d.Pos})
 				l.imports = append(l.imports, IRImport{Path: pkg.GoModPath})
 				break
 			}
@@ -497,7 +499,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 			if d.Public {
 				l.fnNames[d.Name] = snakeToPascal(d.Name)
 			}
-			l.registerSymbol(SymbolRegInfo{Name: d.Name, Kind: SymFunction})
+			l.registerSymbol(SymbolRegInfo{Name: d.Name, Kind: SymFunction, Pos: d.NamePos})
 		}
 	}
 	return l
@@ -1285,6 +1287,7 @@ func (l *Lowerer) paramsToSymbols(params []FnParam) []SymbolRegInfo {
 			ArcaType: p.Type,
 			IRType:   irType,
 			Kind:     SymParameter,
+			Pos:      p.Pos,
 		}
 	}
 	return syms
@@ -2655,6 +2658,7 @@ func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
 			ArcaType: l.inferASTType(inner),
 			IRType:   irType,
 			Kind:     SymVariable,
+			Pos:      s.Pos,
 		})
 	}
 
@@ -2703,6 +2707,7 @@ func (l *Lowerer) lowerNormalLetStmt(s LetStmt) []IRStmt {
 		ArcaType: arcaType,
 		IRType:   loweredValue.irType(),
 		Kind:     SymVariable,
+		Pos:      s.Pos,
 	})
 
 	return []IRStmt{IRLetStmt{
