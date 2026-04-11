@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -10,22 +11,36 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// loadedPackage holds a type-checked package along with its fileset for position lookup.
+type loadedPackage struct {
+	types *types.Package
+	fset  *token.FileSet
+}
+
 // GoTypeResolver implements TypeResolver using go/types.
 // It loads Go package type information and caches it.
 type GoTypeResolver struct {
 	mu    sync.Mutex
-	cache map[string]*types.Package // import path → loaded package
+	cache map[string]*loadedPackage // import path → loaded package
 	dir   string                    // project directory (for go.mod resolution)
 }
 
 func NewGoTypeResolver(dir string) *GoTypeResolver {
 	return &GoTypeResolver{
-		cache: make(map[string]*types.Package),
+		cache: make(map[string]*loadedPackage),
 		dir:   dir,
 	}
 }
 
 func (r *GoTypeResolver) loadPackage(pkg string) *types.Package {
+	lp := r.loadPackageFull(pkg)
+	if lp == nil {
+		return nil
+	}
+	return lp.types
+}
+
+func (r *GoTypeResolver) loadPackageFull(pkg string) *loadedPackage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -36,14 +51,15 @@ func (r *GoTypeResolver) loadPackage(pkg string) *types.Package {
 	// Arca built-in packages: load from embed.FS via go/parser + go/types
 	for _, ap := range arcaPackages {
 		if pkg == ap.GoModPath {
-			tp := loadArcaPackageTypes(&ap)
-			r.cache[pkg] = tp
-			return tp
+			tp, fset := loadArcaPackageTypes(&ap)
+			lp := &loadedPackage{types: tp, fset: fset}
+			r.cache[pkg] = lp
+			return lp
 		}
 	}
 
 	cfg := &packages.Config{
-		Mode: packages.NeedTypes | packages.NeedName,
+		Mode: packages.NeedTypes | packages.NeedName | packages.NeedSyntax | packages.NeedTypesInfo,
 		Dir:  r.dir,
 	}
 	pkgs, err := packages.Load(cfg, pkg)
@@ -52,8 +68,53 @@ func (r *GoTypeResolver) loadPackage(pkg string) *types.Package {
 		return nil
 	}
 
-	r.cache[pkg] = pkgs[0].Types
-	return pkgs[0].Types
+	lp := &loadedPackage{types: pkgs[0].Types, fset: pkgs[0].Fset}
+	r.cache[pkg] = lp
+	return lp
+}
+
+// MemberPos returns the file and position where a package-level member is defined.
+// Returns ("", Pos{}) if not found.
+func (r *GoTypeResolver) MemberPos(pkg, name string) (string, Pos) {
+	lp := r.loadPackageFull(pkg)
+	if lp == nil || lp.types == nil || lp.fset == nil {
+		return "", Pos{}
+	}
+	obj := lp.types.Scope().Lookup(name)
+	if obj == nil {
+		return "", Pos{}
+	}
+	position := lp.fset.Position(obj.Pos())
+	if !position.IsValid() {
+		return "", Pos{}
+	}
+	return position.Filename, Pos{Line: position.Line, Col: position.Column}
+}
+
+// MethodPos returns the file and position of a method on a type in a package.
+func (r *GoTypeResolver) MethodPos(pkg, typeName, method string) (string, Pos) {
+	lp := r.loadPackageFull(pkg)
+	if lp == nil || lp.types == nil || lp.fset == nil {
+		return "", Pos{}
+	}
+	obj := lp.types.Scope().Lookup(typeName)
+	if obj == nil {
+		return "", Pos{}
+	}
+	named, ok := obj.Type().(*types.Named)
+	if !ok {
+		return "", Pos{}
+	}
+	for i := 0; i < named.NumMethods(); i++ {
+		m := named.Method(i)
+		if m.Name() == method {
+			position := lp.fset.Position(m.Pos())
+			if position.IsValid() {
+				return position.Filename, Pos{Line: position.Line, Col: position.Column}
+			}
+		}
+	}
+	return "", Pos{}
 }
 
 func (r *GoTypeResolver) ResolveFunc(pkg, name string) *FuncInfo {

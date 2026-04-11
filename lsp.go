@@ -191,28 +191,42 @@ func lspDefinition(ctx *glsp.Context, params *protocol.DefinitionParams) (any, e
 	col := int(params.Position.Character) + 1
 
 	filePath := strings.TrimPrefix(string(uri), "file://")
-	defPos := getDefinitionPos(source, filePath, line, col)
+	defFile, defPos := getDefinitionLocation(source, filePath, line, col)
 	if defPos.Line == 0 {
 		return nil, nil
 	}
 
+	// Default to the current file's URI; override if definition is elsewhere (Go FFI)
+	defURI := uri
+	if defFile != "" && defFile != filePath {
+		defURI = "file://" + defFile
+	}
+
 	return protocol.Location{
-		URI:   uri,
+		URI:   defURI,
 		Range: posToRange(defPos),
 	}, nil
 }
 
+// getDefinitionPos is kept for testing within the current file.
 func getDefinitionPos(source string, filePath string, line, col int) Pos {
+	_, pos := getDefinitionLocation(source, filePath, line, col)
+	return pos
+}
+
+// getDefinitionLocation returns (file, pos) for the definition of the symbol at
+// the given position. file is "" if the definition is in the same source.
+func getDefinitionLocation(source string, filePath string, line, col int) (string, Pos) {
 	// Parse and lower
 	lexer := NewLexer(source)
 	tokens, err := lexer.Tokenize()
 	if err != nil {
-		return Pos{}
+		return "", Pos{}
 	}
 	parser := NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		return Pos{}
+		return "", Pos{}
 	}
 	goModDir := findGoModDir(filepath.Dir(filePath))
 	resolver := NewGoTypeResolver(goModDir)
@@ -221,25 +235,69 @@ func getDefinitionPos(source string, filePath string, line, col int) Pos {
 
 	word := getWordAt(source, line, col)
 	if word == "" {
-		return Pos{}
+		return "", Pos{}
+	}
+
+	// Go FFI: package.member or receiver.method
+	receiver := getReceiverAt(source, line, col)
+	if receiver != "" {
+		if sym := lowerer.FindSymbolAt(receiver, Pos{line, col}); sym != nil {
+			// Go package-level member: fmt.Println, http.StatusOK
+			if sym.Kind == SymPackage {
+				if pkg, ok := lowerer.GoPackages()[sym.Name]; ok {
+					if file, pos := resolver.MemberPos(pkg.FullPath, word); pos.Line != 0 {
+						return file, pos
+					}
+				}
+			}
+			// Go method on a typed receiver: e.Start, db.Query
+			if sym.IRType != nil {
+				if shortPkg, typeName := extractPackageAndType(sym.IRType); shortPkg != "" {
+					if pkg, ok := lowerer.GoPackages()[shortPkg]; ok {
+						if file, pos := resolver.MethodPos(pkg.FullPath, typeName, word); pos.Line != 0 {
+							return file, pos
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Look up symbol via scope tree
 	if sym := lowerer.FindSymbolAt(word, Pos{line, col}); sym != nil {
-		return sym.Pos
+		return "", sym.Pos
 	}
 
 	// Function lookup (for calls to pub functions etc.)
 	if fn, ok := lowerer.Functions()[word]; ok {
-		return fn.NamePos
+		return "", fn.NamePos
 	}
 
 	// Type lookup
 	if td, ok := lowerer.Types()[word]; ok {
-		return td.Pos
+		return "", td.Pos
 	}
 
-	return Pos{}
+	return "", Pos{}
+}
+
+// extractPackageAndType returns the Go package path and type name from an IR type.
+// Returns ("", "") if the type is not a Go-qualified named type.
+func extractPackageAndType(t IRType) (string, string) {
+	named, ok := t.(IRNamedType)
+	if !ok {
+		return "", ""
+	}
+	// GoName may be "*echo.Context" or "echo.Context"
+	name := strings.TrimPrefix(named.GoName, "*")
+	parts := strings.SplitN(name, ".", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	// We need the full package path, not just the short name.
+	// This is a best-effort: short-name lookup via resolver isn't straightforward here.
+	// Just return as "shortName", "TypeName" and let caller figure out path.
+	return parts[0], parts[1]
 }
 
 func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {

@@ -48,9 +48,9 @@ func lookupArcaPackage(name string) *ArcaPackage {
 }
 
 // loadArcaPackageTypes parses the package's embedded Go source files and
-// type-checks them, returning a *types.Package usable by GoTypeResolver.
-// No filesystem extraction needed.
-func loadArcaPackageTypes(pkg *ArcaPackage) *types.Package {
+// type-checks them, returning a *types.Package and its *token.FileSet usable
+// by GoTypeResolver. No filesystem extraction needed.
+func loadArcaPackageTypes(pkg *ArcaPackage) (*types.Package, *token.FileSet) {
 	fset := token.NewFileSet()
 	var files []*ast.File
 
@@ -73,15 +73,15 @@ func loadArcaPackageTypes(pkg *ArcaPackage) *types.Package {
 		return nil
 	})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
 	conf := types.Config{Importer: importer.Default()}
 	tp, err := conf.Check(pkg.GoModPath, fset, files, nil)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return tp
+	return tp, fset
 }
 
 // extractTo extracts the package's source files to dir/<package>/ along with

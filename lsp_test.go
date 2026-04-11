@@ -52,6 +52,29 @@ fun main() {
 	}
 }
 
+// Test go to definition for Go FFI members
+func TestDefinitionFFI(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+
+fun main() {
+    fmt.Println("hello")
+}
+`
+	// fmt.Println → should resolve to fmt package's Println
+	file, pos := getDefinitionLocation(source, "/tmp/ffi_test.arca", 4, 9)
+	if pos.Line == 0 {
+		t.Errorf("expected location for fmt.Println, got nothing")
+	}
+	t.Logf("fmt.Println → %s:%d:%d", file, pos.Line, pos.Col)
+	if file == "" {
+		t.Errorf("expected file path (Go stdlib), got empty")
+	}
+	if !strings.Contains(file, "print.go") && !strings.Contains(file, "fmt") {
+		t.Errorf("expected fmt package file, got %s", file)
+	}
+}
+
 // Debug: print scope tree
 func TestScopeTreeDebug(t *testing.T) {
 	source := `import go "fmt"

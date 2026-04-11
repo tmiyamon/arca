@@ -58,6 +58,14 @@ type TypeResolver interface {
 	// e.g. "github.com/labstack/echo/v5.HandlerFunc" → "func(c *echo.Context) error"
 	// Returns "" if unknown.
 	ResolveUnderlying(goType string) string
+
+	// MemberPos returns the source file and position where a package-level
+	// member (function, type, var, const) is defined. For go-to-definition.
+	MemberPos(pkg, name string) (string, Pos)
+
+	// MethodPos returns the source file and position where a method on a type
+	// is defined. For go-to-definition on Go FFI method calls.
+	MethodPos(pkg, typeName, method string) (string, Pos)
 }
 
 // NullTypeResolver returns nil for all queries — preserves current behavior
@@ -69,3 +77,5 @@ func (NullTypeResolver) ResolveType(pkg, name string) *TypeInfo          { retur
 func (NullTypeResolver) ResolveMethod(pkg, typ, method string) *FuncInfo { return nil }
 func (NullTypeResolver) CanLoadPackage(pkg string) bool                  { return true }
 func (NullTypeResolver) ResolveUnderlying(goType string) string          { return "" }
+func (NullTypeResolver) MemberPos(pkg, name string) (string, Pos)        { return "", Pos{} }
+func (NullTypeResolver) MethodPos(pkg, typ, method string) (string, Pos) { return "", Pos{} }
