@@ -280,6 +280,21 @@ fun make() -> Point {
 	}
 }
 
+func TestIfExprBranchTypeMismatch(t *testing.T) {
+	t.Parallel()
+	// `let x = if cond { 42 } else { "hello" }` has no outer hint, so the
+	// branch type unification is the only check. Previously silent, letting
+	// the mismatch leak to the Go compiler.
+	errs := validateSource(`
+fun main() {
+  let x = if 1 > 0 { 42 } else { "hello" }
+}
+`)
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatalf("expected ErrTypeMismatch for if/else branch disagreement, got: %v", errs)
+	}
+}
+
 func TestGenericConstructorSameParamMismatch(t *testing.T) {
 	t.Parallel()
 	// `Pair[A]` with two fields of type A must unify both args to the

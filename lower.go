@@ -2520,10 +2520,14 @@ func (l *Lowerer) lowerIfExpr(e IfExpr) IRExpr {
 	if e.Else != nil {
 		elseBody = l.lowerExpr(e.Else)
 	}
-	// Unify then/else types
+	// Unify then/else types. When the if is used in value position without
+	// an outer hint (e.g. `let x = if ...`) this is the only type-mismatch
+	// check, so it must report. The Else's own position anchors the error
+	// at the branch that disagreed with the Then branch.
 	var typ IRType = then.irType()
 	if elseBody != nil {
-		l.unify(typ, elseBody.irType(), Pos{}, true)
+		elsePos := e.Else.exprPos()
+		l.unify(typ, elseBody.irType(), elsePos, false)
 		typ = l.resolveDeep(typ)
 	}
 	return IRIfExpr{Cond: cond, Then: then, Else: elseBody, Type: typ}
