@@ -188,6 +188,27 @@ func collectIdents(expr Expr, used map[string]bool) {
 		collectIdents(e.Right, used)
 	case Lambda:
 		collectIdents(e.Body, used)
+	case MapLit:
+		for _, entry := range e.Entries {
+			collectIdents(entry.Key, used)
+			collectIdents(entry.Value, used)
+		}
+	case IndexAccess:
+		collectIdents(e.Expr, used)
+		collectIdents(e.Index, used)
+	case IfExpr:
+		collectIdents(e.Cond, used)
+		collectIdents(e.Then, used)
+		if e.Else != nil {
+			collectIdents(e.Else, used)
+		}
+	case TupleExpr:
+		for _, el := range e.Elements {
+			collectIdents(el, used)
+		}
+	case ForExpr:
+		collectIdents(e.Iter, used)
+		collectIdents(e.Body, used)
 	}
 }
 

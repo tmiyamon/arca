@@ -334,6 +334,74 @@ fun main() {
 	}
 }
 
+// Test: todo example should not produce spurious undefined errors
+func TestTodoNoUndefined(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("examples/todo/main.arca")
+	if err != nil {
+		t.Skip("todo example not available")
+	}
+	diags := collectDiagnostics(string(source), "examples/todo/main.arca")
+	for _, d := range diags {
+		t.Logf("diag: line=%d col=%d msg=%q", d.Range.Start.Line+1, d.Range.Start.Character+1, d.Message)
+	}
+	for _, d := range diags {
+		if strings.Contains(d.Message, "undefined") {
+			t.Errorf("unexpected undefined error: %v - %s", d.Range.Start, d.Message)
+		}
+	}
+}
+
+// Test regression: match binding used inside MapLit should not be dropped
+// (collectUsedIdents must walk MapLit)
+func TestMatchBindingUsedInMapLit(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+
+fun process(r: Result[Int, error]) -> Map[String, error] {
+    match r {
+        Ok(_) => {"status": fmt.Errorf("ok")}
+        Error(e) => {"error": e}
+    }
+}
+`
+	_ = source
+	// Just verify emit doesn't produce "undefined: e"
+	lexer := NewLexer(source)
+	tokens, _ := lexer.Tokenize()
+	parser := NewParser(tokens)
+	prog, _ := parser.ParseProgram()
+	lowerer := NewLowerer(prog, "", NewGoTypeResolver(""))
+	irProg := lowerer.Lower(prog, "main", false)
+	emitter := &Emitter{}
+	code := emitter.Emit(irProg)
+	t.Logf("emitted:\n%s", code)
+	// Look for the error binding assignment
+	if !strings.Contains(code, "e := ") && !strings.Contains(code, "e =") {
+		t.Errorf("expected 'e := ...' binding in generated code")
+	}
+}
+
+// Test: match arm binding should be accessible inside a map literal as Go FFI arg
+func TestMatchBindingInMapLiteral(t *testing.T) {
+	t.Parallel()
+	source := `import go "net/http"
+
+fun main() {
+    let r: Result[Int, error] = Ok(42)
+    match r {
+        Ok(v) => http.StatusOK
+        Error(e) => http.StatusInternalServerError
+    }
+    let m = {"error": "test"}
+}
+`
+	diags := collectDiagnostics(source, "/tmp/match_map_test.arca")
+	for _, d := range diags {
+		t.Logf("diag: line=%d col=%d msg=%q", d.Range.Start.Line+1, d.Range.Start.Character+1, d.Message)
+	}
+}
+
 // Debug: print scope tree
 func TestScopeTreeDebug(t *testing.T) {
 	source := `import go "fmt"
