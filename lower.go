@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -1588,6 +1589,71 @@ func (l *Lowerer) explicitTypeArgsStr(typeArgs []Type) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
+// substituteTypeParamsWithFreshVars walks an IR type and replaces Go type
+// parameter placeholders (single uppercase letter IRNamedTypes like "T")
+// with fresh type variables, returning the new type and a map from name to var.
+func (l *Lowerer) substituteTypeParamsWithFreshVars(t IRType) (IRType, map[string]IRTypeVar) {
+	vars := make(map[string]IRTypeVar)
+	var walk func(t IRType) IRType
+	walk = func(t IRType) IRType {
+		switch tt := t.(type) {
+		case IRNamedType:
+			if len(tt.GoName) == 1 && tt.GoName[0] >= 'A' && tt.GoName[0] <= 'Z' {
+				if tv, ok := vars[tt.GoName]; ok {
+					return tv
+				}
+				tv := l.freshTypeVar()
+				vars[tt.GoName] = tv
+				return tv
+			}
+			return t
+		case IRResultType:
+			return IRResultType{Ok: walk(tt.Ok), Err: walk(tt.Err)}
+		case IROptionType:
+			return IROptionType{Inner: walk(tt.Inner)}
+		case IRListType:
+			return IRListType{Elem: walk(tt.Elem)}
+		case IRPointerType:
+			return IRPointerType{Inner: walk(tt.Inner)}
+		case IRTupleType:
+			elems := make([]IRType, len(tt.Elements))
+			for i, e := range tt.Elements {
+				elems[i] = walk(e)
+			}
+			return IRTupleType{Elements: elems}
+		}
+		return t
+	}
+	return walk(t), vars
+}
+
+// applyExplicitTypeArgs substitutes Go type parameters in the return type
+// with fresh type variables and unifies them with the explicit type args
+// in order. Returns the resolved type.
+func (l *Lowerer) applyExplicitTypeArgs(returnType IRType, typeArgs []Type) IRType {
+	if len(typeArgs) == 0 || returnType == nil {
+		return returnType
+	}
+	newType, vars := l.substituteTypeParamsWithFreshVars(returnType)
+	if len(vars) == 0 {
+		return returnType
+	}
+	// Order by name: T, U, V... (alphabetical)
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		if i >= len(typeArgs) {
+			break
+		}
+		concrete := l.lowerType(typeArgs[i])
+		l.unify(vars[name], concrete)
+	}
+	return l.resolveDeep(newType)
+}
+
 func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 	// Builtin functions
 	if ident, ok := e.Fn.(Ident); ok {
@@ -1629,7 +1695,8 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
-				return IRFnCall{Func: goCallName, Args: args, Type: ret.Type, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
+				retType := l.applyExplicitTypeArgs(ret.Type, e.TypeArgs)
+				return IRFnCall{Func: goCallName, Args: args, Type: retType, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -1695,6 +1762,7 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			fnType = ret.Type
 			goMultiReturn = ret.GoMultiReturn
 		}
+		fnType = l.applyExplicitTypeArgs(fnType, e.TypeArgs)
 		return IRFnCall{Func: ident.GoName, Args: args, Type: fnType, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression

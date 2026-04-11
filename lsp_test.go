@@ -174,6 +174,29 @@ fun main() {
 	}
 }
 
+// Test hover on let with explicit type args call
+func TestHoverTypeArgsCall(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+import stdlib
+
+type Todo {
+    Todo(id: Int, body: String)
+}
+
+fun main() {
+    let todos = stdlib.Decode[Todo](toBytes("{}"))
+    fmt.Println(todos)
+}
+`
+	// Hover on 'todos' variable (let binding)
+	got := getHoverInfo(source, "/tmp/hover_type_args.arca", 9, 9)
+	t.Logf("hover on todos: %q", got)
+	if got == "" {
+		t.Errorf("expected hover for todos variable, got empty")
+	}
+}
+
 // Test chained completion with Go FFI (similar to todo example)
 func TestCompletionChainedFFI(t *testing.T) {
 	t.Parallel()
