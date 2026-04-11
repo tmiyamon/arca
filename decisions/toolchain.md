@@ -4,6 +4,33 @@ LSP, project structure, build pipeline, dependency management. Newest first.
 
 ---
 
+## 2026-04-11: LSP features
+
+**Context:** LSP had hover and diagnostics, but no go-to-definition or completion. Real editor integration needs more.
+
+**Decision:** Add go-to-definition and completion, optimized for speed.
+
+**Go-to-definition:**
+- `SymbolInfo.Pos` records definition position; set via `SymbolRegInfo.Pos` in `registerSymbol` for variables, parameters, let bindings, packages, functions.
+- `FnDecl.NamePos` (position of function name) separate from `Pos` (position of `fun` keyword, used for scope start). Definition jumps to `NamePos`.
+- `TypeDecl.Pos` for type name position.
+- Go FFI definition: `TypeResolver.MemberPos` and `MethodPos` return file+position from `go/types` object's `Pos()` via the cached `FileSet`. `GoTypeResolver.loadPackageFull` caches both `*types.Package` and `*token.FileSet`.
+- Arca stdlib definitions: `resolveEmbedFilePath` maps embed paths (e.g. `stdlib/db.go`) to a persistent cache at `~/.cache/arca/packages/` so editors can open real files.
+
+**Completion:**
+- Triggered by `.`. Parser is re-invoked on source with placeholder identifier inserted after dangling dots so incomplete expressions parse successfully.
+- `getReceiverBeforeDot` extracts the full dotted expression before the cursor (handles chained access `a.b.c`).
+- Receiver is parsed and lowered to get its IR type; the IR field-type resolution naturally handles chains.
+- `self` is registered as a symbol with the receiver type in method bodies, enabling `self.` completion.
+- `TypeResolver.PackageMembers` and `TypeMembers` list exported Go package members and type methods/fields for completion items.
+
+**Performance:**
+- `resolverCache` keyed by goModDir: one `GoTypeResolver` per session, reused across hover/definition/completion. Avoids re-running `packages.Load` on every request. Benchmarked: 137ms → 88μs (1500x faster for completion).
+
+**Status:** Done
+
+---
+
 ## 2026-04-11: Arca package system
 
 **Context:** stdlib was treated as a Go module (`import go "github.com/tmiyamon/arca/stdlib"`), forcing users to set up go.mod and `go get` to use it. Other languages bundle stdlib with the toolchain — Python, Rust, Go itself. Arca should do the same.

@@ -260,6 +260,13 @@ map(nums, x => x * 2)              // x type inferred from list element type
 sort.Slice(s, (i, j) => s[i] < s[j])  // i, j inferred from Go FFI signature
 ```
 
+Explicit type arguments via `f[T](args)` when inference can't determine:
+
+```
+let user = stdlib.Decode[User](data)?   // Decode's T = User
+println(stdlib.Decode[User](data)?)      // inline without let annotation
+```
+
 Function signatures require explicit types (Rust/Kotlin style). Inference operates within function bodies.
 
 ### Built-in Types
@@ -272,9 +279,21 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | String | UTF-8 string |
 | Bool | True / False |
 | List[T] | Immutable list |
+| Map[K, V] | Hash map (Go map under the hood) |
 | Option[T] | Some(T) / None |
 | Result[T, E] | Ok(T) / Error(E) |
 | (A, B, ...) | Tuple |
+
+### Map
+
+```
+let users: Map[String, Int] = {"alice": 30, "bob": 25}
+let age = users["alice"]            // direct access (zero value if missing)
+let empty: Map[String, Int] = {}    // empty map (hint required)
+```
+
+Key/value types are inferred from the first entry. Empty map `{}` requires
+a type annotation hint. Iteration order is random (inherent to Go maps).
 
 ### Strings
 

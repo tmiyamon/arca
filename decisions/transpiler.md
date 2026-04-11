@@ -4,6 +4,26 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-11: Explicit type args and HM for Go generics
+
+**Context:** After HM was introduced for Arca-side types, Go generic function calls still relied on string-based `deriveTypeArgs` (hint pattern matching) and a separate `applyExplicitTypeArgs` path for explicit type args. Three disjoint ways of handling the same concept: Go generic type parameters.
+
+**Decision:** Unify into one HM-based path.
+
+**Implementation:**
+- `FuncInfo.TypeParams` carries generic type parameter names (from `sig.TypeParams()`).
+- `instantiateGeneric(info)` creates fresh `IRTypeVar` for each type param, substitutes them into parameter types and return type via `goTypeToIRWithVars`.
+- `resolveGoCall` detects generic calls, unifies arg types with substituted param types, and returns `TypeVars` map.
+- `lowerFnCallWithHint` unifies explicit type args (`f[T](args)`) with the vars map, then unifies the return type with the hint (if any).
+- `buildGoTypeArgsStr` builds the Go `[T, U]` string from resolved vars or explicit args.
+- `deriveTypeArgs` deleted.
+
+**Result:** `stdlib.Decode[User](data)`, `let r: Result[User, error] = stdlib.Decode(data)?`, `sort.Slice(s, (i,j) => s[i] < s[j])` — all go through the same HM unification.
+
+**Status:** Done
+
+---
+
 ## 2026-04-09: HM type inference
 
 **Context:** Bidirectional hint system couldn't resolve types when no hint was available. `let r = Ok(42)` required explicit annotation. `let x = None` needed usage context but hints only flow top-down.

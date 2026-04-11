@@ -10,6 +10,9 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 - [Arca package system](decisions/toolchain.md#2026-04-11-arca-package-system) — Built-in packages bundled via go:embed. `import stdlib` works without go.mod
 - [Trait system design (proposal)](decisions/ideas.md#2026-04-11-trait-system-design-proposal) — Kotlin/Swift hybrid, `impl User: Display`, `&` for multiple bounds. Design only, not implemented
+- [LSP features](decisions/toolchain.md#2026-04-11-lsp-features) — Hover, diagnostics, go-to-definition, completion. Per-session resolver cache for speed
+- [Map type](decisions/syntax.md#2026-04-11-map-type) — `Map[K, V]` with `{k: v}` literal, immutable, lowered to Go map[K]V
+- [Explicit type args + HM generics](decisions/transpiler.md#2026-04-11-explicit-type-args-and-hm-for-go-generics) — `f[T](args)` syntax, Go generic calls use HM unification uniformly
 
 ## 2026-04-10
 

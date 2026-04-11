@@ -4,6 +4,32 @@ Language syntax, naming, import system. Newest first.
 
 ---
 
+## 2026-04-11: Map type
+
+**Context:** Arca had List but no Map. Common data structure, needed for real programs.
+
+**Decision:** Add `Map[K, V]` with Python/JS-style literal `{key: value, ...}`. Lowers to Go `map[K]V`. Immutable at Arca level (no update API), but backed by Go's mutable map. Empty map `{}` resolved via hint (empty block becomes empty map if Map hint is present). Parser disambiguates map from block by looking ahead: `{ STRING : ... }` or `{ IDENT : ... }` → map.
+
+**Design rationale:**
+- Iteration order is random (inherent to Go maps). Accepted: maps are semantically unordered.
+- `m[k]` returns the value directly (Go zero on missing), not Option[V]. Simpler for now.
+- No update API (`insert`/`remove`) yet. Immutability via no-mutate.
+- Escape hatch for performance: future `.go` accessor for raw mutation.
+
+**Status:** Done (Phase 1). Update API deferred.
+
+---
+
+## 2026-04-11: Explicit type arguments `f[T](args)`
+
+**Context:** HM inference couldn't resolve generic type params in cases like `println(stdlib.Decode[User](data)?)` where no let annotation hint was available. `let r: Result[User, error] = stdlib.Decode(data)` worked via hint, but inline use failed.
+
+**Decision:** Add explicit type argument syntax at call sites: `f[T1, T2, ...](args)`. Parser disambiguates from index access `a[i]` by checking if the token after `[` is UpperIdent (type name); falls back to index access on parse failure.
+
+**Status:** Done
+
+---
+
 ## 2026-04-10: Arrow convention
 
 **Context:** `->` was used for match arms, lambda return type, and shorthand lambda. Three meanings for one symbol. Shorthand lambda `x -> body` collided visually with match arm `pattern -> body`.
