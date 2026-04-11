@@ -1589,56 +1589,13 @@ func (l *Lowerer) explicitTypeArgsStr(typeArgs []Type) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// substituteTypeParamsWithFreshVars walks an IR type and replaces Go type
-// parameter placeholders (single uppercase letter IRNamedTypes like "T")
-// with fresh type variables, returning the new type and a map from name to var.
-func (l *Lowerer) substituteTypeParamsWithFreshVars(t IRType) (IRType, map[string]IRTypeVar) {
-	vars := make(map[string]IRTypeVar)
-	var walk func(t IRType) IRType
-	walk = func(t IRType) IRType {
-		switch tt := t.(type) {
-		case IRNamedType:
-			if len(tt.GoName) == 1 && tt.GoName[0] >= 'A' && tt.GoName[0] <= 'Z' {
-				if tv, ok := vars[tt.GoName]; ok {
-					return tv
-				}
-				tv := l.freshTypeVar()
-				vars[tt.GoName] = tv
-				return tv
-			}
-			return t
-		case IRResultType:
-			return IRResultType{Ok: walk(tt.Ok), Err: walk(tt.Err)}
-		case IROptionType:
-			return IROptionType{Inner: walk(tt.Inner)}
-		case IRListType:
-			return IRListType{Elem: walk(tt.Elem)}
-		case IRPointerType:
-			return IRPointerType{Inner: walk(tt.Inner)}
-		case IRTupleType:
-			elems := make([]IRType, len(tt.Elements))
-			for i, e := range tt.Elements {
-				elems[i] = walk(e)
-			}
-			return IRTupleType{Elements: elems}
-		}
-		return t
+// unifyExplicitTypeArgs unifies explicit type arguments with a generic call's
+// type parameter variables. Type params are ordered by declaration.
+func (l *Lowerer) unifyExplicitTypeArgs(vars map[string]IRType, typeArgs []Type) {
+	if len(typeArgs) == 0 || len(vars) == 0 {
+		return
 	}
-	return walk(t), vars
-}
-
-// applyExplicitTypeArgs substitutes Go type parameters in the return type
-// with fresh type variables and unifies them with the explicit type args
-// in order. Returns the resolved type.
-func (l *Lowerer) applyExplicitTypeArgs(returnType IRType, typeArgs []Type) IRType {
-	if len(typeArgs) == 0 || returnType == nil {
-		return returnType
-	}
-	newType, vars := l.substituteTypeParamsWithFreshVars(returnType)
-	if len(vars) == 0 {
-		return returnType
-	}
-	// Order by name: T, U, V... (alphabetical)
+	// Order by name for deterministic mapping
 	names := make([]string, 0, len(vars))
 	for name := range vars {
 		names = append(names, name)
@@ -1648,10 +1605,8 @@ func (l *Lowerer) applyExplicitTypeArgs(returnType IRType, typeArgs []Type) IRTy
 		if i >= len(typeArgs) {
 			break
 		}
-		concrete := l.lowerType(typeArgs[i])
-		l.unify(vars[name], concrete)
+		l.unify(vars[name], l.lowerType(typeArgs[i]))
 	}
-	return l.resolveDeep(newType)
 }
 
 func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
@@ -1695,8 +1650,9 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
-				retType := l.applyExplicitTypeArgs(ret.Type, e.TypeArgs)
-				return IRFnCall{Func: goCallName, Args: args, Type: retType, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
+				// Unify explicit type args with type vars from generic instantiation
+				l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
+				return IRFnCall{Func: goCallName, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -1761,9 +1717,9 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			ret := l.resolveGoCall(ident.GoName, args, e.Pos)
 			fnType = ret.Type
 			goMultiReturn = ret.GoMultiReturn
+			l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
 		}
-		fnType = l.applyExplicitTypeArgs(fnType, e.TypeArgs)
-		return IRFnCall{Func: ident.GoName, Args: args, Type: fnType, TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		return IRFnCall{Func: ident.GoName, Args: args, Type: l.resolveDeep(fnType), TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
@@ -1798,6 +1754,19 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: goName, Expected: len(info.Params), Actual: len(args)})
 	} else if info.Variadic && len(args) < minArgs {
 		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: goName, Expected: minArgs, Actual: len(args), AtLeast: true})
+	}
+
+	// Generic function: instantiate with fresh type variables and unify with args.
+	// This lets HM inference substitute type params from arg types and explicit type args.
+	if len(info.TypeParams) > 0 {
+		vars, paramTypes, ret := l.instantiateGeneric(info)
+		for i, arg := range args {
+			if i < len(paramTypes) {
+				l.unify(arg.irType(), paramTypes[i])
+			}
+		}
+		ret.TypeVars = vars
+		return ret
 	}
 
 	// Validate argument types (Phase 2)
@@ -1875,7 +1844,8 @@ func goTypesCompatible(arcaType, goParam string) bool {
 // goReturnInfo holds the resolved Arca type and whether the Go function returns multiple values.
 type goReturnInfo struct {
 	Type          IRType
-	GoMultiReturn bool // true if Go func returns multiple values (needs multi-value receive)
+	GoMultiReturn bool               // true if Go func returns multiple values (needs multi-value receive)
+	TypeVars      map[string]IRType  // type param name → fresh IRTypeVar (for generic calls)
 }
 
 // goFuncReturnType converts a FuncInfo's return types to an Arca IR type.
@@ -1889,6 +1859,13 @@ type goReturnInfo struct {
 //	(T1, T2)     → (T1, T2)
 //	(T1, T2, T3) → (T1, T2, T3)
 func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
+	return l.goFuncReturnTypeWithVars(info, nil)
+}
+
+// goFuncReturnTypeWithVars builds the IR return type, substituting generic
+// type parameter names with IRTypes from the vars map.
+func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRType) goReturnInfo {
+	toIR := func(s string) IRType { return goTypeToIRWithVars(s, vars) }
 	if len(info.Results) == 0 {
 		return goReturnInfo{Type: IRNamedType{GoName: "struct{}"}}
 	}
@@ -1899,18 +1876,18 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 				GoMultiReturn: true,
 			}
 		}
-		return goReturnInfo{Type: goTypeToIR(info.Results[0].Type)}
+		return goReturnInfo{Type: toIR(info.Results[0].Type)}
 	}
 	if len(info.Results) == 2 {
 		if info.Results[1].Type == "error" {
 			return goReturnInfo{
-				Type:          IRResultType{Ok: goTypeToIR(info.Results[0].Type), Err: IRNamedType{GoName: "error"}},
+				Type:          IRResultType{Ok: toIR(info.Results[0].Type), Err: IRNamedType{GoName: "error"}},
 				GoMultiReturn: true,
 			}
 		}
 		if info.Results[1].Type == "bool" {
 			return goReturnInfo{
-				Type:          IROptionType{Inner: goTypeToIR(info.Results[0].Type)},
+				Type:          IROptionType{Inner: toIR(info.Results[0].Type)},
 				GoMultiReturn: true,
 			}
 		}
@@ -1918,7 +1895,7 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 	// 2+ non-special or 3+ returns → Tuple
 	elems := make([]IRType, len(info.Results))
 	for i, r := range info.Results {
-		elems[i] = goTypeToIR(r.Type)
+		elems[i] = toIR(r.Type)
 	}
 	return goReturnInfo{
 		Type:          IRTupleType{Elements: elems},
@@ -1926,11 +1903,43 @@ func (l *Lowerer) goFuncReturnType(info *FuncInfo) goReturnInfo {
 	}
 }
 
+// instantiateGeneric creates a fresh type variable for each type parameter
+// of a generic Go function and returns the substituted parameter and return types.
+func (l *Lowerer) instantiateGeneric(info *FuncInfo) (vars map[string]IRType, paramTypes []IRType, ret goReturnInfo) {
+	if len(info.TypeParams) == 0 {
+		return nil, nil, l.goFuncReturnType(info)
+	}
+	vars = make(map[string]IRType, len(info.TypeParams))
+	for _, name := range info.TypeParams {
+		vars[name] = l.freshTypeVar()
+	}
+	paramTypes = make([]IRType, len(info.Params))
+	for i, p := range info.Params {
+		paramTypes[i] = goTypeToIRWithVars(p.Type, vars)
+	}
+	ret = l.goFuncReturnTypeWithVars(info, vars)
+	return
+}
+
 // goTypeToIRName converts a go/types type string to a short Go type name.
 // goTypeToIR converts a go/types type string to an IRType, handling pointer types.
 func goTypeToIR(goType string) IRType {
+	return goTypeToIRWithVars(goType, nil)
+}
+
+// goTypeToIRWithVars converts a Go type string to an IRType, substituting
+// type parameter names with the IRType in the vars map.
+func goTypeToIRWithVars(goType string, vars map[string]IRType) IRType {
 	if strings.HasPrefix(goType, "*") {
-		return IRPointerType{Inner: IRNamedType{GoName: goTypeToIRName(goType[1:])}}
+		return IRPointerType{Inner: goTypeToIRWithVars(goType[1:], vars)}
+	}
+	if strings.HasPrefix(goType, "[]") {
+		return IRListType{Elem: goTypeToIRWithVars(goType[2:], vars)}
+	}
+	if vars != nil {
+		if v, ok := vars[goType]; ok {
+			return v
+		}
 	}
 	return IRNamedType{GoName: goTypeToIRName(goType)}
 }

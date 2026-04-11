@@ -392,6 +392,13 @@ func sigToFuncInfo(sig *types.Signature) *FuncInfo {
 		Variadic: sig.Variadic(),
 	}
 
+	// Extract type parameters for generic functions
+	if tparams := sig.TypeParams(); tparams != nil {
+		for i := 0; i < tparams.Len(); i++ {
+			info.TypeParams = append(info.TypeParams, tparams.At(i).Obj().Name())
+		}
+	}
+
 	params := sig.Params()
 	for i := 0; i < params.Len(); i++ {
 		p := params.At(i)

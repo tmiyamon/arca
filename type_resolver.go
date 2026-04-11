@@ -5,9 +5,10 @@ package main
 // depending on go/types directly.
 
 type FuncInfo struct {
-	Params    []ParamInfo
-	Results   []ParamInfo
-	Variadic  bool
+	Params     []ParamInfo
+	Results    []ParamInfo
+	Variadic   bool
+	TypeParams []string // Generic type parameter names: ["T"], ["K", "V"], etc.
 }
 
 type ParamInfo struct {
