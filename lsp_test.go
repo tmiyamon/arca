@@ -174,6 +174,39 @@ fun main() {
 	}
 }
 
+// Test chained completion with Go FFI (similar to todo example)
+func TestCompletionChainedFFI(t *testing.T) {
+	t.Parallel()
+	source := `import go "database/sql"
+
+type App {
+    App(db: *sql.DB)
+
+    fun close() {
+        self.db.
+    }
+}
+`
+	items := getCompletionItems(source, "/tmp/chained_ffi_test.arca", 7, 17)
+	if len(items) == 0 {
+		t.Errorf("expected completions for self.db., got none")
+	}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+	}
+	t.Logf("self.db. completions (first 10): %v", names[:min(10, len(names))])
+	hasClose := false
+	for _, n := range names {
+		if n == "Close" {
+			hasClose = true
+		}
+	}
+	if !hasClose {
+		t.Errorf("expected Close method, got %d items", len(names))
+	}
+}
+
 // Test self completion in method body
 func TestCompletionSelf(t *testing.T) {
 	t.Parallel()

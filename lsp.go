@@ -298,22 +298,22 @@ func getDefinitionLocation(source string, filePath string, line, col int) (strin
 	return "", Pos{}
 }
 
-// extractPackageAndType returns the Go package path and type name from an IR type.
-// Returns ("", "") if the type is not a Go-qualified named type.
+// extractPackageAndType returns the Go package short name and type name from
+// an IR type. Returns ("", "") if the type is not a Go-qualified named type.
 func extractPackageAndType(t IRType) (string, string) {
+	// Unwrap pointer: *sql.DB → sql.DB
+	if pt, ok := t.(IRPointerType); ok {
+		return extractPackageAndType(pt.Inner)
+	}
 	named, ok := t.(IRNamedType)
 	if !ok {
 		return "", ""
 	}
-	// GoName may be "*echo.Context" or "echo.Context"
 	name := strings.TrimPrefix(named.GoName, "*")
 	parts := strings.SplitN(name, ".", 2)
 	if len(parts) != 2 {
 		return "", ""
 	}
-	// We need the full package path, not just the short name.
-	// This is a best-effort: short-name lookup via resolver isn't straightforward here.
-	// Just return as "shortName", "TypeName" and let caller figure out path.
 	return parts[0], parts[1]
 }
 
