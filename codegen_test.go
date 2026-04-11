@@ -320,7 +320,7 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected error for wrong arg type in generic call")
 		}
-		if !strings.Contains(err.Error(), "type mismatch: expected *sql.DB, got string") {
+		if !strings.Contains(err.Error(), "type mismatch: expected *sql.DB, got String") {
 			t.Errorf("unexpected error: %s", err)
 		}
 	})

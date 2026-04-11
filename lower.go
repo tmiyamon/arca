@@ -224,8 +224,8 @@ func (l *Lowerer) unify(a, b IRType, pos Pos) bool {
 		return true
 	}
 	l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
-		Expected: irTypeEmitStr(l.resolveDeep(b)),
-		Actual:   irTypeEmitStr(l.resolveDeep(a)),
+		Expected: irTypeDisplayStr(l.resolveDeep(b)),
+		Actual:   irTypeDisplayStr(l.resolveDeep(a)),
 	})
 	return false
 }
@@ -1283,10 +1283,22 @@ func (l *Lowerer) isConstraintCompatible(sourceName, targetName string) bool {
 }
 
 // irTypeDisplayStr returns a human-readable type name for error messages.
+// irTypeDisplayStr renders an IR type in Arca source-level syntax for
+// user-facing error messages. Unlike irTypeEmitStr (which produces the
+// underlying Go form like `Result_` / `struct{}`), this keeps the names the
+// user wrote — `Result`, `Option`, `Unit`, `Int`, etc.
 func irTypeDisplayStr(t IRType) string {
 	switch tt := t.(type) {
 	case IRNamedType:
-		return tt.GoName
+		base := arcaDisplayName(tt.GoName)
+		if len(tt.Params) == 0 {
+			return base
+		}
+		params := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = irTypeDisplayStr(p)
+		}
+		return base + "[" + strings.Join(params, ", ") + "]"
 	case IRPointerType:
 		return "*" + irTypeDisplayStr(tt.Inner)
 	case IRResultType:
@@ -1295,9 +1307,38 @@ func irTypeDisplayStr(t IRType) string {
 		return "Option[" + irTypeDisplayStr(tt.Inner) + "]"
 	case IRListType:
 		return "List[" + irTypeDisplayStr(tt.Elem) + "]"
-	default:
-		return "unknown"
+	case IRMapType:
+		return "Map[" + irTypeDisplayStr(tt.Key) + ", " + irTypeDisplayStr(tt.Value) + "]"
+	case IRTupleType:
+		elems := make([]string, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = irTypeDisplayStr(e)
+		}
+		return "(" + strings.Join(elems, ", ") + ")"
+	case IRTypeVar:
+		return "_"
+	case IRInterfaceType:
+		return "Any"
 	}
+	return "unknown"
+}
+
+// arcaDisplayName maps internal Go type names back to the Arca source name
+// so error messages use the identifier the user actually wrote.
+func arcaDisplayName(goName string) string {
+	switch goName {
+	case "struct{}":
+		return "Unit"
+	case "int":
+		return "Int"
+	case "float64":
+		return "Float"
+	case "string":
+		return "String"
+	case "bool":
+		return "Bool"
+	}
+	return goName
 }
 
 // checkMethodArgCount validates method call argument count against Go signature.
