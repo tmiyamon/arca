@@ -297,6 +297,194 @@ fun main() {
 	}
 }
 
+// HM inference relies on propagating a hint (let annotation, return type,
+// function param) into the RHS so bare constructors like Ok/Error/None and
+// empty list/map literals can be resolved. These tests lock down the
+// happy-path and the mismatch-path for each hint source.
+func TestHMInferenceFromHint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ok_from_let_annotation", func(t *testing.T) {
+		t.Parallel()
+		errs := validateSource(`
+fun main() {
+  let r: Result[Int, error] = Ok(42)
+}
+`)
+		if len(errs) > 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+	})
+
+	t.Run("ok_type_mismatch_vs_annotation", func(t *testing.T) {
+		t.Parallel()
+		errs := validateSource(`
+fun main() {
+  let r: Result[String, error] = Ok(42)
+}
+`)
+		if !hasErrorCode(errs, ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch, got: %v", errs)
+		}
+	})
+
+	t.Run("none_from_return_type", func(t *testing.T) {
+		t.Parallel()
+		errs := validateSource(`
+fun find() -> Option[Int] {
+  None
+}
+`)
+		if len(errs) > 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+	})
+
+	t.Run("empty_list_from_let_annotation", func(t *testing.T) {
+		t.Parallel()
+		errs := validateSource(`
+fun main() {
+  let xs: List[Int] = []
+}
+`)
+		if len(errs) > 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+	})
+
+	t.Run("result_error_arm_binding_type_flows", func(t *testing.T) {
+		t.Parallel()
+		// The `e` binding in `Error(e)` takes the Result's Err type.
+		// Here Err = error, so passing `e` to a String param must mismatch.
+		errs := validateSource(`
+fun try() -> Result[Int, error] { Ok(1) }
+
+fun greet(name: String) -> String { name }
+
+fun main() {
+  match try() {
+    Ok(_) => "ok"
+    Error(e) => greet(e)
+  }
+}
+`)
+		if !hasErrorCode(errs, ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch from error-arm binding flow, got: %v", errs)
+		}
+	})
+}
+
+// Parse errors must not be silently misclassified as type errors — they
+// should surface as ErrUnspecified (the zero code) so hasErrorCode checks
+// for real codes don't accidentally pass.
+// Each error must be anchored at an accurate source position (line:col) so
+// CLI output and LSP diagnostics can point the user at the right spot. These
+// tests lock in the contract for the common error kinds; without them,
+// reshuffling the lowerer can silently regress positions without breaking
+// anything else.
+func TestErrorPositions(t *testing.T) {
+	t.Parallel()
+
+	find := func(errs []CompileError, code ErrorCode) *CompileError {
+		for i := range errs {
+			if errs[i].Code == code {
+				return &errs[i]
+			}
+		}
+		return nil
+	}
+
+	t.Run("undefined_variable", func(t *testing.T) {
+		t.Parallel()
+		// x is on line 3, column 11 (1-based).
+		errs := validateSource(`
+fun main() {
+  println(x)
+}
+`)
+		e := find(errs, ErrUnknownVariable)
+		if e == nil {
+			t.Fatalf("expected ErrUnknownVariable, got: %v", errs)
+		}
+		if e.Pos.Line != 3 || e.Pos.Col != 11 {
+			t.Errorf("undefined variable: expected 3:11, got %d:%d", e.Pos.Line, e.Pos.Col)
+		}
+	})
+
+	t.Run("unused_package", func(t *testing.T) {
+		t.Parallel()
+		errs := validateSource(`
+import go "strconv"
+import go "time"
+fun main() { let _ = strconv.Itoa(42) }
+`)
+		e := find(errs, ErrUnusedPackage)
+		if e == nil {
+			t.Fatalf("expected ErrUnusedPackage, got: %v", errs)
+		}
+		if e.Pos.Line != 3 || e.Pos.Col != 1 {
+			t.Errorf("unused package: expected 3:1, got %d:%d", e.Pos.Line, e.Pos.Col)
+		}
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		t.Parallel()
+		// Unknown type `Bogus` in the constructor field list.
+		errs := validateSource(`
+type Order {
+  Order(id: Int, status: Bogus)
+}
+`)
+		e := find(errs, ErrUnknownType)
+		if e == nil {
+			t.Fatalf("expected ErrUnknownType, got: %v", errs)
+		}
+		if e.Pos.Line != 3 {
+			t.Errorf("unknown type: expected line 3, got line %d", e.Pos.Line)
+		}
+	})
+
+	t.Run("non_exhaustive_match", func(t *testing.T) {
+		t.Parallel()
+		// The match starts on line 8 — non-exhaustive (missing Blue).
+		errs := validateSource(`
+type Color {
+  Red
+  Green
+  Blue
+}
+fun pick(c: Color) -> String {
+  match c {
+    Red => "r"
+    Green => "g"
+  }
+}
+`)
+		e := find(errs, ErrNonExhaustiveMatch)
+		if e == nil {
+			t.Fatalf("expected ErrNonExhaustiveMatch, got: %v", errs)
+		}
+		if e.Pos.Line != 8 {
+			t.Errorf("non-exhaustive match: expected line 8, got line %d", e.Pos.Line)
+		}
+	})
+}
+
+func TestParseErrorIsNotTypeMismatch(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+fun broken( {
+  42
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected a parse error")
+	}
+	if hasErrorCode(errs, ErrTypeMismatch) {
+		t.Error("parse error must not report as ErrTypeMismatch")
+	}
+}
+
 func TestValidateMatchPatternBindingType(t *testing.T) {
 	t.Parallel()
 	errs := validateSource(`

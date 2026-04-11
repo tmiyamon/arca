@@ -1,0 +1,26 @@
+import go "fmt"
+
+fun classify(n: Int) -> String {
+  if n > 0 {
+    "positive"
+  } else if n < 0 {
+    "negative"
+  } else {
+    "zero"
+  }
+}
+
+fun describe(x: Int) -> String {
+  if x == 0 {
+    "zero"
+  } else {
+    "nonzero"
+  }
+}
+
+fun main() {
+  fmt.Println(classify(42))
+  fmt.Println(classify(-1))
+  fmt.Println(classify(0))
+  fmt.Println(describe(5))
+}

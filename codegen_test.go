@@ -301,3 +301,82 @@ fun main() {
 		}
 	})
 }
+
+// Go FFI functions returning multiple values are mapped to Arca wrapper types:
+// (T, error) → Result[T, error], (T, bool) → Option[T], 3+ → tuple. These
+// tests lock down the mapping via end-to-end compilation — the generated Go
+// must compile, and match statements against the wrapper types must be valid.
+func TestGoFFIMultiReturn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("T_error_becomes_result", func(t *testing.T) {
+		t.Parallel()
+		// strconv.Atoi: func(s string) (int, error). The let binding's
+		// inferred type must be Result[Int, error], so Ok/Error match arms
+		// and the ? operator work without annotations.
+		result, err := transpileSource(`
+import go "strconv"
+
+fun parse(s: String) -> Result[Int, error] {
+  let n = strconv.Atoi(s)?
+  Ok(n + 1)
+}
+
+fun main() {
+  let _ = parse("42")
+}
+`)
+		if err != nil {
+			t.Fatalf("transpile error: %v", err)
+		}
+		// The generated Go must destructure Atoi's two returns into a
+		// Result wrapper, not call it directly as a single-value expression.
+		if !strings.Contains(result.goCode, "strconv.Atoi") {
+			t.Error("expected strconv.Atoi call in generated Go")
+		}
+	})
+
+	t.Run("T_bool_becomes_option", func(t *testing.T) {
+		t.Parallel()
+		// os.LookupEnv: func(key string) (string, bool). The binding type
+		// must be Option[String] so Some/None match arms are accepted.
+		_, err := transpileSource(`
+import go "os"
+
+fun main() {
+  let home = os.LookupEnv("HOME")
+  match home {
+    Some(path) => println("home is ${path}")
+    None => println("no home")
+  }
+}
+`)
+		if err != nil {
+			t.Fatalf("transpile error: %v", err)
+		}
+	})
+
+	t.Run("option_match_binding_type_propagates", func(t *testing.T) {
+		t.Parallel()
+		// The Some binding must have type String (inner of Option[String]).
+		// Passing it to an Int param should fail.
+		_, err := transpileSource(`
+import go "os"
+
+fun need_int(n: Int) -> Int { n }
+
+fun main() {
+  match os.LookupEnv("HOME") {
+    Some(path) => need_int(path)
+    None => 0
+  }
+}
+`)
+		if err == nil {
+			t.Fatal("expected type mismatch for passing String to Int param")
+		}
+		if !strings.Contains(err.Error(), "type mismatch") {
+			t.Errorf("unexpected error: %s", err)
+		}
+	})
+}

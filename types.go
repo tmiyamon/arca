@@ -11,7 +11,8 @@ import (
 type ErrorCode int
 
 const (
-	ErrTypeMismatch ErrorCode = iota
+	ErrUnspecified ErrorCode = iota // zero value — must not collide with a real code
+	ErrTypeMismatch
 	ErrUnknownType
 	ErrUnknownVariable
 	ErrNonExhaustiveMatch

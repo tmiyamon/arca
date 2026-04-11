@@ -1,0 +1,10 @@
+import go "fmt"
+
+fun main() {
+  let ages = {"alice": 30, "bob": 25}
+  let empty: Map[String, Int] = {}
+  let n = ages["alice"]
+  fmt.Println(ages)
+  fmt.Println(empty)
+  fmt.Println(n)
+}

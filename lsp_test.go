@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
 // Test go to definition
@@ -537,6 +539,86 @@ fun main() {
 	for _, d := range diags {
 		t.Logf("diag: line=%d msg=%q", d.Range.Start.Line, d.Message)
 	}
+}
+
+// Lower-phase errors (unused imports, undefined variables, type mismatches)
+// must reach LSP diagnostics the same way parse errors do. Regression guard
+// for the "I want it to show in the LSP too" requirement.
+func TestDiagnosticsLowerErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unused_package", func(t *testing.T) {
+		t.Parallel()
+		source := `import go "strconv"
+import go "time"
+
+fun main() {
+    let _ = strconv.Itoa(42)
+}
+`
+		diags := collectDiagnostics(source, "/tmp/diag_unused.arca")
+		if !hasDiag(diags, "unused package: time") {
+			t.Errorf("expected 'unused package: time' diagnostic, got: %v", diagMessages(diags))
+		}
+		// Must be anchored at the import line (2, 0-indexed → 1).
+		for _, d := range diags {
+			if strings.Contains(d.Message, "unused package: time") && d.Range.Start.Line != 1 {
+				t.Errorf("unused-import diagnostic anchored at line %d, want 1", d.Range.Start.Line)
+			}
+		}
+	})
+
+	t.Run("undefined_variable", func(t *testing.T) {
+		t.Parallel()
+		source := `fun main() {
+    println(x)
+}
+`
+		diags := collectDiagnostics(source, "/tmp/diag_undef.arca")
+		if !hasDiag(diags, "undefined variable: x") {
+			t.Errorf("expected 'undefined variable: x' diagnostic, got: %v", diagMessages(diags))
+		}
+	})
+
+	t.Run("wrong_arg_count", func(t *testing.T) {
+		t.Parallel()
+		source := `fun add(a: Int, b: Int) -> Int { a + b }
+
+fun main() {
+    add(1)
+}
+`
+		diags := collectDiagnostics(source, "/tmp/diag_argcount.arca")
+		if !hasDiagContaining(diags, "expects 2 arguments, got 1") {
+			t.Errorf("expected wrong-arg-count diagnostic, got: %v", diagMessages(diags))
+		}
+	})
+}
+
+func hasDiag(diags []protocol.Diagnostic, msg string) bool {
+	for _, d := range diags {
+		if d.Message == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDiagContaining(diags []protocol.Diagnostic, sub string) bool {
+	for _, d := range diags {
+		if strings.Contains(d.Message, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func diagMessages(diags []protocol.Diagnostic) []string {
+	out := make([]string, len(diags))
+	for i, d := range diags {
+		out[i] = d.Message
+	}
+	return out
 }
 
 // Test that hover returns non-empty for common cases.

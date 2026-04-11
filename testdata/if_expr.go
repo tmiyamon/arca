@@ -1,0 +1,32 @@
+package main
+
+import (
+	"fmt"
+)
+
+func classify(n int) string {
+	if n > 0 {
+		return "positive"
+	} else {
+		if n < 0 {
+			return "negative"
+		} else {
+			return "zero"
+		}
+	}
+}
+
+func describe(x int) string {
+	if x == 0 {
+		return "zero"
+	} else {
+		return "nonzero"
+	}
+}
+
+func main() {
+	fmt.Println(classify(42))
+	fmt.Println(classify(-1))
+	fmt.Println(classify(0))
+	fmt.Println(describe(5))
+}
