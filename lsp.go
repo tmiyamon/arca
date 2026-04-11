@@ -22,6 +22,19 @@ var (
 // fileStore keeps in-memory file contents for open documents.
 var fileStore = map[string]string{}
 
+// resolverCache keeps a GoTypeResolver per goModDir so that Go package
+// type info is loaded only once per session.
+var resolverCache = map[string]*GoTypeResolver{}
+
+func getResolverFor(dir string) *GoTypeResolver {
+	if r, ok := resolverCache[dir]; ok {
+		return r
+	}
+	r := NewGoTypeResolver(dir)
+	resolverCache[dir] = r
+	return r
+}
+
 func lspCmd() int {
 	commonlog.Configure(1, nil) // minimal logging
 
@@ -156,7 +169,7 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 
 	// Lower → validate
 	goModDir := findGoModDir(filepath.Dir(filePath))
-	resolver := NewGoTypeResolver(goModDir)
+	resolver := getResolverFor(goModDir)
 	lowerer := NewLowerer(prog, "", resolver)
 	irProg := lowerer.Lower(prog, "main", false)
 
@@ -233,7 +246,7 @@ func getDefinitionLocation(source string, filePath string, line, col int) (strin
 		return "", Pos{}
 	}
 	goModDir := findGoModDir(filepath.Dir(filePath))
-	resolver := NewGoTypeResolver(goModDir)
+	resolver := getResolverFor(goModDir)
 	lowerer := NewLowerer(prog, "", resolver)
 	lowerer.Lower(prog, "main", false)
 
@@ -346,7 +359,7 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 		return nil
 	}
 	goModDir := findGoModDir(filepath.Dir(filePath))
-	resolver := NewGoTypeResolver(goModDir)
+	resolver := getResolverFor(goModDir)
 	lowerer := NewLowerer(prog, "", resolver)
 	lowerer.Lower(prog, "main", false)
 
@@ -525,7 +538,7 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 	}
 
 	goModDir := findGoModDir(filepath.Dir(filePath))
-	resolver := NewGoTypeResolver(goModDir)
+	resolver := getResolverFor(goModDir)
 	lowerer := NewLowerer(prog, "", resolver)
 	lowerer.Lower(prog, "main", false)
 

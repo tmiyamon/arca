@@ -136,6 +136,25 @@ fun main() {
 	}
 }
 
+func BenchmarkCompletion(b *testing.B) {
+	source := `import go "fmt"
+
+type User {
+    User(name: String, age: Int)
+}
+
+fun main() {
+    let u = User(name: "Alice", age: 30)
+    u.
+    fmt.
+}
+`
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = getCompletionItems(source, "/tmp/bench.arca", 10, 9)
+	}
+}
+
 // Debug: print scope tree
 func TestScopeTreeDebug(t *testing.T) {
 	source := `import go "fmt"
