@@ -442,6 +442,72 @@ fun test(x: Int) -> String {
 	}
 }
 
+func TestUnusedPackage(t *testing.T) {
+	t.Parallel()
+	// `time` is imported but never referenced → should report ErrUnusedPackage
+	errs := validateSource(`
+import go "strconv"
+import go "time"
+fun main() {
+  let _ = strconv.Itoa(42)
+}
+`)
+	if !hasErrorCode(errs, ErrUnusedPackage) {
+		t.Fatalf("expected ErrUnusedPackage for unused 'time' import, got: %v", errs)
+	}
+	// Message must follow the "<reason>: <name>" convention used by other errors.
+	for _, e := range errs {
+		if e.Code == ErrUnusedPackage && e.Message() != "unused package: time" {
+			t.Errorf("unexpected message format: %q", e.Message())
+		}
+	}
+	for _, e := range errs {
+		if e.Code == ErrUnusedPackage {
+			if data, ok := e.Data.(UnusedPackageData); !ok || data.Name != "time" {
+				t.Errorf("expected ErrUnusedPackage for 'time', got: %v", e)
+			}
+			if e.Pos.Line != 3 {
+				t.Errorf("expected unused-import error at line 3, got line %d", e.Pos.Line)
+			}
+		}
+	}
+}
+
+func TestUsedPackageNoError(t *testing.T) {
+	t.Parallel()
+	// All imports are used (fmt via string interpolation, strconv via function call)
+	errs := validateSource(`
+import go "fmt"
+import go "strconv"
+fun main() {
+  let s = strconv.Itoa(42)
+  println("${s}")
+  let _ = fmt.Sprintf("x")
+}
+`)
+	for _, e := range errs {
+		if e.Code == ErrUnusedPackage {
+			t.Errorf("unexpected unused-package error: %s", e.Message())
+		}
+	}
+}
+
+func TestSideEffectImportNotFlagged(t *testing.T) {
+	t.Parallel()
+	// Side-effect imports (`import go _ "..."`) must never be flagged as unused.
+	errs := validateSource(`
+import go _ "embed"
+fun main() {
+  println("hi")
+}
+`)
+	for _, e := range errs {
+		if e.Code == ErrUnusedPackage {
+			t.Errorf("side-effect import incorrectly flagged as unused: %s", e.Message())
+		}
+	}
+}
+
 func TestTryExpressionStatement(t *testing.T) {
 	t.Parallel()
 	// Try in expression statement should not produce errors

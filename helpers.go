@@ -9,9 +9,14 @@ type goImportEntry struct {
 
 // GoPackage represents a Go package imported via FFI.
 // Centralizes import path parsing so version suffix logic is in one place.
+// When held by the Lowerer, Pos/SideEffect/Used track the import site for
+// unused-import diagnostics; NewGoPackage leaves these zero by default.
 type GoPackage struct {
-	ShortName string // "echo", "http", "fmt"
-	FullPath  string // "github.com/labstack/echo/v5", "net/http", "fmt"
+	ShortName  string // "echo", "http", "fmt"
+	FullPath   string // "github.com/labstack/echo/v5", "net/http", "fmt"
+	Pos        Pos    // Arca source position of the import (set by Lowerer)
+	SideEffect bool   // imported as `_` for side effects (set by Lowerer)
+	Used       bool   // referenced at least once during lowering (set by Lowerer)
 }
 
 // NewGoPackage creates a GoPackage from a Go import path.

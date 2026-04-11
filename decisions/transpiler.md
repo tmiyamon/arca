@@ -4,6 +4,25 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-11: Unused package detection
+
+**Context:** Unused Go imports used to surface as `./main.go:N:M: "time" imported and not used` from the Go compiler — wrong file, wrong line, invisible to the LSP. Users couldn't see the problem at the Arca source site.
+
+**Decision:** Detect unused imports in the lowerer and report them as `ErrUnusedPackage` with the Arca source position.
+
+**Implementation:**
+- Extended `GoPackage` with `Pos`, `SideEffect`, `Used` fields (rather than adding parallel maps) so all import-site state lives on one struct.
+- New `lookupGoPackage(name)` on `Lowerer` — the only sanctioned way to read `l.goPackages` at resolution sites; sets `Used=true` on hit.
+- Switched all `l.goPackages[name]` call sites (call dispatch, method receiver, func param resolution, bare package ident, qualified Go type in `lowerNamedType`) to `lookupGoPackage`.
+- At the end of `Lower()`, iterate `l.goPackages` and emit `ErrUnusedPackage` for any entry that is not side-effect, not `Used`, and not covered by a `builtins[name]` flag (needed because string interpolation auto-enables `fmt` without a lookup).
+- Errors flow through the existing `lowerer.Errors()` channel, so both CLI output and LSP diagnostics pick them up automatically.
+
+**Message convention:** `unused package: <name>` — matches the `<reason>: <name>` style of `undefined variable:`, `unknown type:`, etc., instead of copying Go's "imported and not used" phrasing.
+
+**Status:** Done
+
+---
+
 ## 2026-04-11: Explicit type args and HM for Go generics
 
 **Context:** After HM was introduced for Arca-side types, Go generic function calls still relied on string-based `deriveTypeArgs` (hint pattern matching) and a separate `applyExplicitTypeArgs` path for explicit type args. Three disjoint ways of handling the same concept: Go generic type parameters.

@@ -23,6 +23,7 @@ const (
 	ErrFieldAccessOnOption
 	ErrReturnTypeMismatch
 	ErrCannotInferType
+	ErrUnusedPackage
 )
 
 type CompileError struct {
@@ -57,6 +58,8 @@ func (e CompileError) Message() string {
 		return fmt.Sprintf("cannot access .%s on %s type. %s", d.Field, d.TypeName, d.Suggestion)
 	case CannotInferTypeData:
 		return fmt.Sprintf("cannot infer %s type for match subject", d.TypeName)
+	case UnusedPackageData:
+		return fmt.Sprintf("unused package: %s", d.Name)
 	case MessageData:
 		return d.Text
 	default:
@@ -101,6 +104,10 @@ type FieldAccessOnWrappedData struct {
 
 type CannotInferTypeData struct {
 	TypeName string
+}
+
+type UnusedPackageData struct {
+	Name string // short name as used in Arca source (e.g. "time", "stdlib")
 }
 
 // MessageData is a fallback for errors not yet structured

@@ -17,7 +17,7 @@ type Lowerer struct {
 	moduleNames  map[string]bool
 	goModule     string
 	typeResolver  TypeResolver
-	goPackages    map[string]*GoPackage // short name → Go package info
+	goPackages    map[string]*GoPackage // short name → Go package info (carries Pos/SideEffect/Used)
 
 	// Per-function state
 	currentRetType  Type
@@ -429,6 +429,17 @@ func (l *Lowerer) Functions() map[string]FnDecl { return l.functions }
 // GoPackages returns the collected Go package imports.
 func (l *Lowerer) GoPackages() map[string]*GoPackage { return l.goPackages }
 
+// lookupGoPackage returns the Go package for a short name and marks it used.
+// Use this instead of direct l.goPackages[name] access at resolution sites so
+// unused-import diagnostics work correctly.
+func (l *Lowerer) lookupGoPackage(name string) (*GoPackage, bool) {
+	pkg, ok := l.goPackages[name]
+	if ok {
+		pkg.Used = true
+	}
+	return pkg, ok
+}
+
 // TypeResolver returns the type resolver for Go FFI lookups.
 func (l *Lowerer) TypeResolver() TypeResolver { return l.typeResolver }
 
@@ -466,6 +477,8 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		case ImportDecl:
 			if strings.HasPrefix(d.Path, "go/") {
 				pkg := NewGoPackage(d.Path[3:])
+				pkg.Pos = d.Pos
+				pkg.SideEffect = d.SideEffect
 				if l.goPackages == nil {
 					l.goPackages = make(map[string]*GoPackage)
 				}
@@ -487,6 +500,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 					l.goPackages = make(map[string]*GoPackage)
 				}
 				goPkg := NewGoPackage(pkg.GoModPath)
+				goPkg.Pos = d.Pos
 				l.goPackages[pkg.Name] = goPkg
 				l.registerSymbol(SymbolRegInfo{Name: pkg.Name, Kind: SymPackage, Pos: d.Pos})
 				l.imports = append(l.imports, IRImport{Path: pkg.GoModPath})
@@ -534,6 +548,22 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 
 	// Expand sum type methods to per-variant implementations
 	funcs = l.expandSumTypeMethods(funcs)
+
+	// Report unused imports (skip side-effect imports, which are intentional,
+	// and packages consumed indirectly via auto-detected builtins like string
+	// interpolation needing fmt). Sort for deterministic diagnostic order.
+	var unusedNames []string
+	for name, pkg := range l.goPackages {
+		if pkg.SideEffect || pkg.Used || l.builtins[name] {
+			continue
+		}
+		unusedNames = append(unusedNames, name)
+	}
+	sort.Strings(unusedNames)
+	for _, name := range unusedNames {
+		pkg := l.goPackages[name]
+		l.addCompileError(ErrUnusedPackage, pkg.Pos, UnusedPackageData{Name: name})
+	}
 
 	// Collect builtin names
 	var builtinNames []string
@@ -1356,6 +1386,10 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		if l.infer != nil && l.isTypeParam(nt.Name) {
 			return l.typeParamVar(nt.Name)
 		}
+		// Qualified Go type (e.g. "sql.DB", "time.Time") marks the package as used.
+		if dot := strings.IndexByte(nt.Name, '.'); dot > 0 {
+			l.lookupGoPackage(nt.Name[:dot])
+		}
 		params := make([]IRType, len(nt.Params))
 		for i, p := range nt.Params {
 			params[i] = l.lowerType(p)
@@ -1486,6 +1520,10 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 				}
 			}
 		}
+		return IRIdent{GoName: e.Name, Type: IRInterfaceType{}}
+	}
+	// Bare reference to a Go/Arca package (e.g. `http` in `http.StatusOK`)
+	if _, ok := l.lookupGoPackage(e.Name); ok {
 		return IRIdent{GoName: e.Name, Type: IRInterfaceType{}}
 	}
 	// Variable resolution via lexical scope
@@ -1633,7 +1671,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 	if fa, ok := e.Fn.(FieldAccess); ok {
 		// Go FFI call: strconv.Itoa(...), http.HandleFunc(...)
 		if ident, ok := fa.Expr.(Ident); ok {
-			if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
+			if _, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
@@ -1733,7 +1771,7 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 	pkgShort := parts[0]
 	funcName := parts[1]
 
-	goPkg, ok := l.goPackages[pkgShort]
+	goPkg, ok := l.lookupGoPackage(pkgShort)
 	if !ok {
 		return goReturnInfo{Type: IRInterfaceType{}}
 	}
@@ -1976,7 +2014,7 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 		return "", "", false
 	}
 	parts := strings.SplitN(named.GoName, ".", 2)
-	if goPkg, exists := l.goPackages[parts[0]]; exists {
+	if goPkg, exists := l.lookupGoPackage(parts[0]); exists {
 		return goPkg.FullPath, parts[1], true
 	}
 	return "", "", false
@@ -2149,13 +2187,10 @@ func (l *Lowerer) resolveCallParamFuncType(call FnCall, argIndex int) *FuncInfo 
 	if fa, ok := call.Fn.(FieldAccess); ok {
 		// Method call: resolve receiver type → method signature → param type
 		if ident, ok := fa.Expr.(Ident); ok {
-			if _, isGoPkg := l.goPackages[ident.Name]; isGoPkg {
-				// Go FFI package function
-				if goPkg, ok := l.goPackages[ident.Name]; ok {
-					if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
-						if argIndex < len(info.Params) {
-							return l.parseFuncType(info.Params[argIndex].Type)
-						}
+			if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
+				if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
+					if argIndex < len(info.Params) {
+						return l.parseFuncType(info.Params[argIndex].Type)
 					}
 				}
 				return nil
