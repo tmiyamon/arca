@@ -21,7 +21,7 @@ func QueryAs[T any](db *sql.DB, query string, args ...any) ([]T, error) {
 		return nil, err
 	}
 
-	var results []T
+	results := make([]T, 0)
 	for rows.Next() {
 		var v T
 		ptrs, err := structScanPtrs(&v, columns)

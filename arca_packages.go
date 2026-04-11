@@ -12,7 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// extractOnce ensures each Arca package is extracted to the cache at most
+// once per process (refreshing stale files from previous arca binary versions).
+var extractOnce sync.Map // package name → *sync.Once
 
 // ArcaPackage describes a built-in Arca package.
 // Arca packages are conceptually Arca-native, but their implementation may be
@@ -62,21 +67,20 @@ func arcaCacheDir() (string, error) {
 	return dir, nil
 }
 
-// ensurePackageExtracted extracts the package to the cache dir if not already
-// present, and returns the directory path. Returns "" on failure.
+// ensureExtracted extracts the package to the cache dir on the first call per
+// process. Always refreshes (removes stale files) so cache stays in sync with
+// the embedded sources when the arca binary is updated.
 func (p *ArcaPackage) ensureExtracted() string {
 	cache, err := arcaCacheDir()
 	if err != nil {
 		return ""
 	}
 	pkgDir := filepath.Join(cache, p.Name)
-	// Check if already extracted
-	if _, err := os.Stat(pkgDir); err == nil {
-		return pkgDir
-	}
-	if err := p.extractTo(cache); err != nil {
-		return ""
-	}
+	onceAny, _ := extractOnce.LoadOrStore(p.Name, &sync.Once{})
+	onceAny.(*sync.Once).Do(func() {
+		_ = os.RemoveAll(pkgDir)
+		_ = p.extractTo(cache)
+	})
 	return pkgDir
 }
 
