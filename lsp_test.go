@@ -136,6 +136,75 @@ fun main() {
 	}
 }
 
+// Test chained completion (a.b.c)
+func TestCompletionChained(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+
+type Inner {
+    Inner(value: Int)
+}
+
+type Outer {
+    Outer(inner: Inner, name: String)
+}
+
+fun main() {
+    let o = Outer(inner: Inner(value: 42), name: "hello")
+    o.inner.
+}
+`
+	items := getCompletionItems(source, "/tmp/chained_test.arca", 13, 13)
+	if len(items) == 0 {
+		t.Errorf("expected completions for o.inner., got none")
+	}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+	}
+	t.Logf("o.inner. completions: %v", names)
+	found := false
+	for _, n := range names {
+		if n == "value" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'value' field, got %v", names)
+	}
+}
+
+// Test self completion in method body
+func TestCompletionSelf(t *testing.T) {
+	t.Parallel()
+	source := `type User {
+    User(name: String, age: Int)
+
+    fun greet() -> String {
+        self.
+    }
+}
+`
+	items := getCompletionItems(source, "/tmp/self_test.arca", 5, 14)
+	if len(items) == 0 {
+		t.Errorf("expected completions for self., got none")
+	}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+	}
+	t.Logf("self. completions: %v", names)
+	foundName := false
+	for _, n := range names {
+		if n == "name" {
+			foundName = true
+		}
+	}
+	if !foundName {
+		t.Errorf("expected 'name' field in self completions, got %v", names)
+	}
+}
+
 func BenchmarkCompletion(b *testing.B) {
 	source := `import go "fmt"
 

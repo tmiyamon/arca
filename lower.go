@@ -825,9 +825,19 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	// hover-able in the signature) through the body end.
 	_, ep := bodyPos(fd.Body)
 	sp := fd.Pos
+	symbols := l.paramsToSymbols(fd.Params)
+	// Method body: register `self` as a symbol with the receiver type
+	if receiver != "" && typeName != "" {
+		symbols = append(symbols, SymbolRegInfo{
+			Name:     "self",
+			ArcaType: NamedType{Name: typeName},
+			IRType:   IRNamedType{GoName: typeName},
+			Kind:     SymVariable,
+		})
+	}
 	var body IRExpr
 	l.withInferScope(func() {
-		l.withScope(sp, ep, l.paramsToSymbols(fd.Params), func() {
+		l.withScope(sp, ep, symbols, func() {
 			body = l.lowerFnBody(fd.Body, fd.ReturnType != nil)
 		})
 		body = l.resolveExprTypes(body)

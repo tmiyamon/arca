@@ -363,16 +363,62 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 	lowerer := NewLowerer(prog, "", resolver)
 	lowerer.Lower(prog, "main", false)
 
-	sym := lowerer.FindSymbolAt(receiver, Pos{line, col})
-	if sym == nil {
+	// Parse the receiver expression on its own and lower it to get its type.
+	// This handles chained access (a.b.c) naturally via the existing field-type
+	// resolution in lowerFieldAccess.
+	recvLexer := NewLexer(receiver)
+	recvTokens, err := recvLexer.Tokenize()
+	if err != nil {
 		return nil
+	}
+	recvParser := NewParser(recvTokens)
+	recvExpr, err := recvParser.parseExpr()
+	if err != nil {
+		return nil
+	}
+	// Lower the receiver inside the scope at the cursor position so that
+	// local variables like `u`, `self`, etc. resolve correctly.
+	savedScope := lowerer.currentScope
+	if lowerer.rootScope != nil {
+		lowerer.currentScope = lowerer.rootScope.FindScopeAt(Pos{line, col})
+	}
+	loweredRecv := lowerer.lowerExpr(recvExpr)
+	lowerer.currentScope = savedScope
+
+	// Derive the current type info from the lowered receiver.
+	// - Package symbol: ident name lookup via GoPackages
+	// - Otherwise: use loweredRecv.irType() for type resolution
+	var curArcaType Type
+	var curIRType IRType = loweredRecv.irType()
+	var curKind string
+	var curPkgName string
+
+	// If it's a single identifier referring to a package, treat as package.
+	if ident, ok := recvExpr.(Ident); ok {
+		if sym := lowerer.FindSymbolAt(ident.Name, Pos{line, col}); sym != nil {
+			curKind = sym.Kind
+			curPkgName = sym.Name
+			if sym.Type != nil {
+				curArcaType = sym.Type
+			}
+		}
+	}
+
+	// If the IR type is a user-defined Arca type, map it to curArcaType
+	// so the Arca type fields branch fires.
+	if curArcaType == nil && curKind == "" {
+		if nt, ok := curIRType.(IRNamedType); ok {
+			if _, isArcaType := lowerer.Types()[nt.GoName]; isArcaType {
+				curArcaType = NamedType{Name: nt.GoName}
+			}
+		}
 	}
 
 	var items []protocol.CompletionItem
 
 	// Package members
-	if sym.Kind == SymPackage {
-		if pkg, ok := lowerer.GoPackages()[sym.Name]; ok {
+	if curKind == SymPackage {
+		if pkg, ok := lowerer.GoPackages()[curPkgName]; ok {
 			for _, m := range resolver.PackageMembers(pkg.FullPath) {
 				items = append(items, memberToCompletion(m))
 			}
@@ -381,8 +427,8 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 	}
 
 	// Arca type fields
-	if sym.Type != nil {
-		if nt, ok := sym.Type.(NamedType); ok {
+	if curArcaType != nil {
+		if nt, ok := curArcaType.(NamedType); ok {
 			if td, ok := lowerer.Types()[nt.Name]; ok && len(td.Constructors) > 0 {
 				for _, f := range td.Constructors[0].Fields {
 					items = append(items, protocol.CompletionItem{
@@ -396,8 +442,8 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 	}
 
 	// Go FFI type methods/fields
-	if sym.IRType != nil {
-		if shortPkg, typeName := extractPackageAndType(sym.IRType); shortPkg != "" {
+	if curIRType != nil {
+		if shortPkg, typeName := extractPackageAndType(curIRType); shortPkg != "" {
 			if pkg, ok := lowerer.GoPackages()[shortPkg]; ok {
 				for _, m := range resolver.TypeMembers(pkg.FullPath, typeName) {
 					items = append(items, memberToCompletion(m))
@@ -458,21 +504,20 @@ func insertCompletionPlaceholder(source string, line, col int) string {
 	return strings.Join(lines, "\n")
 }
 
-// getReceiverBeforeDot returns the identifier immediately before a '.' at the cursor.
-// Returns "" if the character before cursor is not part of a receiver.name pattern.
+// getReceiverBeforeDot returns the full dotted expression before the cursor dot.
+// For `app.db.`, returns "app.db". For `u.`, returns "u".
+// Returns "" if no valid receiver expression found.
 func getReceiverBeforeDot(source string, line, col int) string {
 	lines := strings.Split(source, "\n")
 	if line < 1 || line > len(lines) {
 		return ""
 	}
 	lineText := lines[line-1]
-	// Cursor position is 1-based; we want the char index where the dot is (or just before)
-	// Scan back from col-1 to find a '.' and then the identifier before it
 	pos := col - 1
 	if pos > len(lineText) {
 		pos = len(lineText)
 	}
-	// Find the nearest '.' at or before cursor
+	// Find the nearest '.' at or before cursor (skipping any trailing word chars)
 	dotIdx := -1
 	for i := pos - 1; i >= 0; i-- {
 		c := lineText[i]
@@ -487,11 +532,16 @@ func getReceiverBeforeDot(source string, line, col int) string {
 	if dotIdx < 0 {
 		return ""
 	}
-	// Now find the identifier ending at dotIdx-1
+	// Walk back to find the full dotted expression (a.b.c)
 	end := dotIdx
 	start := end
-	for start > 0 && isIdentChar(lineText[start-1]) {
-		start--
+	for start > 0 {
+		c := lineText[start-1]
+		if isIdentChar(c) || c == '.' {
+			start--
+		} else {
+			break
+		}
 	}
 	if start == end {
 		return ""
