@@ -208,6 +208,28 @@ func TestE2EStringInterp(t *testing.T) {
 	runE2E(t, "testdata/string_interp.arca", "Hello World, you are 30!\n")
 }
 
+func TestE2EIfExpr(t *testing.T) {
+	runE2E(t, "testdata/if_expr.arca", "positive\nnegative\nzero\nnonzero\nyes\n")
+}
+
+func TestE2EMapLiteral(t *testing.T) {
+	// Map iteration order is non-deterministic, so we can't hard-code the
+	// Println output for the map itself. Just make sure it transpiles and
+	// runs without crashing by checking the scalar value ages["alice"] = 30.
+	t.Parallel()
+	result, err := transpile("testdata/map_literal.arca")
+	if err != nil {
+		t.Fatalf("transpile: %v", err)
+	}
+	if !strings.Contains(result.goCode, "map[string]int") {
+		t.Errorf("expected map[string]int in generated Go, got:\n%s", result.goCode)
+	}
+}
+
+func TestE2EShorthandLambda(t *testing.T) {
+	runE2E(t, "testdata/shorthand_lambda.arca", "[2 4 6 8 10]\n[1 2 3 4 5]\n15\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 

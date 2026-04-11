@@ -29,4 +29,11 @@ func main() {
 	fmt.Println(classify(-1))
 	fmt.Println(classify(0))
 	fmt.Println(describe(5))
+	var label string
+	if 1 > 0 {
+		label = "yes"
+	} else {
+		label = "no"
+	}
+	fmt.Println(label)
 }

@@ -2573,14 +2573,18 @@ func (l *Lowerer) lowerBlockHint(b Block, hint IRType) IRExpr {
 		stmts = append(stmts, l.lowerStmt(s)...)
 	}
 	var expr IRExpr
+	var blockType IRType = IRInterfaceType{}
 	if b.Expr != nil {
 		// Hint applies to the block's final expression (return value)
 		expr = l.lowerExprHint(b.Expr, hint)
+		if t := expr.irType(); t != nil {
+			blockType = t
+		}
 	}
 	return IRBlock{
 		Stmts: stmts,
 		Expr:  expr,
-		Type:  IRInterfaceType{},
+		Type:  blockType,
 	}
 }
 

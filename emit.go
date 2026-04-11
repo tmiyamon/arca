@@ -467,35 +467,46 @@ func (em *Emitter) emitTupleLit(t IRTupleLit) string {
 	return fmt.Sprintf("/* tuple(%s) */", em.emitArgs(t.Elements))
 }
 
-// --- Return/Void Body Modes ---
+// --- Body Emission Modes ---
+//
+// Control-flow constructs like `if` and `match` can appear in three contexts:
+// (1) as a tail expression whose value is returned from the enclosing function,
+// (2) as a statement in void context where the value is discarded, and
+// (3) as a value-producing expression assigned to a variable.
+//
+// emitBody walks the common IRBlock / IRMatch / IRIfExpr / IRFor* structure
+// once and defers leaf handling to a callback. The three callers
+// (returnLeaf, voidLeaf, assignLeaf) differ only in what they emit when the
+// traversal reaches a non-control-flow expression.
 
-func (em *Emitter) emitReturnExpr(e IRExpr) {
-	if e == nil {
-		return
-	}
-	w := em.w
-	switch expr := e.(type) {
-	case IRBlock:
-		for _, stmt := range expr.Stmts {
-			em.emitStmt(stmt)
-		}
-		if expr.Expr != nil {
-			em.emitReturnExpr(expr.Expr)
-		}
-	case IRMatch:
-		em.emitMatch(expr, true)
-	case IRIfExpr:
-		em.emitIfExpr(expr, true)
-	default:
-		w.Return(em.emitExpr(e))
-	}
+type emitLeaf func(e IRExpr)
+
+// bodyMode describes how a control-flow construct's leaves should be emitted.
+// - leaf: how to emit each non-control-flow expression at the bottom
+// - valueCtx: true when the surrounding context needs every branch to yield a
+//   value (return or assign). Drives whether a non-exhaustive match gets a
+//   `panic("unreachable")` fallback to satisfy Go's definite-return analysis.
+type bodyMode struct {
+	leaf     emitLeaf
+	valueCtx bool
 }
 
-func (em *Emitter) emitVoidBody(e IRExpr) {
+func (em *Emitter) returnMode() bodyMode {
+	return bodyMode{leaf: em.returnLeaf, valueCtx: true}
+}
+
+func (em *Emitter) voidMode() bodyMode {
+	return bodyMode{leaf: em.voidLeaf, valueCtx: false}
+}
+
+func (em *Emitter) assignMode(goName string) bodyMode {
+	return bodyMode{leaf: em.assignLeaf(goName), valueCtx: true}
+}
+
+func (em *Emitter) emitBody(e IRExpr, mode bodyMode) {
 	if e == nil {
 		return
 	}
-	w := em.w
 	switch expr := e.(type) {
 	case IRVoidExpr:
 		// nothing to emit
@@ -504,28 +515,38 @@ func (em *Emitter) emitVoidBody(e IRExpr) {
 			em.emitStmt(stmt)
 		}
 		if expr.Expr != nil {
-			em.emitVoidBody(expr.Expr)
+			em.emitBody(expr.Expr, mode)
 		}
 	case IRMatch:
-		em.emitMatch(expr, false)
+		em.emitMatch(expr, mode)
 	case IRIfExpr:
-		em.emitIfExpr(expr, false)
+		em.emitIfExpr(expr, mode)
 	case IRForRange:
 		em.emitForRange(expr)
 	case IRForEach:
 		em.emitForEach(expr)
 	default:
-		w.Stmt(em.emitExpr(e))
+		mode.leaf(e)
 	}
 }
 
-func (em *Emitter) emitArmBody(body IRExpr, isReturn bool) {
-	if isReturn {
-		em.emitReturnExpr(body)
-	} else {
-		em.emitVoidBody(body)
+func (em *Emitter) returnLeaf(e IRExpr) {
+	em.w.Return(em.emitExpr(e))
+}
+
+func (em *Emitter) voidLeaf(e IRExpr) {
+	em.w.Stmt(em.emitExpr(e))
+}
+
+func (em *Emitter) assignLeaf(goName string) emitLeaf {
+	return func(e IRExpr) {
+		em.w.Set(goName, em.emitExpr(e))
 	}
 }
+
+// Backwards-compatible wrappers so existing call sites stay short.
+func (em *Emitter) emitReturnExpr(e IRExpr) { em.emitBody(e, em.returnMode()) }
+func (em *Emitter) emitVoidBody(e IRExpr)   { em.emitBody(e, em.voidMode()) }
 
 // --- Statements ---
 
@@ -559,6 +580,15 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 		em.emitGoMultiReturnLet(stmt.GoName, stmt.Value)
 		return
 	}
+	// Value-position control flow (`let x = if ... { a } else { b }`, same for
+	// match): declare the var first, then walk the control-flow body so each
+	// leaf expression assigns to the declared var.
+	if isControlFlowValue(stmt.Value) {
+		typeStr := em.irTypeStr(em.letStmtType(stmt))
+		w.Var(stmt.GoName, typeStr)
+		em.emitBody(stmt.Value, em.assignMode(stmt.GoName))
+		return
+	}
 	if stmt.Type != nil {
 		if ll, ok := stmt.Value.(IRListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
 			w.Var(stmt.GoName, em.irTypeStr(stmt.Type))
@@ -568,6 +598,30 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 		return
 	}
 	w.Assign(stmt.GoName, em.emitExpr(stmt.Value))
+}
+
+// isControlFlowValue reports whether the given IR expression is a
+// control-flow construct that must be emitted as Go statements rather than
+// a single expression.
+func isControlFlowValue(e IRExpr) bool {
+	switch e.(type) {
+	case IRIfExpr, IRMatch:
+		return true
+	}
+	return false
+}
+
+// letStmtType returns the declared or inferred Go type for a let binding.
+// Prefers the explicit annotation when present; otherwise falls back to the
+// value's own IR type so control-flow values get a concrete var declaration.
+func (em *Emitter) letStmtType(stmt IRLetStmt) IRType {
+	if stmt.Type != nil {
+		return stmt.Type
+	}
+	if t := stmt.Value.irType(); t != nil {
+		return t
+	}
+	return IRInterfaceType{}
 }
 
 
@@ -687,7 +741,7 @@ func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
 	case IRForEach:
 		em.emitForEach(e)
 	case IRMatch:
-		em.emitMatch(e, false)
+		em.emitMatch(e, em.voidMode())
 	default:
 		w.Stmt(em.emitExpr(stmt.Expr))
 	}
@@ -737,42 +791,42 @@ func (em *Emitter) emitForEach(fe IRForEach) {
 
 // --- Match ---
 
-func (em *Emitter) emitIfExpr(e IRIfExpr, isReturn bool) {
+func (em *Emitter) emitIfExpr(e IRIfExpr, mode bodyMode) {
 	w := em.w
 	if e.Else != nil {
 		w.IfElse(em.emitExpr(e.Cond), func() {
-			em.emitArmBody(e.Then, isReturn)
+			em.emitBody(e.Then, mode)
 		}, func() {
-			em.emitArmBody(e.Else, isReturn)
+			em.emitBody(e.Else, mode)
 		})
 	} else {
 		w.If(em.emitExpr(e.Cond), func() {
-			em.emitArmBody(e.Then, isReturn)
+			em.emitBody(e.Then, mode)
 		})
 	}
 }
 
-func (em *Emitter) emitMatch(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatch(m IRMatch, mode bodyMode) {
 	if len(m.Arms) == 0 {
 		return
 	}
 	switch m.Arms[0].Pattern.(type) {
 	case IRResultOkPattern, IRResultErrorPattern:
-		em.emitMatchResult(m, isReturn)
+		em.emitMatchResult(m, mode)
 	case IROptionSomePattern, IROptionNonePattern:
-		em.emitMatchOption(m, isReturn)
+		em.emitMatchOption(m, mode)
 	case IREnumPattern:
-		em.emitMatchEnum(m, isReturn)
+		em.emitMatchEnum(m, mode)
 	case IRSumTypePattern, IRSumTypeWildcardPattern:
-		em.emitMatchSumType(m, isReturn)
+		em.emitMatchSumType(m, mode)
 	case IRListEmptyPattern, IRListExactPattern, IRListConsPattern, IRListDefaultPattern:
-		em.emitMatchList(m, isReturn)
+		em.emitMatchList(m, mode)
 	case IRLiteralPattern, IRLiteralDefaultPattern:
-		em.emitMatchLiteral(m, isReturn)
+		em.emitMatchLiteral(m, mode)
 	}
 }
 
-func (em *Emitter) emitMatchResult(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	var okArm, errorArm *IRMatchArm
@@ -795,7 +849,7 @@ func (em *Emitter) emitMatchResult(m IRMatch, isReturn bool) {
 			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(errorArm.Body, isReturn)
+			em.emitBody(errorArm.Body, mode)
 		})
 		return
 	}
@@ -804,7 +858,7 @@ func (em *Emitter) emitMatchResult(m IRMatch, isReturn bool) {
 			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(okArm.Body, isReturn)
+			em.emitBody(okArm.Body, mode)
 		})
 		return
 	}
@@ -813,19 +867,19 @@ func (em *Emitter) emitMatchResult(m IRMatch, isReturn bool) {
 			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(okArm.Body, isReturn)
+			em.emitBody(okArm.Body, mode)
 		}
 	}, func() {
 		if errorArm != nil {
 			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(errorArm.Body, isReturn)
+			em.emitBody(errorArm.Body, mode)
 		}
 	})
 }
 
-func (em *Emitter) emitMatchOption(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	var someArm, noneArm *IRMatchArm
@@ -845,7 +899,7 @@ func (em *Emitter) emitMatchOption(m IRMatch, isReturn bool) {
 	}
 	if someVoid {
 		w.If(fmt.Sprintf("!%s.Valid", subject), func() {
-			em.emitArmBody(noneArm.Body, isReturn)
+			em.emitBody(noneArm.Body, mode)
 		})
 		return
 	}
@@ -854,7 +908,7 @@ func (em *Emitter) emitMatchOption(m IRMatch, isReturn bool) {
 			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(someArm.Body, isReturn)
+			em.emitBody(someArm.Body, mode)
 		})
 		return
 	}
@@ -863,16 +917,16 @@ func (em *Emitter) emitMatchOption(m IRMatch, isReturn bool) {
 			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
 				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
 			}
-			em.emitArmBody(someArm.Body, isReturn)
+			em.emitBody(someArm.Body, mode)
 		}
 	}, func() {
 		if noneArm != nil {
-			em.emitArmBody(noneArm.Body, isReturn)
+			em.emitBody(noneArm.Body, mode)
 		}
 	})
 }
 
-func (em *Emitter) emitMatchEnum(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchEnum(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	w.Switch(subject, func() {
@@ -880,15 +934,15 @@ func (em *Emitter) emitMatchEnum(m IRMatch, isReturn bool) {
 			switch p := arm.Pattern.(type) {
 			case IREnumPattern:
 				w.Case(p.GoValue, func() {
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			case IRWildcardPattern:
 				w.Default(func() {
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			}
 		}
-		if isReturn && !em.hasWildcard(m) {
+		if mode.valueCtx && !em.hasWildcard(m) {
 			w.Default(func() {
 				w.Panic("\"unreachable\"")
 			})
@@ -896,7 +950,7 @@ func (em *Emitter) emitMatchEnum(m IRMatch, isReturn bool) {
 	})
 }
 
-func (em *Emitter) emitMatchSumType(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchSumType(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	w.SwitchType("v", subject, func() {
@@ -907,24 +961,24 @@ func (em *Emitter) emitMatchSumType(m IRMatch, isReturn bool) {
 					for _, b := range p.Bindings {
 						w.Assign(b.GoName, fmt.Sprintf("v%s", b.Source))
 					}
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			case IRSumTypeWildcardPattern:
 				w.Default(func() {
 					if p.Binding != nil {
 						w.Assign(p.Binding.GoName, "v")
 					}
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			}
 		}
 	})
-	if isReturn && !em.hasWildcard(m) {
+	if mode.valueCtx && !em.hasWildcard(m) {
 		w.Panic("\"unreachable\"")
 	}
 }
 
-func (em *Emitter) emitMatchList(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchList(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	first := true
@@ -969,17 +1023,17 @@ func (em *Emitter) emitMatchList(m IRMatch, isReturn bool) {
 			}
 		}
 		w.Indent()
-		em.emitArmBody(arm.Body, isReturn)
+		em.emitBody(arm.Body, mode)
 		w.Dedent()
 		first = false
 	}
 	w.Line("}")
-	if isReturn {
+	if mode.valueCtx {
 		w.Panic("\"unreachable\"")
 	}
 }
 
-func (em *Emitter) emitMatchLiteral(m IRMatch, isReturn bool) {
+func (em *Emitter) emitMatchLiteral(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 	w.Switch(subject, func() {
@@ -987,11 +1041,11 @@ func (em *Emitter) emitMatchLiteral(m IRMatch, isReturn bool) {
 			switch p := arm.Pattern.(type) {
 			case IRLiteralPattern:
 				w.Case(p.Value, func() {
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			case IRLiteralDefaultPattern:
 				w.Default(func() {
-					em.emitArmBody(arm.Body, isReturn)
+					em.emitBody(arm.Body, mode)
 				})
 			}
 		}

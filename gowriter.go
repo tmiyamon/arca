@@ -149,6 +149,14 @@ func (w *GoWriter) Assign(name, expr string) {
 	fmt.Fprintf(&w.buf, "%s := %s\n", name, expr)
 }
 
+// Set emits `name = expr` (plain assignment, no declaration). Used when the
+// variable was declared on an earlier line, e.g. when an `if`/`match` in value
+// position writes into a pre-declared `var`.
+func (w *GoWriter) Set(name, expr string) {
+	w.writeIndent()
+	fmt.Fprintf(&w.buf, "%s = %s\n", name, expr)
+}
+
 func (w *GoWriter) AssignMulti(names, expr string) {
 	w.writeIndent()
 	fmt.Fprintf(&w.buf, "%s := %s\n", names, expr)

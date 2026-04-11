@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-11
 
+- [if/match in value position](decisions/transpiler.md#2026-04-11-ifmatch-in-value-position-via-body-mode-refactor) — `let x = if ...` and `let x = match ...` now supported. Unified `emitBody(e, mode)` with return/void/assign leaves replaces `isReturn bool`
 - [Unused package detection](decisions/transpiler.md#2026-04-11-unused-package-detection) — `ErrUnusedPackage` at Arca source position, flows through LSP diagnostics. `GoPackage` extended with Pos/SideEffect/Used instead of parallel maps
 - [Arca package system](decisions/toolchain.md#2026-04-11-arca-package-system) — Built-in packages bundled via go:embed. `import stdlib` works without go.mod
 - [Trait system design (proposal)](decisions/ideas.md#2026-04-11-trait-system-design-proposal) — Kotlin/Swift hybrid, `impl User: Display`, `&` for multiple bounds. Design only, not implemented

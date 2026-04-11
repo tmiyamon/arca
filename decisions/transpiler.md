@@ -4,6 +4,28 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-11: `if`/`match` in value position via body-mode refactor
+
+**Context:** `let x = if cond { a } else { b }` and `let x = match ... { ... }` emitted `/* unsupported expr */` because `emitExpr` had no case for `IRIfExpr`/`IRMatch`. The Arca spec advertises `if` and `match` as expressions, so this was a latent gap caught while writing regression tests.
+
+**Decision:** Generalize the existing `emitReturnExpr` / `emitVoidBody` pair into a single `emitBody(e, mode)` that takes a `bodyMode{leaf, valueCtx}`. Three modes share the same traversal:
+
+- `returnMode()` — leaves emit `return <expr>`, `valueCtx=true` (panic fallback for non-exhaustive match)
+- `voidMode()` — leaves emit `<expr>` as an expression statement, `valueCtx=false`
+- `assignMode(goName)` — leaves emit `<goName> = <expr>` via a new `GoWriter.Set` helper, `valueCtx=true`
+
+**Implementation:**
+- Replaced `isReturn bool` with `mode bodyMode` in `emitIfExpr` and all six `emitMatch*` variants. The recursion through arm bodies becomes `em.emitBody(body, mode)` instead of branching on `isReturn`.
+- `emitLetStmt` detects `IRIfExpr`/`IRMatch` in `stmt.Value`, declares a `var` of the inferred type, then calls `emitBody(value, assignMode(goName))`.
+- Fixed `lowerBlockHint` to propagate the tail expression's type into `IRBlock.Type` (was hard-coded to `interface{}`), so the `var` declaration gets a concrete Go type.
+- `GoWriter.Set` emits `x = expr` (plain assignment) so the assignment inside each arm writes into the outer `var` rather than shadowing it via `:=`.
+
+**Ergonomics:** match in value position worked for free once the refactor landed — same traversal, same leaf mechanism.
+
+**Status:** Done
+
+---
+
 ## 2026-04-11: Unused package detection
 
 **Context:** Unused Go imports used to surface as `./main.go:N:M: "time" imported and not used` from the Go compiler — wrong file, wrong line, invisible to the LSP. Users couldn't see the problem at the Arca source site.
