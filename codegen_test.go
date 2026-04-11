@@ -281,6 +281,29 @@ fun main() {
 		}
 	})
 
+	t.Run("generic_type_param_bound_from_hint", func(t *testing.T) {
+		t.Parallel()
+		// Without explicit type args, the generic type parameter T of a
+		// Go FFI call must bind from the surrounding hint (return type
+		// here). If the inner hint propagation unify is skipped, T leaks
+		// as interface{} and codegen produces QueryOneAs[interface{}]
+		// even though there's no Arca-level error.
+		result, err := transpileSource(`
+import go "database/sql"
+import stdlib
+
+fun test(db: *sql.DB) -> Result[Int, error] {
+  stdlib.QueryOneAs(db, "select 1")
+}
+`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(result.goCode, "stdlib.QueryOneAs[int]") {
+			t.Errorf("expected generated code to use QueryOneAs[int], got:\n%s", result.goCode)
+		}
+	})
+
 	t.Run("wrong_arg_type_generic", func(t *testing.T) {
 		t.Parallel()
 		// Generic Go FFI call path: HM unify must still report mismatches
