@@ -4,6 +4,29 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-12: unify is the single type-check path
+
+**Context:** `checkTypeHint` was using a parallel `irTypesMatch` function for hint-based type compatibility, independent of HM `unify`. The two paths were structurally identical except:
+- `irTypesMatch` had a `return true` fallback for unknown type pairs, silently accepting anything it didn't explicitly case (e.g. `IRMapType` — which was silently accepted against anything because the function had no map case)
+- `irTypesMatch` carried `isConstraintCompatible` for alias widening; `unify` did not
+- `unify` recorded substitution; `irTypesMatch` did not
+
+Net effect: hint-based type checks didn't feed substitution back into HM inference, and real mismatches on newer IR types (Map, Tuple) were silently accepted. The path was a source of bugs hidden behind a permissive fallback.
+
+**Decision:** Delete `irTypesMatch`. `checkTypeHintPos` becomes a thin wrapper that routes the check through `Lowerer.unify(actual, hint, pos, silent=false)`. Constraint compatibility folds into `Lowerer.unify` as a last-ditch success path after HM structural unification fails.
+
+**Implementation:**
+- Added `IRMapType` case to `InferScope.unify` (was missing, causing Phase 1 map_literal test failure).
+- `Lowerer.unify` now calls `constraintCompatible(a, b)` after a structural unify failure, before reporting the error. This preserves `AdultAge → Age` semantics.
+- `checkTypeHintPos` shrinks to skip-interface guards plus `l.unify(actualType, hint, pos, false)`.
+- The explicit post-lowering unify loop in `lowerUserConstructorCall` becomes dead code and is removed — `checkTypeHint → unify` during arg lowering already binds fresh type vars and reports same-param mismatches (e.g. `Pair[A](1, "x")`).
+
+**Verification:** Phase 1 flipped the `irTypesMatch` fallback from `true` to `false` as an experiment to measure the blast radius. Only one test failed (map_literal), confirming the removed fallback silently masked a single real gap. Phase 2 merged the paths; the full suite still passes and all existing regression tests (if/else branch, generic same-param, constructor fields, constraint aliases) still fire at the right positions.
+
+**Status:** Done
+
+---
+
 ## 2026-04-12: unify takes an explicit silent flag
 
 **Context:** `Lowerer.unify(a, b) bool` was silent by default — callers had to remember to check the return value and emit `ErrTypeMismatch` themselves. Out of 11 existing call sites only 2 did, and I forgot to do so myself when adding the Arca generic constructor path (caught by the user). The pattern is a foot-gun: the right thing costs four extra lines at every call site, so it gets skipped.

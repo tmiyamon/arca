@@ -160,6 +160,12 @@ func (s *InferScope) unify(a, b IRType) bool {
 			return false
 		}
 		return s.unify(at.Elem, bt.Elem)
+	case IRMapType:
+		bt, ok := b.(IRMapType)
+		if !ok {
+			return false
+		}
+		return s.unify(at.Key, bt.Key) && s.unify(at.Value, bt.Value)
 	case IRTupleType:
 		bt, ok := b.(IRTupleType)
 		if !ok || len(at.Elements) != len(bt.Elements) {
@@ -203,8 +209,15 @@ func (l *Lowerer) typeParamVar(name string) IRTypeVar { return l.infer.typeParam
 // itself. Use silent=true only for intermediate HM steps whose failure is
 // recoverable or will be reported elsewhere (hint propagation, fresh-var
 // unification). `rg 'unify\(.*, true\)'` lists every non-reporting site.
+//
+// Besides structural HM unification, this wrapper also accepts
+// constraint-compatible type alias pairs (e.g. AdultAge → Age) at the top
+// level so hint-based type checks can flow stricter-to-wider alias values.
 func (l *Lowerer) unify(a, b IRType, pos Pos, silent bool) bool {
 	if l.infer.unify(a, b) {
+		return true
+	}
+	if l.constraintCompatible(a, b) {
 		return true
 	}
 	if !silent {
@@ -214,6 +227,21 @@ func (l *Lowerer) unify(a, b IRType, pos Pos, silent bool) bool {
 		})
 	}
 	return false
+}
+
+// constraintCompatible reports whether two resolved named types are related
+// by constrained alias widening. Used as a last-ditch success path in unify
+// so `AdultAge → Age` hint checks still pass.
+func (l *Lowerer) constraintCompatible(a, b IRType) bool {
+	an, ok := l.resolveDeep(a).(IRNamedType)
+	if !ok {
+		return false
+	}
+	bn, ok := l.resolveDeep(b).(IRNamedType)
+	if !ok {
+		return false
+	}
+	return l.isConstraintCompatible(an.GoName, bn.GoName)
 }
 
 // withInferScope runs fn with a fresh InferScope, restoring the previous scope after.
@@ -1205,69 +1233,25 @@ func (l *Lowerer) checkTypeHint(result IRExpr, hint IRType, sourceExpr Expr) {
 	l.checkTypeHintPos(result, hint, sourceExpr.exprPos())
 }
 
+// checkTypeHintPos is a thin wrapper routing hint-based type checks through
+// HM unify. When a mismatch occurs, unify emits the diagnostic at pos
+// directly; on success it records any substitutions, which feeds back into
+// further inference. Single source of truth for type compatibility.
 func (l *Lowerer) checkTypeHintPos(result IRExpr, hint IRType, pos Pos) {
 	actualType := result.irType()
 	if actualType == nil {
 		return
 	}
-	// Skip if either type is unknown
+	// Unknown types on either side are intentionally permissive: the
+	// lowerer uses IRInterfaceType as "unresolved" and there are paths
+	// (prelude fn return types, default expressions) that produce it.
 	if _, ok := actualType.(IRInterfaceType); ok {
 		return
 	}
 	if _, ok := hint.(IRInterfaceType); ok {
 		return
 	}
-	if !l.irTypesMatch(actualType, hint) {
-		l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
-			Expected: irTypeDisplayStr(hint),
-			Actual:   irTypeDisplayStr(actualType),
-		})
-	}
-}
-
-// irTypesMatch checks if two IR types are compatible, including constraint compatibility.
-func (l *Lowerer) irTypesMatch(a, b IRType) bool {
-	if a == nil || b == nil {
-		return true
-	}
-	if _, aOk := a.(IRInterfaceType); aOk {
-		return true
-	}
-	if _, bOk := b.(IRInterfaceType); bOk {
-		return true
-	}
-	switch at := a.(type) {
-	case IRTypeVar:
-		return true // type variables match anything
-	case IRNamedType:
-		if _, ok := b.(IRTypeVar); ok {
-			return true
-		}
-		if bt, ok := b.(IRNamedType); ok {
-			if at.GoName == bt.GoName {
-				return true
-			}
-			// Constraint compatibility: stricter alias → wider alias
-			return l.isConstraintCompatible(at.GoName, bt.GoName)
-		}
-	case IRPointerType:
-		if bt, ok := b.(IRPointerType); ok {
-			return l.irTypesMatch(at.Inner, bt.Inner)
-		}
-	case IRResultType:
-		if bt, ok := b.(IRResultType); ok {
-			return l.irTypesMatch(at.Ok, bt.Ok) && l.irTypesMatch(at.Err, bt.Err)
-		}
-	case IROptionType:
-		if bt, ok := b.(IROptionType); ok {
-			return l.irTypesMatch(at.Inner, bt.Inner)
-		}
-	case IRListType:
-		if bt, ok := b.(IRListType); ok {
-			return l.irTypesMatch(at.Elem, bt.Elem)
-		}
-	}
-	return true
+	l.unify(actualType, hint, pos, false)
 }
 
 // isConstraintCompatible checks if source type alias is compatible with target type alias.
@@ -2705,22 +2689,10 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 		for i, cf := range ctorFields {
 			hints[i] = l.lowerTypeWithVars(cf.Type, vars)
 		}
+		// Arg unification happens inside lowerFieldValuesWithHints via
+		// checkTypeHint → unify, so the fresh type vars bind during the
+		// lowerExprHint pass. No explicit post-loop needed.
 		fields := l.lowerFieldValuesWithHints(cc.Fields, hints)
-		// Unify each arg with its hint so the fresh type vars actually bind.
-		// lowerExprHint's checkTypeHint only tests compatibility via
-		// irTypesMatch, which treats type vars as wildcards and never records
-		// the binding. Explicit unify here writes into the substitution so
-		// resolveDeep below can render the concrete typeArgs. Reporting the
-		// failure also catches the case where the same type param appears in
-		// multiple fields with incompatible arg types (e.g. `Pair[A](1, "x")`).
-		if vars != nil {
-			for i, f := range fields {
-				if i >= len(hints) {
-					break
-				}
-				l.unify(f.Value.irType(), hints[i], cc.Fields[i].Value.exprPos(), false)
-			}
-		}
 
 		typeArgs := ""
 		if len(td.Params) > 0 {

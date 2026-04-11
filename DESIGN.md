@@ -85,7 +85,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Lambda inference**: parameter types from Go FFI call context and prelude functions (map/filter/fold infer from list element type). Return type inferred from body.
 - **Match type inference**: all arm body types unified to determine match expression type
 - **Binary expression types**: arithmetic from operands, comparison/logical to bool
-- **Constraint compatibility**: `AdultAge → Age` checked in `irTypesMatch`
+- **Constraint compatibility**: `AdultAge → Age` checked as a last-ditch success path inside `Lowerer.unify` (after HM structural unification)
 - **Validate**: existence checks (types, fields), count checks (args, fields), exhaustiveness. Type matching moved to lower.
 
 ## Go FFI
