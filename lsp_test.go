@@ -197,6 +197,36 @@ fun main() {
 	}
 }
 
+// Test that explicit type args flow through HM inference
+func TestExplicitTypeArgsHMFlow(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+import stdlib
+
+type User {
+    User(name: String)
+}
+
+fun process(r: Result[User, error]) -> String {
+    match r {
+        Ok(u) => u.name
+        Error(_) => "error"
+    }
+}
+
+fun main() {
+    let r = stdlib.Decode[User](toBytes("{}"))
+    fmt.Println(process(r))
+}
+`
+	// Hover on r — should be Result[User, error]
+	got := getHoverInfo(source, "/tmp/hm_flow_test.arca", 16, 9)
+	t.Logf("hover on r: %q", got)
+	if !strings.Contains(got, "User") {
+		t.Errorf("expected r to be Result[User, error], got %q", got)
+	}
+}
+
 // Test chained completion with Go FFI (similar to todo example)
 func TestCompletionChainedFFI(t *testing.T) {
 	t.Parallel()
