@@ -29,6 +29,11 @@ type IRListType struct {
 	Elem IRType
 }
 
+type IRMapType struct {
+	Key   IRType
+	Value IRType
+}
+
 type IRResultType struct {
 	Ok  IRType
 	Err IRType
@@ -48,6 +53,7 @@ func (IRNamedType) irTypeNode()     {}
 func (IRPointerType) irTypeNode()   {}
 func (IRTupleType) irTypeNode()     {}
 func (IRListType) irTypeNode()      {}
+func (IRMapType) irTypeNode()       {}
 func (IRResultType) irTypeNode()    {}
 func (IROptionType) irTypeNode()    {}
 func (IRInterfaceType) irTypeNode() {}
@@ -323,6 +329,18 @@ type IRListLit struct {
 	Type     IRType
 }
 
+type IRMapLit struct {
+	KeyType   string
+	ValueType string
+	Entries   []IRMapEntry
+	Type      IRType
+}
+
+type IRMapEntry struct {
+	Key   IRExpr
+	Value IRExpr
+}
+
 // Tuple literal
 type IRTupleLit struct {
 	Elements []IRExpr
@@ -525,6 +543,8 @@ func (e IRBinaryExpr) irExprNode()      {}
 func (e IRBinaryExpr) irType() IRType   { return e.Type }
 func (e IRListLit) irExprNode()         {}
 func (e IRListLit) irType() IRType      { return e.Type }
+func (e IRMapLit) irExprNode()          {}
+func (e IRMapLit) irType() IRType       { return e.Type }
 func (e IRTupleLit) irExprNode()        {}
 func (e IRTupleLit) irType() IRType     { return e.Type }
 func (e IRRefExpr) irExprNode()         {}

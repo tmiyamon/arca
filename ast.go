@@ -171,6 +171,16 @@ type ListLit struct {
 	Spread   Expr // non-nil if [a, b, ..existing]
 }
 
+type MapLit struct {
+	NodePos
+	Entries []MapEntry
+}
+
+type MapEntry struct {
+	Key   Expr
+	Value Expr
+}
+
 type RangeExpr struct {
 	NodePos
 	Start Expr
@@ -201,6 +211,7 @@ func (Lambda) exprNode()          {}
 func (TupleExpr) exprNode()       {}
 func (ForExpr) exprNode()         {}
 func (ListLit) exprNode()          {}
+func (MapLit) exprNode()           {}
 type RefExpr struct {
 	NodePos
 	Expr Expr

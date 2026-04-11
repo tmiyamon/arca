@@ -1223,6 +1223,8 @@ func irTypeEmitStr(t IRType) string {
 		return "Option_[" + irTypeEmitStr(tt.Inner) + "]"
 	case IRListType:
 		return "[]" + irTypeEmitStr(tt.Elem)
+	case IRMapType:
+		return "map[" + irTypeEmitStr(tt.Key) + "]" + irTypeEmitStr(tt.Value)
 	case IRTupleType:
 		if len(tt.Elements) == 2 {
 			return fmt.Sprintf("struct{ First %s; Second %s }", irTypeEmitStr(tt.Elements[0]), irTypeEmitStr(tt.Elements[1]))
@@ -1312,6 +1314,14 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 			return IRListType{Elem: l.lowerType(nt.Params[0])}
 		}
 		return IRListType{Elem: IRInterfaceType{}}
+	case "Map":
+		if len(nt.Params) >= 2 {
+			return IRMapType{
+				Key:   l.lowerType(nt.Params[0]),
+				Value: l.lowerType(nt.Params[1]),
+			}
+		}
+		return IRMapType{Key: IRInterfaceType{}, Value: IRInterfaceType{}}
 	case "Option":
 		l.builtins["option"] = true
 		if len(nt.Params) > 0 {
@@ -1410,6 +1420,8 @@ func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 		return l.lowerForExpr(e)
 	case ListLit:
 		return l.lowerListLit(e)
+	case MapLit:
+		return l.lowerMapLitHint(e, hint)
 	case BinaryExpr:
 		return l.lowerBinaryExpr(e)
 	case RefExpr:
@@ -2509,6 +2521,12 @@ func (l *Lowerer) lowerBlock(b Block) IRExpr {
 }
 
 func (l *Lowerer) lowerBlockHint(b Block, hint IRType) IRExpr {
+	// Empty block {} with a Map hint → empty map literal
+	if len(b.Stmts) == 0 && b.Expr == nil {
+		if _, ok := hint.(IRMapType); ok {
+			return l.lowerMapLitHint(MapLit{NodePos: b.NodePos}, hint)
+		}
+	}
 	stmts := make([]IRStmt, 0, len(b.Stmts))
 	for _, s := range b.Stmts {
 		stmts = append(stmts, l.lowerStmt(s)...)
@@ -2633,6 +2651,53 @@ func (l *Lowerer) lowerListLit(ll ListLit) IRExpr {
 		Elements: elems,
 		Spread:   spread,
 		Type:     IRListType{Elem: IRNamedType{GoName: elemType}},
+	}
+}
+
+func (l *Lowerer) lowerMapLit(ml MapLit) IRExpr {
+	return l.lowerMapLitHint(ml, nil)
+}
+
+func (l *Lowerer) lowerMapLitHint(ml MapLit, hint IRType) IRExpr {
+	// If hint is a Map type, use its key/value as the expected types
+	var hintKey, hintValue IRType
+	if mt, ok := hint.(IRMapType); ok {
+		hintKey = mt.Key
+		hintValue = mt.Value
+	}
+
+	entries := make([]IRMapEntry, len(ml.Entries))
+	var keyType, valueType IRType
+	for i, e := range ml.Entries {
+		k := l.lowerExprHint(e.Key, hintKey)
+		v := l.lowerExprHint(e.Value, hintValue)
+		entries[i] = IRMapEntry{Key: k, Value: v}
+		if keyType == nil {
+			keyType = k.irType()
+		}
+		if valueType == nil {
+			valueType = v.irType()
+		}
+	}
+	if keyType == nil {
+		if hintKey != nil {
+			keyType = hintKey
+		} else {
+			keyType = l.freshTypeVar()
+		}
+	}
+	if valueType == nil {
+		if hintValue != nil {
+			valueType = hintValue
+		} else {
+			valueType = l.freshTypeVar()
+		}
+	}
+	return IRMapLit{
+		KeyType:   irTypeEmitStr(keyType),
+		ValueType: irTypeEmitStr(valueType),
+		Entries:   entries,
+		Type:      IRMapType{Key: keyType, Value: valueType},
 	}
 }
 

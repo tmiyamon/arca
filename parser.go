@@ -1048,11 +1048,61 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		return expr, nil
 
 	case TkLBrace:
+		// Disambiguate block expression from map literal.
+		// Map literal: `{ STRING_LIT : ... }` or `{ IDENT : ... }` with `:` following.
+		// Empty block `{}` and empty map `{:}` are distinguished by `:` after `{`.
+		if p.isMapLiteralStart() {
+			return p.parseMapLit()
+		}
 		return p.parseBlockExpr()
 
 	default:
 		return nil, fmt.Errorf("%d:%d: expected expression, got %s", tok.Line, tok.Col, tok)
 	}
+}
+
+// isMapLiteralStart peeks past the '{' to check if we're at a map literal.
+// Pattern: { STRING : ... } or { IDENT : ... }
+// Empty map `{}` is parsed as an empty block and resolved at lower time
+// based on the type hint.
+func (p *Parser) isMapLiteralStart() bool {
+	if p.pos+1 >= len(p.tokens) {
+		return false
+	}
+	next := p.tokens[p.pos+1]
+	// Key: string literal or identifier, followed by ':'
+	if next.Kind == TkString || next.Kind == TkIdent || next.Kind == TkUpperIdent {
+		if p.pos+2 < len(p.tokens) && p.tokens[p.pos+2].Kind == TkColon {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Parser) parseMapLit() (Expr, error) {
+	openTok := p.advance() // skip '{'
+	startPos := Pos{openTok.Line, openTok.Col}
+	var entries []MapEntry
+
+	for p.peek().Kind != TkRBrace {
+		key, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(TkColon); err != nil {
+			return nil, err
+		}
+		value, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, MapEntry{Key: key, Value: value})
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip '}'
+	return MapLit{NodePos: AtPos(startPos), Entries: entries}, nil
 }
 
 func (p *Parser) parseListLit() (Expr, error) {

@@ -379,6 +379,8 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		return fmt.Sprintf("%s %s %s", em.emitExpr(expr.Left), expr.Op, em.emitExpr(expr.Right))
 	case IRListLit:
 		return em.emitListLit(expr)
+	case IRMapLit:
+		return em.emitMapLit(expr)
 	case IRTupleLit:
 		return em.emitTupleLit(expr)
 	case IRRefExpr:
@@ -442,6 +444,17 @@ func (em *Emitter) emitListLit(l IRListLit) string {
 		return fmt.Sprintf("append([]%s{%s}, %s...)", l.ElemType, elems, em.emitExpr(l.Spread))
 	}
 	return fmt.Sprintf("[]%s{%s}", l.ElemType, elems)
+}
+
+func (em *Emitter) emitMapLit(m IRMapLit) string {
+	if len(m.Entries) == 0 {
+		return fmt.Sprintf("map[%s]%s{}", m.KeyType, m.ValueType)
+	}
+	parts := make([]string, len(m.Entries))
+	for i, e := range m.Entries {
+		parts[i] = em.emitExpr(e.Key) + ": " + em.emitExpr(e.Value)
+	}
+	return fmt.Sprintf("map[%s]%s{%s}", m.KeyType, m.ValueType, strings.Join(parts, ", "))
 }
 
 func (em *Emitter) emitTupleLit(t IRTupleLit) string {
@@ -1128,6 +1141,8 @@ func (em *Emitter) irTypeStr(t IRType) string {
 		return "interface{}"
 	case IRListType:
 		return "[]" + em.irTypeStr(tt.Elem)
+	case IRMapType:
+		return "map[" + em.irTypeStr(tt.Key) + "]" + em.irTypeStr(tt.Value)
 	case IRResultType:
 		return fmt.Sprintf("Result_[%s, %s]", em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err))
 	case IROptionType:
