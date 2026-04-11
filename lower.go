@@ -195,8 +195,26 @@ func (s *InferScope) typeParamVar(name string) IRTypeVar {
 func (l *Lowerer) freshTypeVar() IRTypeVar   { return l.infer.freshTypeVar() }
 func (l *Lowerer) resolve(t IRType) IRType    { return l.infer.resolve(t) }
 func (l *Lowerer) resolveDeep(t IRType) IRType { return l.infer.resolveDeep(t) }
-func (l *Lowerer) unify(a, b IRType) bool     { return l.infer.unify(a, b) }
 func (l *Lowerer) typeParamVar(name string) IRTypeVar { return l.infer.typeParamVar(name) }
+
+// unify unifies two IR types via HM. When silent is false, emits
+// ErrTypeMismatch at pos on failure; callers must pick between reporting and
+// silent explicitly at every site so the decision is visible in the call
+// itself. Use silent=true only for intermediate HM steps whose failure is
+// recoverable or will be reported elsewhere (hint propagation, fresh-var
+// unification). `rg 'unify\(.*, true\)'` lists every non-reporting site.
+func (l *Lowerer) unify(a, b IRType, pos Pos, silent bool) bool {
+	if l.infer.unify(a, b) {
+		return true
+	}
+	if !silent {
+		l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
+			Expected: irTypeEmitStr(l.resolveDeep(b)),
+			Actual:   irTypeEmitStr(l.resolveDeep(a)),
+		})
+	}
+	return false
+}
 
 // withInferScope runs fn with a fresh InferScope, restoring the previous scope after.
 func (l *Lowerer) withInferScope(fn func()) {
@@ -1824,7 +1842,7 @@ func (l *Lowerer) unifyExplicitTypeArgs(vars map[string]IRType, typeArgs []Type)
 		if i >= len(typeArgs) {
 			break
 		}
-		l.unify(vars[name], l.lowerType(typeArgs[i]))
+		l.unify(vars[name], l.lowerType(typeArgs[i]), Pos{}, true)
 	}
 }
 
@@ -1877,7 +1895,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 				l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
 				// Unify hint with return type (propagates to type vars for hint-based inference)
 				if hint != nil {
-					l.unify(ret.Type, hint)
+					l.unify(ret.Type, hint, Pos{}, true)
 				}
 				typeArgsStr := l.buildGoTypeArgsStr(ret.TypeVars, e.TypeArgs)
 				return IRFnCall{Func: goCallName, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: typeArgsStr, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
@@ -1932,7 +1950,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 				for i, arg := range args {
 					if i < len(fn.Params) {
 						paramType := l.lowerType(fn.Params[i].Type)
-						l.unify(arg.irType(), paramType)
+						l.unify(arg.irType(), paramType, Pos{}, true)
 					}
 				}
 				if fn.ReturnType != nil {
@@ -1949,7 +1967,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 			goTypeVars = ret.TypeVars
 			l.unifyExplicitTypeArgs(goTypeVars, e.TypeArgs)
 			if hint != nil {
-				l.unify(fnType, hint)
+				l.unify(fnType, hint, Pos{}, true)
 			}
 		}
 		typeArgsStr := l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
@@ -1998,12 +2016,7 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 			if i >= len(paramTypes) {
 				break
 			}
-			if !l.unify(arg.irType(), paramTypes[i]) {
-				l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
-					Expected: irTypeEmitStr(l.resolveDeep(paramTypes[i])),
-					Actual:   irTypeEmitStr(l.resolveDeep(arg.irType())),
-				})
-			}
+			l.unify(arg.irType(), paramTypes[i], pos, false)
 		}
 		ret.TypeVars = vars
 		return ret
@@ -2510,7 +2523,7 @@ func (l *Lowerer) lowerIfExpr(e IfExpr) IRExpr {
 	// Unify then/else types
 	var typ IRType = then.irType()
 	if elseBody != nil {
-		l.unify(typ, elseBody.irType())
+		l.unify(typ, elseBody.irType(), Pos{}, true)
 		typ = l.resolveDeep(typ)
 	}
 	return IRIfExpr{Cond: cond, Then: then, Else: elseBody, Type: typ}
@@ -2579,7 +2592,7 @@ func (l *Lowerer) lowerOkCall(valExpr Expr, hint IRType) IRExpr {
 	if _, isIface := okType.(IRInterfaceType); isIface {
 		okType = l.freshTypeVar()
 	}
-	l.unify(okType, val.irType())
+	l.unify(okType, val.irType(), Pos{}, true)
 	rt := IRResultType{Ok: okType, Err: errType}
 	return IROkCall{Value: val, TypeArgs: l.resolveResultTypeArgs(rt), Type: rt}
 }
@@ -2606,7 +2619,7 @@ func (l *Lowerer) lowerNoneCall(hint IRType) IRExpr {
 	l.builtins["option"] = true
 	innerType := IRType(l.freshTypeVar())
 	if ot, ok := hint.(IROptionType); ok {
-		l.unify(innerType, ot.Inner)
+		l.unify(innerType, ot.Inner, Pos{}, true)
 		innerType = ot.Inner
 	}
 	resolved := l.resolveDeep(innerType)
@@ -2701,12 +2714,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 				if i >= len(hints) {
 					break
 				}
-				if !l.unify(f.Value.irType(), hints[i]) {
-					l.addCompileError(ErrTypeMismatch, cc.Fields[i].Value.exprPos(), TypeMismatchData{
-						Expected: irTypeEmitStr(l.resolveDeep(hints[i])),
-						Actual:   irTypeEmitStr(l.resolveDeep(f.Value.irType())),
-					})
-				}
+				l.unify(f.Value.irType(), hints[i], cc.Fields[i].Value.exprPos(), false)
 			}
 		}
 
@@ -3642,7 +3650,7 @@ func (l *Lowerer) inferMatchType(arms []IRMatchArm) IRType {
 		if result == nil {
 			result = t
 		} else {
-			l.unify(result, t)
+			l.unify(result, t, Pos{}, true)
 		}
 	}
 	if result == nil {

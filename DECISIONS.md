@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-12
 
+- [unify takes an explicit silent flag](decisions/transpiler.md#2026-04-12-unify-takes-an-explicit-silent-flag) — `Lowerer.unify(a, b, pos, silent)` forces callers to pick reporting vs silent at every site; forgetting becomes impossible.
 - [Arca generic constructors use HM](decisions/transpiler.md#2026-04-12-unify-arca-generic-constructors-with-go-ffi-hm) — per-call fresh type vars via `instantiateGenericType`, same shape as Go FFI. Removes `inferGoType` and the `isTypeParam` fallback.
 
 ## 2026-04-11

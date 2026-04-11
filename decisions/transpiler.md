@@ -4,6 +4,23 @@ IR pipeline, lowering, validation, codegen. Newest first.
 
 ---
 
+## 2026-04-12: unify takes an explicit silent flag
+
+**Context:** `Lowerer.unify(a, b) bool` was silent by default — callers had to remember to check the return value and emit `ErrTypeMismatch` themselves. Out of 11 existing call sites only 2 did, and I forgot to do so myself when adding the Arca generic constructor path (caught by the user). The pattern is a foot-gun: the right thing costs four extra lines at every call site, so it gets skipped.
+
+**Decision:** Make the choice part of the signature. `Lowerer.unify(a, b IRType, pos Pos, silent bool) bool` — the caller must pick reporting (`false`) or silent (`true`) explicitly at every site. Forgetting is impossible because you can't call the function without naming the mode.
+
+**Implementation:**
+- `unify` now takes `pos Pos` and `silent bool`; when `silent == false`, auto-emits `ErrTypeMismatch` with `resolveDeep`-rendered expected/actual strings on failure. `pos` is ignored when silent.
+- The 8 pre-existing non-reporting sites pass `Pos{}, true` (explicit type args, Go FFI hint propagation, Arca fn call args, if/else branch unification, Ok/None hint unification, match arm result unification). These may be promoted to reporting case-by-case once each gets a position source.
+- Two reporting sites (`resolveGoCall` generic args, `lowerUserConstructorCall` generic fields) pass `pos, false` and drop their manual `addCompileError`.
+
+**Grep contract:** `rg 'unify\(.*, true\)'` locates every non-reporting unification site for future audits.
+
+**Status:** Done
+
+---
+
 ## 2026-04-12: Unify Arca generic constructors with Go FFI HM
 
 **Context:** Arca generic types (`type Pair[A, B]`) and Go FFI generics resolved type parameters by different mechanisms despite both going through the same InferScope. Go FFI used `instantiateGeneric` to allocate fresh `IRTypeVar` per call site. Arca constructors reused `typeParamVar` which caches by name in the InferScope, so `Pair(1, "a")` and `Pair(2.5, 42)` in the same function shared the same `A` type var. Actual `typeArgs` strings were built by a separate `inferGoType` walk over the AST argument literals, so call-site substitution conflicts went unnoticed — HM was effectively check-only for this path.
