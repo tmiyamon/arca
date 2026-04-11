@@ -66,6 +66,21 @@ type TypeResolver interface {
 	// MethodPos returns the source file and position where a method on a type
 	// is defined. For go-to-definition on Go FFI method calls.
 	MethodPos(pkg, typeName, method string) (string, Pos)
+
+	// PackageMembers lists all exported package-level members (functions,
+	// types, vars, consts) of a package. For LSP completion.
+	PackageMembers(pkg string) []MemberInfo
+
+	// TypeMembers lists all exported methods (and fields for structs) of a
+	// named type in a package. For LSP completion.
+	TypeMembers(pkg, typeName string) []MemberInfo
+}
+
+// MemberInfo describes an exported package-level or type member for completion.
+type MemberInfo struct {
+	Name   string
+	Kind   string // "func", "type", "var", "const", "field", "method"
+	Detail string // signature or type for display
 }
 
 // NullTypeResolver returns nil for all queries — preserves current behavior
@@ -79,3 +94,5 @@ func (NullTypeResolver) CanLoadPackage(pkg string) bool                  { retur
 func (NullTypeResolver) ResolveUnderlying(goType string) string          { return "" }
 func (NullTypeResolver) MemberPos(pkg, name string) (string, Pos)        { return "", Pos{} }
 func (NullTypeResolver) MethodPos(pkg, typ, method string) (string, Pos) { return "", Pos{} }
+func (NullTypeResolver) PackageMembers(pkg string) []MemberInfo          { return nil }
+func (NullTypeResolver) TypeMembers(pkg, typ string) []MemberInfo        { return nil }

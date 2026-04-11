@@ -91,6 +91,85 @@ func (r *GoTypeResolver) MemberPos(pkg, name string) (string, Pos) {
 	return position.Filename, Pos{Line: position.Line, Col: position.Column}
 }
 
+// PackageMembers lists exported package-level members of a package.
+func (r *GoTypeResolver) PackageMembers(pkg string) []MemberInfo {
+	goPkg := r.loadPackage(pkg)
+	if goPkg == nil {
+		return nil
+	}
+	var members []MemberInfo
+	scope := goPkg.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if !obj.Exported() {
+			continue
+		}
+		var kind, detail string
+		switch o := obj.(type) {
+		case *types.Func:
+			kind = "func"
+			detail = o.Type().String()
+		case *types.TypeName:
+			kind = "type"
+			detail = obj.Type().String()
+		case *types.Var:
+			kind = "var"
+			detail = o.Type().String()
+		case *types.Const:
+			kind = "const"
+			detail = o.Type().String()
+		default:
+			continue
+		}
+		members = append(members, MemberInfo{Name: name, Kind: kind, Detail: detail})
+	}
+	return members
+}
+
+// TypeMembers lists exported methods and fields of a named type in a package.
+func (r *GoTypeResolver) TypeMembers(pkg, typeName string) []MemberInfo {
+	goPkg := r.loadPackage(pkg)
+	if goPkg == nil {
+		return nil
+	}
+	obj := goPkg.Scope().Lookup(typeName)
+	if obj == nil {
+		return nil
+	}
+	named, ok := obj.Type().(*types.Named)
+	if !ok {
+		return nil
+	}
+	var members []MemberInfo
+	// Methods
+	for i := 0; i < named.NumMethods(); i++ {
+		m := named.Method(i)
+		if !m.Exported() {
+			continue
+		}
+		members = append(members, MemberInfo{
+			Name:   m.Name(),
+			Kind:   "method",
+			Detail: m.Type().String(),
+		})
+	}
+	// Fields (for struct types)
+	if st, ok := named.Underlying().(*types.Struct); ok {
+		for i := 0; i < st.NumFields(); i++ {
+			f := st.Field(i)
+			if !f.Exported() {
+				continue
+			}
+			members = append(members, MemberInfo{
+				Name:   f.Name(),
+				Kind:   "field",
+				Detail: f.Type().String(),
+			})
+		}
+	}
+	return members
+}
+
 // MethodPos returns the file and position of a method on a type in a package.
 func (r *GoTypeResolver) MethodPos(pkg, typeName, method string) (string, Pos) {
 	lp := r.loadPackageFull(pkg)

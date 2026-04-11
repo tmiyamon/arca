@@ -35,6 +35,7 @@ func lspCmd() int {
 		TextDocumentDidSave:    lspDidSave,
 		TextDocumentHover:      lspHover,
 		TextDocumentDefinition: lspDefinition,
+		TextDocumentCompletion: lspCompletion,
 	}
 
 	srv := server.NewServer(&lspHandler, lspName, false)
@@ -56,6 +57,9 @@ func lspInitialize(ctx *glsp.Context, params *protocol.InitializeParams) (any, e
 			},
 			HoverProvider:      &protocol.HoverOptions{},
 			DefinitionProvider: &protocol.DefinitionOptions{},
+			CompletionProvider: &protocol.CompletionOptions{
+				TriggerCharacters: []string{"."},
+			},
 		},
 		ServerInfo: &protocol.InitializeResultServerInfo{
 			Name:    lspName,
@@ -298,6 +302,188 @@ func extractPackageAndType(t IRType) (string, string) {
 	// This is a best-effort: short-name lookup via resolver isn't straightforward here.
 	// Just return as "shortName", "TypeName" and let caller figure out path.
 	return parts[0], parts[1]
+}
+
+func lspCompletion(ctx *glsp.Context, params *protocol.CompletionParams) (any, error) {
+	uri := params.TextDocument.URI
+	source, ok := fileStore[uri]
+	if !ok {
+		return nil, nil
+	}
+
+	line := int(params.Position.Line) + 1
+	col := int(params.Position.Character) + 1
+
+	filePath := strings.TrimPrefix(string(uri), "file://")
+	items := getCompletionItems(source, filePath, line, col)
+	if items == nil {
+		return nil, nil
+	}
+	return items, nil
+}
+
+// getCompletionItems returns completion items at the given position.
+// Currently only supports `.` completion after a receiver identifier.
+func getCompletionItems(source string, filePath string, line, col int) []protocol.CompletionItem {
+	// Find the receiver just before the cursor (must be immediately after a dot)
+	receiver := getReceiverBeforeDot(source, line, col)
+	if receiver == "" {
+		return nil
+	}
+
+	// Insert a placeholder identifier after the dot so the source parses.
+	patched := insertCompletionPlaceholder(source, line, col)
+
+	// Parse and lower the patched source
+	lexer := NewLexer(patched)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		return nil
+	}
+	parser := NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		return nil
+	}
+	goModDir := findGoModDir(filepath.Dir(filePath))
+	resolver := NewGoTypeResolver(goModDir)
+	lowerer := NewLowerer(prog, "", resolver)
+	lowerer.Lower(prog, "main", false)
+
+	sym := lowerer.FindSymbolAt(receiver, Pos{line, col})
+	if sym == nil {
+		return nil
+	}
+
+	var items []protocol.CompletionItem
+
+	// Package members
+	if sym.Kind == SymPackage {
+		if pkg, ok := lowerer.GoPackages()[sym.Name]; ok {
+			for _, m := range resolver.PackageMembers(pkg.FullPath) {
+				items = append(items, memberToCompletion(m))
+			}
+		}
+		return items
+	}
+
+	// Arca type fields
+	if sym.Type != nil {
+		if nt, ok := sym.Type.(NamedType); ok {
+			if td, ok := lowerer.Types()[nt.Name]; ok && len(td.Constructors) > 0 {
+				for _, f := range td.Constructors[0].Fields {
+					items = append(items, protocol.CompletionItem{
+						Label:  f.Name,
+						Kind:   completionKindPtr(protocol.CompletionItemKindField),
+						Detail: strPtr(typeName(f.Type)),
+					})
+				}
+			}
+		}
+	}
+
+	// Go FFI type methods/fields
+	if sym.IRType != nil {
+		if shortPkg, typeName := extractPackageAndType(sym.IRType); shortPkg != "" {
+			if pkg, ok := lowerer.GoPackages()[shortPkg]; ok {
+				for _, m := range resolver.TypeMembers(pkg.FullPath, typeName) {
+					items = append(items, memberToCompletion(m))
+				}
+			}
+		}
+	}
+
+	return items
+}
+
+func memberToCompletion(m MemberInfo) protocol.CompletionItem {
+	var kind protocol.CompletionItemKind
+	switch m.Kind {
+	case "func":
+		kind = protocol.CompletionItemKindFunction
+	case "method":
+		kind = protocol.CompletionItemKindMethod
+	case "field":
+		kind = protocol.CompletionItemKindField
+	case "type":
+		kind = protocol.CompletionItemKindClass
+	case "var":
+		kind = protocol.CompletionItemKindVariable
+	case "const":
+		kind = protocol.CompletionItemKindConstant
+	default:
+		kind = protocol.CompletionItemKindText
+	}
+	return protocol.CompletionItem{
+		Label:  m.Name,
+		Kind:   &kind,
+		Detail: strPtr(m.Detail),
+	}
+}
+
+func completionKindPtr(k protocol.CompletionItemKind) *protocol.CompletionItemKind {
+	return &k
+}
+
+// insertCompletionPlaceholder inserts dummy identifiers after any dangling
+// dots in the source so incomplete expressions like `u.` or `fmt.` parse.
+// This handles the case where the user is actively typing in one place
+// while another line already has a trailing dot.
+func insertCompletionPlaceholder(source string, line, col int) string {
+	const placeholder = "_arca_completion_placeholder_"
+	lines := strings.Split(source, "\n")
+	for i, lineText := range lines {
+		// Find trailing dots followed only by whitespace to end-of-line
+		trimmed := strings.TrimRight(lineText, " \t")
+		if strings.HasSuffix(trimmed, ".") {
+			// Check that the char before the dot is an identifier
+			if len(trimmed) >= 2 && isIdentChar(trimmed[len(trimmed)-2]) {
+				lines[i] = trimmed + placeholder + lineText[len(trimmed):]
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// getReceiverBeforeDot returns the identifier immediately before a '.' at the cursor.
+// Returns "" if the character before cursor is not part of a receiver.name pattern.
+func getReceiverBeforeDot(source string, line, col int) string {
+	lines := strings.Split(source, "\n")
+	if line < 1 || line > len(lines) {
+		return ""
+	}
+	lineText := lines[line-1]
+	// Cursor position is 1-based; we want the char index where the dot is (or just before)
+	// Scan back from col-1 to find a '.' and then the identifier before it
+	pos := col - 1
+	if pos > len(lineText) {
+		pos = len(lineText)
+	}
+	// Find the nearest '.' at or before cursor
+	dotIdx := -1
+	for i := pos - 1; i >= 0; i-- {
+		c := lineText[i]
+		if c == '.' {
+			dotIdx = i
+			break
+		}
+		if !isIdentChar(c) {
+			return ""
+		}
+	}
+	if dotIdx < 0 {
+		return ""
+	}
+	// Now find the identifier ending at dotIdx-1
+	end := dotIdx
+	start := end
+	for start > 0 && isIdentChar(lineText[start-1]) {
+		start--
+	}
+	if start == end {
+		return ""
+	}
+	return lineText[start:end]
 }
 
 func lspHover(ctx *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {

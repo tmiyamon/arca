@@ -75,6 +75,67 @@ fun main() {
 	}
 }
 
+// Test completion
+func TestCompletion(t *testing.T) {
+	t.Parallel()
+	source := `import go "fmt"
+
+type User {
+    User(name: String, age: Int)
+}
+
+fun main() {
+    let u = User(name: "Alice", age: 30)
+    u.
+    fmt.
+}
+`
+	// Test Arca type field completion at u.
+	items := getCompletionItems(source, "/tmp/comp_test.arca", 9, 7)
+	if len(items) == 0 {
+		t.Errorf("expected completion items for u., got none")
+	}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+	}
+	t.Logf("u. completions: %v", names)
+	hasName := false
+	hasAge := false
+	for _, n := range names {
+		if n == "Name" || n == "name" {
+			hasName = true
+		}
+		if n == "Age" || n == "age" {
+			hasAge = true
+		}
+	}
+	if !hasName || !hasAge {
+		t.Errorf("expected name and age fields, got %v", names)
+	}
+
+	// Test Go package completion at fmt.
+	items2 := getCompletionItems(source, "/tmp/comp_test.arca", 10, 9)
+	if len(items2) == 0 {
+		t.Errorf("expected completion items for fmt., got none")
+	}
+	var names2 []string
+	for _, item := range items2 {
+		names2 = append(names2, item.Label)
+	}
+	t.Logf("fmt. completions (first 5): %v", names2[:min(5, len(names2))])
+	hasPrintln := false
+	for _, n := range names2 {
+		if n == "Println" {
+			hasPrintln = true
+			break
+		}
+	}
+	if !hasPrintln {
+		t.Errorf("expected Println in fmt completions, got %d items", len(names2))
+	}
+}
+
 // Debug: print scope tree
 func TestScopeTreeDebug(t *testing.T) {
 	source := `import go "fmt"
