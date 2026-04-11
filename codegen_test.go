@@ -258,4 +258,46 @@ fun main() {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("wrong_arg_type_generic", func(t *testing.T) {
+		t.Parallel()
+		// Generic Go FFI call path: HM unify must still report mismatches
+		// when a concrete (non-type-param) parameter receives the wrong type.
+		// stdlib.QueryAs has signature (db *sql.DB, query string, args ...any).
+		// Passing a string as the first arg must trip the *sql.DB vs string check.
+		_, err := transpileSource(`
+import stdlib
+
+fun main() {
+  let _ = stdlib.QueryAs("not a db", "query")
+}
+`)
+		if err == nil {
+			t.Fatal("expected error for wrong arg type in generic call")
+		}
+		if !strings.Contains(err.Error(), "type mismatch: expected *sql.DB, got string") {
+			t.Errorf("unexpected error: %s", err)
+		}
+	})
+
+	t.Run("wrong_arg_type_generic_type_param", func(t *testing.T) {
+		t.Parallel()
+		// Once a type parameter is bound by an earlier argument, later
+		// arguments of the same type parameter must match. slices.Equal
+		// has signature (s1, s2 S) with S ~[]E — passing []int then
+		// []string unifies S=[]int first, then fails on the second arg.
+		_, err := transpileSource(`
+import go "slices"
+
+fun main() {
+  let _ = slices.Equal([1, 2], ["a", "b"])
+}
+`)
+		if err == nil {
+			t.Fatal("expected error for mismatched type parameter binding")
+		}
+		if !strings.Contains(err.Error(), "type mismatch") {
+			t.Errorf("unexpected error: %s", err)
+		}
+	})
 }

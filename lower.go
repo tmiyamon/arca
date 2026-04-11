@@ -1797,8 +1797,14 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 	if len(info.TypeParams) > 0 {
 		vars, paramTypes, ret := l.instantiateGeneric(info)
 		for i, arg := range args {
-			if i < len(paramTypes) {
-				l.unify(arg.irType(), paramTypes[i])
+			if i >= len(paramTypes) {
+				break
+			}
+			if !l.unify(arg.irType(), paramTypes[i]) {
+				l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
+					Expected: irTypeEmitStr(l.resolveDeep(paramTypes[i])),
+					Actual:   irTypeEmitStr(l.resolveDeep(arg.irType())),
+				})
 			}
 		}
 		ret.TypeVars = vars
