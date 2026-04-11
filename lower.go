@@ -1210,46 +1210,6 @@ func (l *Lowerer) isTypeParam(name string) bool {
 	return false
 }
 
-// deriveTypeArgs derives Go generic type arguments from hint and actual return type.
-// e.g., return type Result[T, error] + hint Result[User, error] → "[User]"
-func (l *Lowerer) deriveTypeArgs(returnType, hint IRType) string {
-	// Result[T, error] + hint Result[User, error] → T = User
-	if rt, ok := returnType.(IRResultType); ok {
-		if ht, ok := hint.(IRResultType); ok {
-			okStr := irTypeEmitStr(ht.Ok)
-			if okStr != "" && okStr != irTypeEmitStr(rt.Ok) {
-				return "[" + okStr + "]"
-			}
-		}
-		// hint is the Ok type directly (e.g., let user: User = f()?)
-		if _, isResult := hint.(IRResultType); !isResult {
-			hintStr := irTypeEmitStr(hint)
-			if hintStr != "" && hintStr != "interface{}" {
-				return "[" + hintStr + "]"
-			}
-		}
-	}
-	// List[T] + hint List[User] → T = User
-	if _, ok := returnType.(IRListType); ok {
-		if ht, ok := hint.(IRListType); ok {
-			elemStr := irTypeEmitStr(ht.Elem)
-			if elemStr != "" {
-				return "[" + elemStr + "]"
-			}
-		}
-	}
-	// Option[T] + hint Option[User] → T = User
-	if _, ok := returnType.(IROptionType); ok {
-		if ht, ok := hint.(IROptionType); ok {
-			innerStr := irTypeEmitStr(ht.Inner)
-			if innerStr != "" {
-				return "[" + innerStr + "]"
-			}
-		}
-	}
-	return ""
-}
-
 // irTypeEmitStr returns a Go type string for an IRType (used for type args).
 func irTypeEmitStr(t IRType) string {
 	switch tt := t.(type) {
@@ -1561,19 +1521,7 @@ func (l *Lowerer) lowerStringInterp(si StringInterp) IRExpr {
 }
 
 func (l *Lowerer) lowerFnCallHint(e FnCall, hint IRType) IRExpr {
-	result := l.lowerFnCall(e)
-	// If hint is available and result is IRFnCall without TypeArgs, derive from hint
-	if hint != nil {
-		if fc, ok := result.(IRFnCall); ok && fc.TypeArgs == "" && fc.GoMultiReturn {
-			if typeArgs := l.deriveTypeArgs(fc.Type, hint); typeArgs != "" {
-				fc.TypeArgs = typeArgs
-				// Update the return type to match hint (replaces Go type params with concrete types)
-				fc.Type = hint
-				return fc
-			}
-		}
-	}
-	return result
+	return l.lowerFnCallWithHint(e, hint)
 }
 
 // explicitTypeArgsStr renders explicit type arguments as a Go type args string.
@@ -1585,6 +1533,29 @@ func (l *Lowerer) explicitTypeArgsStr(typeArgs []Type) string {
 	parts := make([]string, len(typeArgs))
 	for i, ta := range typeArgs {
 		parts[i] = irTypeEmitStr(l.lowerType(ta))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// buildGoTypeArgsStr builds the Go generic type args string "[T1, T2, ...]"
+// from a generic call's type vars map (after unification). Explicit type args
+// take precedence if provided.
+func (l *Lowerer) buildGoTypeArgsStr(vars map[string]IRType, explicit []Type) string {
+	if len(explicit) > 0 {
+		return l.explicitTypeArgsStr(explicit)
+	}
+	if len(vars) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, name := range names {
+		resolved := l.resolveDeep(vars[name])
+		parts[i] = irTypeEmitStr(resolved)
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
 }
@@ -1610,6 +1581,10 @@ func (l *Lowerer) unifyExplicitTypeArgs(vars map[string]IRType, typeArgs []Type)
 }
 
 func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
+	return l.lowerFnCallWithHint(e, nil)
+}
+
+func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 	// Builtin functions
 	if ident, ok := e.Fn.(Ident); ok {
 		switch ident.Name {
@@ -1652,7 +1627,12 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
 				// Unify explicit type args with type vars from generic instantiation
 				l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
-				return IRFnCall{Func: goCallName, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
+				// Unify hint with return type (propagates to type vars for hint-based inference)
+				if hint != nil {
+					l.unify(ret.Type, hint)
+				}
+				typeArgsStr := l.buildGoTypeArgsStr(ret.TypeVars, e.TypeArgs)
+				return IRFnCall{Func: goCallName, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: typeArgsStr, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -1713,13 +1693,19 @@ func (l *Lowerer) lowerFnCall(e FnCall) IRExpr {
 			}
 		}
 		// Fall back to Go FFI resolution
+		var goTypeVars map[string]IRType
 		if _, isInterface := fnType.(IRInterfaceType); isInterface {
 			ret := l.resolveGoCall(ident.GoName, args, e.Pos)
 			fnType = ret.Type
 			goMultiReturn = ret.GoMultiReturn
-			l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
+			goTypeVars = ret.TypeVars
+			l.unifyExplicitTypeArgs(goTypeVars, e.TypeArgs)
+			if hint != nil {
+				l.unify(fnType, hint)
+			}
 		}
-		return IRFnCall{Func: ident.GoName, Args: args, Type: l.resolveDeep(fnType), TypeArgs: l.explicitTypeArgsStr(e.TypeArgs), GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		typeArgsStr := l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
+		return IRFnCall{Func: ident.GoName, Args: args, Type: l.resolveDeep(fnType), TypeArgs: typeArgsStr, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Lambda call or other complex expression
 	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
