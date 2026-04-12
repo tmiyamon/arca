@@ -21,6 +21,8 @@ All three look the same in Go's type system. No annotation distinguishes them. T
 2. **Safe APIs live in stdlib / Arca modules** — human-written wrappers that translate Go's ambiguous types into precise Arca types (Result, Option, non-nullable values). This is the `design_stdlib_vision.md` direction: Database, Http, Json modules that hide Go internals.
 3. **Go FFI direct use = user responsibility** — when users write `import go "..."` and call Go directly, they accept Go's nullable/pointer rules. A potential future `.go` accessor idea marks this boundary visually.
 
+**Prior art: Roc's platform model.** Roc separates app (pure, immutable) from platform (Rust/C host, mutable, impure). All side effects are dispatched through the platform's typed interface; the app never touches foreign memory directly. Arca's structure is nearly identical — app is immutable, Go is the mutable/impure host, stdlib is the boundary. The difference is Arca rides Go's ecosystem (stdlib wraps existing Go libraries) while Roc requires a purpose-built host.
+
 ### Error representation (sub-topic, open)
 
 The `error` mapping has a separate design question:
