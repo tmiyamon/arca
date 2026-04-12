@@ -8,6 +8,7 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-12
 
+- [Merge validate into lower](decisions/transpiler.md#2026-04-12-merge-validate-into-lower) — Delete validate.go, move structural checks (type existence, arg/field count, match exhaustiveness) into lower. Pipeline becomes Parse → Lower → Emit.
 - [`error` as `Option[Error]` (idea)](decisions/ideas.md#2026-04-12-error-as-optionerror-nullable-out-of-result-idea) — Revisit Go error mapping: `func() error` → `Option[Error]`, `func() (T, error)` → `Result[T, Error]`. Nullability always via Option, never nested. Blocked on trait system.
 - [unify is the single type-check path](decisions/transpiler.md#2026-04-12-unify-is-the-single-type-check-path) — delete `irTypesMatch`, fold constraint compatibility into `Lowerer.unify`, `checkTypeHint` routes hints through HM. Fixes a silent `IRMapType` gap caught by Phase-1 fallback flip.
 - [Lowerer.unify always reports](decisions/transpiler.md#2026-04-12-lowererunify-always-reports-substitution-only-uses-linferunify) — the silent flag is gone; type checks go through `l.unify(a, b, pos)`, raw substitution through `l.infer.unify(a, b)`. 2 dead unify sites deleted, 5 demoted to raw substitution.

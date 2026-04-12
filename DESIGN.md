@@ -86,7 +86,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Match type inference**: all arm body types unified to determine match expression type
 - **Binary expression types**: arithmetic from operands, comparison/logical to bool
 - **Constraint compatibility**: `AdultAge → Age` checked as a last-ditch success path inside `Lowerer.unify` (after HM structural unification)
-- **Validate**: existence checks (types, fields), count checks (args, fields), exhaustiveness. Type matching moved to lower.
+- **Structural checks** (in lower): type existence, arg/field count, match exhaustiveness. No separate validation pass.
 
 ## Go FFI
 

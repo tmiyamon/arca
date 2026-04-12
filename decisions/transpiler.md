@@ -1,8 +1,22 @@
 # Transpiler Decisions
 
-IR pipeline, lowering, validation, codegen. Newest first.
+IR pipeline, lowering, codegen. Newest first.
 
 ---
+
+### 2026-04-12: Merge validate into lower
+
+Deleted `validate.go` (766 lines). All structural checks now live in lower.go:
+
+- **Type existence**: `checkTypeExists` called in `lowerTypeDecl` (field types) and `lowerFnCommon` (param/return types). Uses `isKnownTypeName` which knows builtins, user types, aliases, type params, Go qualified types.
+- **Arg count**: checked in `lowerFnCallWithHint` for Arca function calls (Go FFI already had this).
+- **Field count/name**: checked in `lowerUserConstructorCall` after resolving constructor fields.
+- **Match exhaustiveness**: `checkMatchExhaustiveness` called from `buildMatch`. Same flat algorithm (Result ok/error, Option some/none, enum/sum type variant coverage).
+- **Unknown constructor**: error reported at the fallthrough in `lowerUserConstructorCall`.
+
+Pipeline: `Parse → Lower → Emit` (was `Parse → Lower → Validate → Emit`).
+
+Type compatibility checks (unify, constraint dimensions) were already in lower before this change.
 
 ## 2026-04-12: unify is the single type-check path
 

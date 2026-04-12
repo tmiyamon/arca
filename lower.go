@@ -750,6 +750,29 @@ func (l *Lowerer) hasImport(pkg string) bool {
 // --- Type Declarations ---
 
 func (l *Lowerer) lowerTypeDecl(td TypeDecl) IRTypeDecl {
+	// Set currentTypeName so isTypeParam resolves generic params (e.g. A, B).
+	prev := l.currentTypeName
+	l.currentTypeName = td.Name
+	defer func() { l.currentTypeName = prev }()
+
+	// Check field types exist in all constructors
+	for _, ctor := range td.Constructors {
+		for _, f := range ctor.Fields {
+			l.checkTypeExists(f.Type)
+		}
+	}
+	// Check method signature types
+	for _, m := range td.Methods {
+		for _, p := range m.Params {
+			if p.Type != nil {
+				l.checkTypeExists(p.Type)
+			}
+		}
+		if m.ReturnType != nil {
+			l.checkTypeExists(m.ReturnType)
+		}
+	}
+
 	if isEnum(td) {
 		return l.lowerEnumDecl(td)
 	}
@@ -984,6 +1007,16 @@ type loweredFn struct {
 // managing per-function state (currentRetType, currentReceiver, currentTypeName,
 // lexical scope, type inference scope).
 func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn {
+	// Check parameter and return types exist
+	for _, p := range fd.Params {
+		if p.Type != nil {
+			l.checkTypeExists(p.Type)
+		}
+	}
+	if fd.ReturnType != nil {
+		l.checkTypeExists(fd.ReturnType)
+	}
+
 	prevRet := l.currentRetType
 	prevRecv := l.currentReceiver
 	prevType := l.currentTypeName
@@ -1360,6 +1393,51 @@ func (l *Lowerer) checkMethodArgCount(receiver IRExpr, method string, argCount i
 	} else if info.Variadic && argCount < minArgs {
 		l.addCompileError(ErrWrongArgCount, pos, WrongArgCountData{Func: typ + "." + method, Expected: minArgs, Actual: argCount, AtLeast: true})
 	}
+}
+
+// checkTypeExists reports ErrUnknownType if the AST type references an unknown name.
+// Used in declaration contexts (type fields, function signatures) where unify
+// cannot catch non-existent types.
+func (l *Lowerer) checkTypeExists(t Type) {
+	switch tt := t.(type) {
+	case NamedType:
+		if !l.isKnownTypeName(tt.Name) {
+			l.addCompileError(ErrUnknownType, tt.Pos, UnknownTypeData{Name: tt.Name})
+		}
+		for _, p := range tt.Params {
+			l.checkTypeExists(p)
+		}
+	case PointerType:
+		l.checkTypeExists(tt.Inner)
+	case TupleType:
+		for _, e := range tt.Elements {
+			l.checkTypeExists(e)
+		}
+	}
+}
+
+// isKnownTypeName checks if a name is a known type in the lowerer context.
+func (l *Lowerer) isKnownTypeName(name string) bool {
+	switch name {
+	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "error", "Self":
+		return true
+	}
+	if strings.Contains(name, ".") {
+		return true
+	}
+	if _, ok := l.types[name]; ok {
+		return true
+	}
+	if _, ok := l.typeAliases[name]; ok {
+		return true
+	}
+	if l.isTypeParam(name) {
+		return true
+	}
+	if l.moduleNames[name] {
+		return true
+	}
+	return false
 }
 
 // isTypeParam checks if a name is a type parameter of the current type.
@@ -1977,9 +2055,11 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		var goMultiReturn bool
 		if id, ok := e.Fn.(Ident); ok {
 			if fn, ok := l.functions[id.Name]; ok {
-				// Arg/param type checks happen in lowerArgWithContext via
-				// lowerExprHint → checkTypeHint → unify during lowerCallArgs.
-				// No additional unify needed here.
+				if len(args) != len(fn.Params) {
+					l.addCompileError(ErrWrongArgCount, e.Pos, WrongArgCountData{
+						Func: id.Name, Expected: len(fn.Params), Actual: len(args),
+					})
+				}
 				if fn.ReturnType != nil {
 					fnType = l.lowerType(fn.ReturnType)
 				}
@@ -2712,6 +2792,30 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			}
 		}
 
+		// Validate field count
+		if len(cc.Fields) != len(ctorFields) {
+			l.addCompileError(ErrWrongFieldCount, cc.Pos, WrongArgCountData{
+				Func: cc.Name, Expected: len(ctorFields), Actual: len(cc.Fields),
+			})
+		}
+		// Validate field names
+		for _, fv := range cc.Fields {
+			if fv.Name != "" {
+				found := false
+				for _, cf := range ctorFields {
+					if cf.Name == fv.Name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					l.addCompileError(ErrUnknownField, cc.Pos, MessageData{
+						Text: fmt.Sprintf("constructor %s has no field named '%s'", cc.Name, fv.Name),
+					})
+				}
+			}
+		}
+
 		goName := typeName
 		if len(td.Constructors) > 1 {
 			goName = typeName + cc.Name
@@ -2784,6 +2888,7 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 	}
 
 	// Unknown constructor
+	l.addCompileError(ErrUnknownType, cc.Pos, UnknownTypeData{Name: cc.Name})
 	return IRConstructorCall{
 		GoName: cc.Name,
 		Fields: l.lowerFieldValues(cc.Fields),
@@ -3318,7 +3423,126 @@ func (l *Lowerer) lowerArmBody(arm MatchArm, symbols []SymbolRegInfo) IRExpr {
 
 // buildMatch constructs an IRMatch from a subject, arms, and position.
 func (l *Lowerer) buildMatch(subject IRExpr, arms []IRMatchArm, pos Pos) IRMatch {
-	return IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: pos}
+	m := IRMatch{Subject: subject, Arms: arms, Type: l.inferMatchType(arms), Pos: pos}
+	l.checkMatchExhaustiveness(m)
+	return m
+}
+
+// checkMatchExhaustiveness reports errors for non-exhaustive match expressions.
+func (l *Lowerer) checkMatchExhaustiveness(m IRMatch) {
+	if len(m.Arms) == 0 {
+		return
+	}
+	switch m.Arms[0].Pattern.(type) {
+	case IRResultOkPattern, IRResultErrorPattern:
+		l.checkResultExhaustiveness(m)
+	case IROptionSomePattern, IROptionNonePattern:
+		l.checkOptionExhaustiveness(m)
+	case IREnumPattern:
+		l.checkEnumExhaustiveness(m)
+	case IRSumTypePattern, IRSumTypeWildcardPattern:
+		l.checkSumTypeExhaustiveness(m)
+	}
+}
+
+func (l *Lowerer) checkResultExhaustiveness(m IRMatch) {
+	hasOk, hasError := false, false
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IRResultOkPattern:
+			hasOk = true
+		case IRResultErrorPattern:
+			hasError = true
+		}
+	}
+	if !hasOk {
+		l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Ok arm"})
+	}
+	if !hasError {
+		l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Error arm"})
+	}
+}
+
+func (l *Lowerer) checkOptionExhaustiveness(m IRMatch) {
+	hasSome, hasNone := false, false
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IROptionSomePattern:
+			hasSome = true
+		case IROptionNonePattern:
+			hasNone = true
+		}
+	}
+	if !hasSome {
+		l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "Some arm"})
+	}
+	if !hasNone {
+		l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: "None arm"})
+	}
+}
+
+func (l *Lowerer) checkEnumExhaustiveness(m IRMatch) {
+	hasWildcard := false
+	matched := make(map[string]bool)
+	for _, arm := range m.Arms {
+		switch p := arm.Pattern.(type) {
+		case IREnumPattern:
+			matched[p.GoValue] = true
+		case IRWildcardPattern:
+			hasWildcard = true
+		}
+	}
+	if hasWildcard {
+		return
+	}
+	for _, td := range l.types {
+		if !isEnum(td) {
+			continue
+		}
+		for _, c := range td.Constructors {
+			goValue := td.Name + c.Name
+			if matched[goValue] {
+				for _, ctor := range td.Constructors {
+					if !matched[td.Name+ctor.Name] {
+						l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: ctor.Name + " variant"})
+					}
+				}
+				return
+			}
+		}
+	}
+}
+
+func (l *Lowerer) checkSumTypeExhaustiveness(m IRMatch) {
+	hasWildcard := false
+	matched := make(map[string]bool)
+	for _, arm := range m.Arms {
+		switch p := arm.Pattern.(type) {
+		case IRSumTypePattern:
+			matched[p.GoType] = true
+		case IRSumTypeWildcardPattern:
+			hasWildcard = true
+		}
+	}
+	if hasWildcard {
+		return
+	}
+	for _, td := range l.types {
+		if isEnum(td) || len(td.Constructors) <= 1 {
+			continue
+		}
+		for _, c := range td.Constructors {
+			goType := td.Name + c.Name
+			if matched[goType] {
+				for _, ctor := range td.Constructors {
+					if !matched[td.Name+ctor.Name] {
+						l.addCompileError(ErrNonExhaustiveMatch, m.Pos, NonExhaustiveMatchData{Missing: ctor.Name + " variant"})
+					}
+				}
+				return
+			}
+		}
+	}
 }
 
 func (l *Lowerer) isResultMatch(me MatchExpr) bool {

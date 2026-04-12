@@ -457,18 +457,11 @@ func transpile(inputPath string) (*transpileResult, error) {
 	irProg := mainLowerer.Lower(mainProg, "main", false)
 	timing.lower = time.Since(t1)
 
-	// Collect lowering errors + validation errors
+	// Collect lowering errors
 	t2 := time.Now()
 	var allErrors []string
 	for _, e := range mainLowerer.Errors() {
 		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message()))
-	}
-
-	validator := NewIRValidation(mainLowerer)
-	if validErrs := validator.Validate(irProg); len(validErrs) > 0 {
-		for _, e := range validErrs {
-			allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message()))
-		}
 	}
 
 	if len(allErrors) > 0 {

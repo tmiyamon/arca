@@ -167,23 +167,13 @@ func collectDiagnostics(source string, filePath string) []protocol.Diagnostic {
 		return diagnostics
 	}
 
-	// Lower → validate
+	// Lower
 	goModDir := findGoModDir(filepath.Dir(filePath))
 	resolver := getResolverFor(goModDir)
 	lowerer := NewLowerer(prog, "", resolver)
-	irProg := lowerer.Lower(prog, "main", false)
+	lowerer.Lower(prog, "main", false)
 
 	for _, e := range lowerer.Errors() {
-		diagnostics = append(diagnostics, protocol.Diagnostic{
-			Range:    posToRange(e.Pos),
-			Severity: &severity,
-			Source:   strPtr(lspName),
-			Message:  e.Message(),
-		})
-	}
-
-	validator := NewIRValidation(lowerer)
-	for _, e := range validator.Validate(irProg) {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range:    posToRange(e.Pos),
 			Severity: &severity,

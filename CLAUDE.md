@@ -5,7 +5,7 @@ An expressive language that compiles to Go.
 ## Pipeline
 
 ```
-Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
+Source (.arca) → Parse (AST) → Lower (IR) → Emit (Go)
                                   ↓
                                LSP (hover, diagnostics)
 ```
@@ -22,8 +22,7 @@ Source (.arca) → Parse (AST) → Lower (IR) → Validate (IR) → Emit (Go)
 | `lexer.go` | Tokenizer |
 | `parser.go` | Recursive descent parser |
 | `ir.go` | IR node definitions (resolved names, types, structurally exhaustive match) |
-| `lower.go` | AST → IR (name resolution, constructor resolution, match classification, Go FFI type checking, bidirectional type checking) |
-| `validate.go` | IR validation (exhaustiveness, existence checks, arg count) |
+| `lower.go` | AST → IR (name resolution, constructor resolution, match classification, Go FFI type checking, bidirectional type checking, structural checks: exhaustiveness, arg/field count, type existence) |
 | `emit.go` | IR → Go output via GoWriter (mechanical, no feature-specific logic) |
 | `gowriter.go` | Structured Go code builder with auto-indentation |
 | `prelude.go` | Built-in function definitions (println, map, filter, take, takeWhile, len, etc.) |

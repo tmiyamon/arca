@@ -26,13 +26,8 @@ func validateSource(source string) []CompileError {
 	}
 
 	lowerer := NewLowerer(prog, "", nil)
-	irProg := lowerer.Lower(prog, "main", false)
-
-	// Collect errors from both lowerer (hint-based) and validator
-	errs := lowerer.Errors()
-	validator := NewIRValidation(lowerer)
-	errs = append(errs, validator.Validate(irProg)...)
-	return errs
+	lowerer.Lower(prog, "main", false)
+	return lowerer.Errors()
 }
 
 func TestValidateUnknownType(t *testing.T) {
@@ -62,6 +57,21 @@ fun make() -> String {
 	}
 	if !hasErrorCode(errs, ErrUnknownType) {
 		t.Errorf("unexpected error: %s", errs[0].Message())
+	}
+}
+
+func TestValidateUnknownReturnType(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+fun make() -> Bogus {
+  42
+}
+`)
+	if len(errs) == 0 {
+		t.Fatal("expected error for unknown return type")
+	}
+	if !hasErrorCode(errs, ErrUnknownType) {
+		t.Errorf("expected ErrUnknownType, got: %v", errs)
 	}
 }
 
@@ -167,28 +177,6 @@ fun name(c: Color) -> String {
 `)
 	if len(errs) > 0 {
 		t.Errorf("unexpected errors: %v", errs)
-	}
-}
-
-func TestValidateUnknownReturnType(t *testing.T) {
-	t.Parallel()
-	errs := validateSource(`
-fun make() -> Bogus {
-  42
-}
-`)
-	if len(errs) == 0 {
-		t.Fatal("expected error for unknown return type")
-	}
-	found := false
-	for _, e := range errs {
-		if e.Code == ErrUnknownType {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected 'unknown type: Bogus' error, got: %v", errs)
 	}
 }
 
