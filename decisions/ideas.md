@@ -4,54 +4,50 @@ Future features and design sketches. Newest first.
 
 ---
 
-## 2026-04-12: `error` as `Option[Error]`, nullable out of `Result` (idea)
+## 2026-04-12: Go FFI nullable/pointer ambiguity and the stdlib boundary (idea)
 
-**Context:** Go `error`-returning functions are currently mapped to `Result[Unit, error]` and `(T, error)`-returning functions to `Result[T, error]`. Writing `fun handler() -> error` to mirror Go handlers produces a confusing mismatch because the body evaluates to `Result[Unit, error]`, and users see errors like `expected error, got Result[Unit, error]` that don't map to their mental model. The friction points at a deeper representation question: Go's `error` is nullable (an `interface { Error() string }` value that may be `nil`), and `Result[Unit, error]` is an awkward way to model "nil or some error".
+**Context:** Arca wraps Go's `(T, error)` as `Result[T, error]` and `error` alone as `Result[Unit, error]`. Writing `fun handler() -> error` clashes because the body returns `Result[Unit, error]`. This friction led to a discussion about how to model Go's `error` in Arca's type system, which in turn exposed a deeper problem: **Go's nullable/pointer semantics are implicit and ambiguous, and Arca can't auto-infer intent from Go type signatures alone.**
 
-**Proposed representation:**
+Go's three meanings of `*T` / interface:
+- **Reference** — `func(db *sql.DB)` — not meant to be nil, just passing by reference
+- **Nullable value** — `func() *User` — nil = not found
+- **Error convention** — `func() error` — nil = success, non-nil = failure
 
-- `Error` — a **trait** (interface-like), represents "a failure value". Non-nullable. Blocked on the trait system landing.
-- `error` — a **type alias** for `Option[Error]` (nullable failure value). The Arca-side name mirrors Go's `error` so Go users find it familiar, but its shape is "nullable around a non-nullable trait".
-- **Rule:** nullability is always expressed with `Option`, never baked into another type. `Result`'s `Err` side is `Error` (non-nullable), not `error` (nullable). Mixing them would be "`Option[Error]` inside `Result`", two nested nullability layers.
+All three look the same in Go's type system. No annotation distinguishes them. The compiler can't decide for the user which is which.
 
-**Revised Go → Arca type mapping:**
+**Conclusion:** The compiler should not try to auto-infer Go's nullable/pointer intent. Instead:
 
-| Go signature      | Current Arca           | Proposed Arca       |
-| ----------------- | ---------------------- | ------------------- |
-| `func() error`    | `Result[Unit, error]`  | `Option[Error]` (= `error`) |
-| `func() (T, error)` | `Result[T, error]`   | `Result[T, Error]`  |
-| `func() (T, bool)` | `Option[T]`           | `Option[T]`         |
+1. **Go FFI stays as-is** — convention-based transformations only (`(T, error)` → Result, `(T, bool)` → Option). Pointer types, interface values, and nullable semantics pass through unchanged.
+2. **Safe APIs live in stdlib / Arca modules** — human-written wrappers that translate Go's ambiguous types into precise Arca types (Result, Option, non-nullable values). This is the `design_stdlib_vision.md` direction: Database, Http, Json modules that hide Go internals.
+3. **Go FFI direct use = user responsibility** — when users write `import go "..."` and call Go directly, they accept Go's nullable/pointer rules. A potential future `.go` accessor idea marks this boundary visually.
 
-The asymmetry is intentional: `(T, error)` is "value or failure" (Result); `error` alone is "failure or nothing" (Option). Each case picks the container that matches its semantics.
+### Error representation (sub-topic, open)
 
-**Usage example (hypothetical, after the change):**
+The `error` mapping has a separate design question:
 
-```arca
-fun getTodo(app: App, c: *echo.Context) -> error {
-  let todos = stdlib.QueryAs[Todo](app.db, "...")?   // Result[List[Todo], Error] unwrap
-  c.JSON(http.StatusOK, todos)                        // Option[Error] = error, matches
-}
-```
+**Option A — `error` = `Result[Unit, Error]` surface alias (current leaning):**
+- Semantically correct (Ok = success, Err = failure), `?` works naturally
+- Users write `-> error` as a surface shortcut for `-> Result[Unit, Error]`
+- Requires `Error` trait (blocked on trait system)
+- Matches Rust/Haskell convention
 
-The body's last expression `c.JSON(...)` has type `Option[Error]`, which matches the declared `-> error`.
+**Option B — `error` = `Option[Error]` (explored and deferred):**
+- Initially attractive: Go's `error` is nullable, `Option` models nullable
+- Problem: `Option`'s semantic direction inverts for errors — `Some` is the bad path, `None` is the good path. Clashes with `?` / safe navigation semantics where `Some` is normally the good path.
+- Problem: if nullable = Option, the same argument applies to ALL Go interfaces/pointers, not just error. Leads to `Option[*User]`, `Option[Handler]`, etc. everywhere — impractical.
+- Deferred: not the right model.
 
-**`?` and null safety:**
+**Hard constraint (both options):** `error = Option[error]` (self-referential) is forbidden. The alias must go through `Error` as a trait. Blocked on trait system.
 
-- Keep `?` as the propagation operator, extended to work on both `Result[T, E]` and `Option[T]`.
-- Consider adding Kotlin-style null-safety operators on `Option`: `x?.foo()` (safe navigation), `x ?: default` (elvis), `x!!` (force unwrap, panics on `None`).
-- Open question: whether `?` for Result and `?` for Option should share the same symbol or be separated (e.g. `?` for Result, `?.` for Option). Shared is simpler; separated is stricter about intent.
+**Status:** Idea. The Go FFI boundary principle (compiler doesn't auto-infer, stdlib wraps) is fairly settled. The error representation (Option A vs B) leans toward A but needs the trait system first.
 
-**Hard constraint:** `error = Option[error]` (self-referential surface alias) is forbidden — mentally unstable and certain to confuse. The alias must go through `Error` as a trait. That means this idea is **blocked on the trait system being implemented**.
+---
 
-**Migration implications (when implemented):**
+## 2026-04-12: `error` as `Option[Error]`, nullable out of `Result` (idea, see above)
 
-- `goFuncReturnType` change in `lower.go`
-- `?` semantics extended to `Option`
-- Codegen for `Option[Error]` must emit to Go's nullable `error`
-- Existing testdata and memory entries using `Result[Unit, error]` / `Result[T, error]` need rewriting
-- Surface `error` identifier is now a type alias, not a concrete type
+**Explored and deferred.** Initially proposed mapping Go `error` to `Option[Error]` with `Error` as a trait. Ran into two problems: (1) Option's `Some`/`None` semantics invert for errors (Some = bad, None = good), clashing with `?` and safe navigation; (2) if nullable = Option applies to error, it should apply to all Go interfaces/pointers, which is impractical. Folded into the FFI boundary idea above as "Option B (deferred)". The `error = Option[error]` self-referential alias is explicitly forbidden.
 
-**Status:** Idea only. Blocked on trait system. Current `Result[Unit, error]` representation stays in place until both are revisited together.
+See the FFI boundary entry above for the full discussion and the current leaning (Option A: `error` = `Result[Unit, Error]` alias).
 
 ---
 
