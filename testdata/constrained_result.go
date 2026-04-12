@@ -22,32 +22,12 @@ func (v Email) ArcaValidate() error {
 }
 
 func main() {
-	__cval1, __cerr1 := NewEmail("test@example.com")
-	var result Result_[Email, error]
-	if __cerr1 != nil {
-		result = Err_[Email, error](__cerr1)
-	} else {
-		result = Ok_[Email, error](__cval1)
-	}
-	if result.IsOk {
-		email := result.Value
+	result, result_err := NewEmail("test@example.com")
+	if result_err == nil {
+		email := result
 		fmt.Println(email)
 	} else {
-		err := result.Err
+		err := result_err
 		fmt.Println(err)
 	}
-}
-
-type Result_[T any, E any] struct {
-	Value T
-	Err   E
-	IsOk  bool
-}
-
-func Ok_[T any, E any](v T) Result_[T, E] {
-	return Result_[T, E]{Value: v, IsOk: true}
-}
-
-func Err_[T any, E any](e E) Result_[T, E] {
-	return Result_[T, E]{Err: e}
 }

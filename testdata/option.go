@@ -4,9 +4,9 @@ import (
 	"fmt"
 )
 
-func greet(name Option_[string]) string {
-	if name.Valid {
-		n := name.Value
+func greet(name string, name_ok bool) string {
+	if name_ok {
+		n := name
 		return fmt.Sprintf("Hello %v!", n)
 	} else {
 		return "Hello stranger!"
@@ -14,19 +14,6 @@ func greet(name Option_[string]) string {
 }
 
 func main() {
-	fmt.Println(greet(Some_("Alice")))
-	fmt.Println(greet(None_[string]()))
-}
-
-type Option_[T any] struct {
-	Value T
-	Valid bool
-}
-
-func Some_[T any](v T) Option_[T] {
-	return Option_[T]{Value: v, Valid: true}
-}
-
-func None_[T any]() Option_[T] {
-	return Option_[T]{}
+	fmt.Println(greet("Alice", true))
+	fmt.Println(greet("", false))
 }

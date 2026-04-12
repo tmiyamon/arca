@@ -279,6 +279,7 @@ func (em *Emitter) emitValidatorAlias(v *IRValidator, typeName, zeroVal, goBase 
 
 func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 	w := em.w
+	// Params are already expanded by expandFuncParams in lower.go.
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
 		params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
@@ -286,7 +287,7 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 
 	retType := ""
 	if fd.ReturnType != nil {
-		retType = em.irTypeStr(fd.ReturnType)
+		retType = em.irReturnTypeStr(fd.ReturnType)
 	}
 
 	body := func() {
@@ -314,18 +315,6 @@ func (em *Emitter) emitArgs(args []IRExpr) string {
 		parts[i] = em.emitExpr(a)
 	}
 	return strings.Join(parts, ", ")
-}
-
-// wrapErrorValue wraps a string-like Error value in fmt.Errorf to produce error type.
-func (em *Emitter) wrapErrorValue(value IRExpr) string {
-	valStr := em.emitExpr(value)
-	switch value.(type) {
-	case IRStringLit:
-		return fmt.Sprintf("fmt.Errorf(%s)", valStr)
-	case IRStringInterp:
-		return fmt.Sprintf("fmt.Errorf(\"%%v\", %s)", valStr)
-	}
-	return valStr
 }
 
 func (em *Emitter) emitExpr(e IRExpr) string {
@@ -366,13 +355,15 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IRConstructorCall:
 		return em.emitConstructorCall(expr)
 	case IROkCall:
-		return fmt.Sprintf("Ok_%s(%s)", expr.TypeArgs, em.emitExpr(expr.Value))
+		// Value-position Ok: emit the value (error side is implicit nil)
+		return em.emitExpr(expr.Value)
 	case IRErrorCall:
-		return fmt.Sprintf("Err_%s(%s)", expr.TypeArgs, em.wrapErrorValue(expr.Value))
+		return em.emitExpr(expr.Value)
 	case IRSomeCall:
-		return fmt.Sprintf("Some_(%s)", em.emitExpr(expr.Value))
+		// Option in value position → pointer (Some(v) = &v)
+		return "&" + em.emitExpr(expr.Value)
 	case IRNoneExpr:
-		return fmt.Sprintf("None_%s()", expr.TypeArg)
+		return "nil"
 	case IRLambda:
 		return em.emitLambda(expr)
 	case IRBinaryExpr:
@@ -413,6 +404,7 @@ func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
 }
 
 func (em *Emitter) emitLambda(l IRLambda) string {
+	// Params are already expanded by the expandResultOption post-pass.
 	params := make([]string, len(l.Params))
 	for i, p := range l.Params {
 		if p.Type != nil {
@@ -423,13 +415,19 @@ func (em *Emitter) emitLambda(l IRLambda) string {
 	}
 	retType := ""
 	if l.ReturnType != nil {
-		retType = " " + em.irTypeStr(l.ReturnType)
+		retType = " " + em.irReturnTypeStr(l.ReturnType)
 	}
-	body := em.emitExpr(l.Body)
 	if l.ReturnType != nil {
-		return fmt.Sprintf("func(%s)%s { return %s }", strings.Join(params, ", "), retType, body)
+		// Use emitReturnExpr for proper multi-return handling
+		w := em.w
+		bodyWriter := NewGoWriter()
+		em.w = bodyWriter
+		em.emitReturnExpr(l.Body)
+		bodyStr := em.w.String()
+		em.w = w
+		return fmt.Sprintf("func(%s)%s {\n%s}", strings.Join(params, ", "), retType, bodyStr)
 	}
-	return fmt.Sprintf("func(%s) { %s }", strings.Join(params, ", "), body)
+	return fmt.Sprintf("func(%s) { %s }", strings.Join(params, ", "), em.emitExpr(l.Body))
 }
 
 func (em *Emitter) emitListLit(l IRListLit) string {
@@ -531,7 +529,32 @@ func (em *Emitter) emitBody(e IRExpr, mode bodyMode) {
 }
 
 func (em *Emitter) returnLeaf(e IRExpr) {
+	// Expanded Result/Option constructors: emit as multi-value return.
+	if vals := expandedValues(e); len(vals) > 0 {
+		parts := make([]string, len(vals))
+		for i, v := range vals {
+			parts[i] = em.emitExpr(v)
+		}
+		em.w.Return(strings.Join(parts, ", "))
+		return
+	}
 	em.w.Return(em.emitExpr(e))
+}
+
+// expandedValues returns the pre-computed ExpandedValues from the
+// expandResultOption post-pass, or nil if not expanded.
+func expandedValues(e IRExpr) []IRExpr {
+	switch expr := e.(type) {
+	case IROkCall:
+		return expr.ExpandedValues
+	case IRErrorCall:
+		return expr.ExpandedValues
+	case IRSomeCall:
+		return expr.ExpandedValues
+	case IRNoneExpr:
+		return expr.ExpandedValues
+	}
+	return nil
 }
 
 func (em *Emitter) voidLeaf(e IRExpr) {
@@ -576,8 +599,10 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 		w.Stmt(fmt.Sprintf("_ = %s", em.emitExpr(stmt.Value)))
 		return
 	}
-	if isGoMultiReturn(stmt.Value) {
-		em.emitGoMultiReturnLet(stmt.GoName, stmt.Value)
+	// Multi-return calls: SplitNames populated by expandResultOption post-pass.
+	if len(stmt.SplitNames) > 0 {
+		names := strings.Join(stmt.SplitNames, ", ")
+		w.AssignMulti(names, em.emitExpr(stmt.Value))
 		return
 	}
 	// Value-position control flow (`let x = if ... { a } else { b }`, same for
@@ -625,49 +650,14 @@ func (em *Emitter) letStmtType(stmt IRLetStmt) IRType {
 }
 
 
-// emitGoMultiReturnLet emits a let statement for a Go call that returns multiple values.
-// The call's IRType determines the wrapping: IRResultType → Result, IROptionType → Option.
-func (em *Emitter) emitGoMultiReturnLet(goName string, callExpr IRExpr) {
-	w := em.w
-	em.tmpCounter++
-	callStr := em.emitExpr(callExpr)
-	irType := callExpr.irType()
 
-	switch rt := irType.(type) {
-	case IRResultType:
-		tmpErr := fmt.Sprintf("__cerr%d", em.tmpCounter)
-		okType := em.irTypeStr(rt.Ok)
-		isErrorOnly := isUnitType(rt.Ok)
-		if isErrorOnly {
-			w.Assign(tmpErr, callStr)
-			w.Var(goName, fmt.Sprintf("Result_[%s, error]", okType))
-			w.IfElse(fmt.Sprintf("%s != nil", tmpErr), func() {
-				w.Stmt(fmt.Sprintf("%s = Err_[%s, error](%s)", goName, okType, tmpErr))
-			}, func() {
-				w.Stmt(fmt.Sprintf("%s = Ok_[%s, error](%s{})", goName, okType, okType))
-			})
-		} else {
-			tmpVal := fmt.Sprintf("__cval%d", em.tmpCounter)
-			w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpErr), callStr)
-			w.Var(goName, fmt.Sprintf("Result_[%s, error]", okType))
-			w.IfElse(fmt.Sprintf("%s != nil", tmpErr), func() {
-				w.Stmt(fmt.Sprintf("%s = Err_[%s, error](%s)", goName, okType, tmpErr))
-			}, func() {
-				w.Stmt(fmt.Sprintf("%s = Ok_[%s, error](%s)", goName, okType, tmpVal))
-			})
-		}
-	case IROptionType:
-		tmpVal := fmt.Sprintf("__oval%d", em.tmpCounter)
-		tmpOk := fmt.Sprintf("__ook%d", em.tmpCounter)
-		innerType := em.irTypeStr(rt.Inner)
-		w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpOk), callStr)
-		w.Var(goName, fmt.Sprintf("Option_[%s]", innerType))
-		w.If(tmpOk, func() {
-			w.Stmt(fmt.Sprintf("%s = Some_[%s](%s)", goName, innerType, tmpVal))
-		})
-	default:
-		w.Assign(goName, callStr)
+// isMultiReturnType checks if an IR type will be emitted as Go multi-return.
+func isMultiReturnType(t IRType) bool {
+	switch t.(type) {
+	case IRResultType, IROptionType:
+		return true
 	}
+	return false
 }
 
 // isUnitType checks if an IRType is the Unit type (struct{}).
@@ -680,57 +670,35 @@ func isUnitType(t IRType) bool {
 
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
 	w := em.w
-	em.tmpCounter++
 
-	// Arca Result (single value): unwrap via .IsOk / .Value / .Err
-	if !isGoMultiReturn(stmt.CallExpr) {
-		tmpResult := fmt.Sprintf("__try_result%d", em.tmpCounter)
-		w.Assign(tmpResult, em.emitExpr(stmt.CallExpr))
-		w.If(fmt.Sprintf("!%s.IsOk", tmpResult), func() {
-			if isIRResultType(stmt.ReturnType) {
-				typeArgs := irResultTypeArgs(stmt.ReturnType)
-				w.Return(fmt.Sprintf("Err_%s(%s.Err)", typeArgs, tmpResult))
-			} else {
-				w.Panic(fmt.Sprintf("%s.Err", tmpResult))
-			}
-		})
-		if stmt.GoName != "_" {
-			w.Assign(stmt.GoName, fmt.Sprintf("%s.Value", tmpResult))
-		}
-		return
-	}
-
-	// Go FFI multi-return: unwrap via val, err := f()
-	tmpErr := fmt.Sprintf("__try_err%d", em.tmpCounter)
-
-	errorOnly := false
-	if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
-		errorOnly = isUnitType(rt.Ok)
-	}
-
-	if errorOnly {
-		w.Assign(tmpErr, em.emitExpr(stmt.CallExpr))
+	// SplitNames, PropagateValues, and ValueName are pre-computed by
+	// the expandResultOption post-pass. Emit is mechanical.
+	names := strings.Join(stmt.SplitNames, ", ")
+	if len(stmt.SplitNames) == 1 {
+		w.Assign(names, em.emitExpr(stmt.CallExpr))
 	} else {
-		tmpVal := "_"
-		if stmt.GoName != "_" {
-			tmpVal = fmt.Sprintf("__try_val%d", em.tmpCounter)
-		}
-		w.AssignMulti(fmt.Sprintf("%s, %s", tmpVal, tmpErr), em.emitExpr(stmt.CallExpr))
-		defer func() {
-			if stmt.GoName != "_" {
-				w.Assign(stmt.GoName, tmpVal)
-			}
-		}()
+		w.AssignMulti(names, em.emitExpr(stmt.CallExpr))
 	}
 
-	w.If(fmt.Sprintf("%s != nil", tmpErr), func() {
-		if isIRResultType(stmt.ReturnType) {
-			typeArgs := irResultTypeArgs(stmt.ReturnType)
-			w.Return(fmt.Sprintf("Err_%s(%s)", typeArgs, tmpErr))
-		} else {
-			w.Panic(tmpErr)
-		}
-	})
+	errName := stmt.SplitNames[len(stmt.SplitNames)-1]
+	if stmt.PropagateValues != nil {
+		w.If(fmt.Sprintf("%s != nil", errName), func() {
+			parts := make([]string, len(stmt.PropagateValues))
+			for i, v := range stmt.PropagateValues {
+				parts[i] = em.emitExpr(v)
+			}
+			w.Return(strings.Join(parts, ", "))
+		})
+	} else {
+		// Non-Result enclosing function: panic on error
+		w.If(fmt.Sprintf("%s != nil", errName), func() {
+			w.Panic(errName)
+		})
+	}
+
+	if stmt.GoName != "_" && stmt.ValueName != "" {
+		w.Assign(stmt.GoName, stmt.ValueName)
+	}
 }
 
 func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
@@ -829,6 +797,27 @@ func (em *Emitter) emitMatch(m IRMatch, mode bodyMode) {
 func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
+
+	// Resolve the error condition variable from the match arm bindings.
+	// The post-pass (resolveMatchBindings) has already rewritten binding
+	// Sources to actual Go variable names. For params (no post-pass),
+	// the naming convention subject + "_err" is used as fallback.
+	errVar := subject + "_err"
+	if rt, ok := m.Subject.irType().(IRResultType); ok && isUnitType(rt.Ok) {
+		errVar = subject // error-only: subject IS the error
+	}
+	// Check if the Error arm has a resolved Source — use it if available.
+	for _, arm := range m.Arms {
+		if p, ok := arm.Pattern.(IRResultErrorPattern); ok && p.Binding != nil {
+			if p.Binding.Source != "" && p.Binding.Source != ".Err" {
+				errVar = p.Binding.Source
+				break
+			}
+		}
+	}
+	errCond := fmt.Sprintf("%s == nil", errVar)
+	errCondNeg := fmt.Sprintf("%s != nil", errVar)
+
 	var okArm, errorArm *IRMatchArm
 	for i := range m.Arms {
 		switch m.Arms[i].Pattern.(type) {
@@ -844,36 +833,35 @@ func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
 	if okVoid && errorVoid {
 		return
 	}
+	// Helper: emit binding assignment from the resolved Source.
+	emitBinding := func(p interface{ GetBinding() *IRBinding }) {
+		if b := p.GetBinding(); b != nil && b.Source != "" {
+			w.Assign(b.GoName, b.Source)
+		}
+	}
+
 	if okVoid {
-		w.If(fmt.Sprintf("!%s.IsOk", subject), func() {
-			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+		w.If(errCondNeg, func() {
+			emitBinding(errorArm.Pattern.(IRResultErrorPattern))
 			em.emitBody(errorArm.Body, mode)
 		})
 		return
 	}
 	if errorVoid {
-		w.If(fmt.Sprintf("%s.IsOk", subject), func() {
-			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+		w.If(errCond, func() {
+			emitBinding(okArm.Pattern.(IRResultOkPattern))
 			em.emitBody(okArm.Body, mode)
 		})
 		return
 	}
-	w.IfElse(fmt.Sprintf("%s.IsOk", subject), func() {
+	w.IfElse(errCond, func() {
 		if okArm != nil {
-			if p := okArm.Pattern.(IRResultOkPattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+			emitBinding(okArm.Pattern.(IRResultOkPattern))
 			em.emitBody(okArm.Body, mode)
 		}
 	}, func() {
 		if errorArm != nil {
-			if p := errorArm.Pattern.(IRResultErrorPattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+			emitBinding(errorArm.Pattern.(IRResultErrorPattern))
 			em.emitBody(errorArm.Body, mode)
 		}
 	})
@@ -882,6 +870,14 @@ func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
 func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
+
+	// Resolve okVar from the post-pass (via Some arm binding Source)
+	// or fall back to param naming convention.
+	okVar := subject + "_ok"
+	// The Some arm's binding Source points to the value var (resolved by post-pass).
+	// The ok var is always subject + "_ok" (set by expandLetToMultiLet / param expansion).
+	// No need to re-derive from convention — just use the fallback for params.
+
 	var someArm, noneArm *IRMatchArm
 	for i := range m.Arms {
 		switch m.Arms[i].Pattern.(type) {
@@ -898,25 +894,31 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 		return
 	}
 	if someVoid {
-		w.If(fmt.Sprintf("!%s.Valid", subject), func() {
+		w.If(fmt.Sprintf("!%s", okVar), func() {
 			em.emitBody(noneArm.Body, mode)
 		})
 		return
 	}
+	emitSomeBinding := func() {
+		if someArm == nil { return }
+		p := someArm.Pattern.(IROptionSomePattern)
+		if p.Binding != nil && p.Binding.Source != "" && p.Binding.Source != ".Value" {
+			w.Assign(p.Binding.GoName, p.Binding.Source)
+		} else if p.Binding != nil {
+			w.Assign(p.Binding.GoName, subject) // fallback for params
+		}
+	}
+
 	if noneVoid {
-		w.If(fmt.Sprintf("%s.Valid", subject), func() {
-			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+		w.If(okVar, func() {
+			emitSomeBinding()
 			em.emitBody(someArm.Body, mode)
 		})
 		return
 	}
-	w.IfElse(fmt.Sprintf("%s.Valid", subject), func() {
+	w.IfElse(okVar, func() {
 		if someArm != nil {
-			if p := someArm.Pattern.(IROptionSomePattern); p.Binding != nil {
-				w.Assign(p.Binding.GoName, fmt.Sprintf("%s%s", subject, p.Binding.Source))
-			}
+			emitSomeBinding()
 			em.emitBody(someArm.Body, mode)
 		}
 	}, func() {
@@ -1083,37 +1085,11 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		set[b] = true
 	}
 
-	if set["result"] {
-		w.Struct("Result_[T any, E any]", func() {
-			w.Field("Value", "T", "")
-			w.Field("Err", "  E", "")
-			w.Field("IsOk", " bool", "")
-		})
-		w.Line("")
-		w.Func("Ok_[T any, E any]", "v T", "Result_[T, E]", func() {
-			w.Return("Result_[T, E]{Value: v, IsOk: true}")
-		})
-		w.Line("")
-		w.Func("Err_[T any, E any]", "e E", "Result_[T, E]", func() {
-			w.Return("Result_[T, E]{Err: e}")
-		})
-		w.Line("")
-	}
-	if set["option"] {
-		w.Struct("Option_[T any]", func() {
-			w.Field("Value", "T", "")
-			w.Field("Valid", "bool", "")
-		})
-		w.Line("")
-		w.Func("Some_[T any]", "v T", "Option_[T]", func() {
-			w.Return("Option_[T]{Value: v, Valid: true}")
-		})
-		w.Line("")
-		w.Func("None_[T any]", "", "Option_[T]", func() {
-			w.Return("Option_[T]{}")
-		})
-		w.Line("")
-	}
+	// Result_/Option_ synthetic types fully eliminated. Result/Option are
+	// emitted as native Go multi-return at all positions: function returns,
+	// parameters, try, match, and call arguments.
+	_ = set["result"]
+	_ = set["option"]
 	if set["map"] {
 		w.Func("Map_[T any, U any]", "list []T, f func(T) U", "[]U", func() {
 			w.Assign("result", "make([]U, len(list))")
@@ -1198,9 +1174,12 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	case IRMapType:
 		return "map[" + em.irTypeStr(tt.Key) + "]" + em.irTypeStr(tt.Value)
 	case IRResultType:
-		return fmt.Sprintf("Result_[%s, %s]", em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err))
+		// Returns and params are expanded by the post-pass. Struct fields
+		// and other value positions fall through here.
+		return fmt.Sprintf("(%s, %s)", em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err))
 	case IROptionType:
-		return fmt.Sprintf("Option_[%s]", em.irTypeStr(tt.Inner))
+		// Option in struct field position → Go pointer (nil = None).
+		return "*" + em.irTypeStr(tt.Inner)
 	case IRInterfaceType:
 		return "interface{}"
 	case IRTypeVar:
@@ -1208,6 +1187,22 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	default:
 		return "interface{}"
 	}
+}
+
+// irReturnTypeStr renders an IR type as a Go function return type. This is
+// the only position where Go multi-return syntax is valid. Result/Option
+// become native multi-return: (T, error), (T, bool), or bare error.
+func (em *Emitter) irReturnTypeStr(t IRType) string {
+	switch tt := t.(type) {
+	case IRResultType:
+		if isUnitType(tt.Ok) {
+			return "error"
+		}
+		return fmt.Sprintf("(%s, error)", em.irTypeStr(tt.Ok))
+	case IROptionType:
+		return fmt.Sprintf("(%s, bool)", em.irTypeStr(tt.Inner))
+	}
+	return em.irTypeStr(t)
 }
 
 func (em *Emitter) goTypeParams(params []string) string {

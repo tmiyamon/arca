@@ -4,28 +4,14 @@ import (
 	"fmt"
 )
 
-func test() Result_[int, error] {
-	return Ok_[int, error](42)
+func test() (int, error) {
+	return 42, nil
 }
 
 func main() {
-	result := test()
-	if !result.IsOk {
-		e := result.Err
+	_, result_err := test()
+	if result_err != nil {
+		e := result_err
 		fmt.Println(e)
 	}
-}
-
-type Result_[T any, E any] struct {
-	Value T
-	Err   E
-	IsOk  bool
-}
-
-func Ok_[T any, E any](v T) Result_[T, E] {
-	return Result_[T, E]{Value: v, IsOk: true}
-}
-
-func Err_[T any, E any](e E) Result_[T, E] {
-	return Result_[T, E]{Err: e}
 }

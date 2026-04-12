@@ -13,7 +13,13 @@ func double(x int) int {
 }
 
 func main() {
-	result := Fold_(Filter_(Map_([]int{1, 2, 3}, func(x int) int { return x * 2 }), func(x int) bool { return x > 2 }), 0, func(acc int, x int) int { return acc + x })
+	result := Fold_(Filter_(Map_([]int{1, 2, 3}, func(x int) int {
+		return x * 2
+	}), func(x int) bool {
+		return x > 2
+	}), 0, func(acc int, x int) int {
+		return acc + x
+	})
 	fmt.Println(result)
 }
 

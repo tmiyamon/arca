@@ -697,6 +697,17 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	// Expand sum type methods to per-variant implementations
 	funcs = l.expandSumTypeMethods(funcs)
 
+	// Expand Result/Option in the IR: tail-position Ok/Error/Some/None
+	// become IRMultiReturn, let bindings of multi-return calls become
+	// IRMultiLetStmt, and Ok/Error/Some/None in call args are flattened.
+	// After this pass, emit.go can mechanically output native Go without
+	// knowing about Result/Option semantics.
+	for i := range funcs {
+		ctx := newExpandCtx()
+		expandFuncParams(&funcs[i], ctx)
+		funcs[i].Body = expandWithCtx(funcs[i].Body, funcs[i].ReturnType, ctx)
+	}
+
 	// Report unused imports (skip side-effect imports, which are intentional,
 	// and packages consumed indirectly via auto-detected builtins like string
 	// interpolation needing fmt). Sort for deterministic diagnostic order.
@@ -1568,9 +1579,9 @@ func irTypeEmitStr(t IRType) string {
 	case IRPointerType:
 		return "*" + irTypeEmitStr(tt.Inner)
 	case IRResultType:
-		return "Result_[" + irTypeEmitStr(tt.Ok) + ", " + irTypeEmitStr(tt.Err) + "]"
+		return "(" + irTypeEmitStr(tt.Ok) + ", error)"
 	case IROptionType:
-		return "Option_[" + irTypeEmitStr(tt.Inner) + "]"
+		return "(" + irTypeEmitStr(tt.Inner) + ", bool)"
 	case IRListType:
 		return "[]" + irTypeEmitStr(tt.Elem)
 	case IRMapType:
@@ -2233,9 +2244,10 @@ func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRTyp
 	}
 	if len(info.Results) == 1 {
 		if info.Results[0].Type == "error" {
+			// error-only: single Go return value, NOT multi-return.
+			// GoMultiReturn stays false — the Go call returns one `error`.
 			return goReturnInfo{
-				Type:          IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRNamedType{GoName: "error"}},
-				GoMultiReturn: true,
+				Type: IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRNamedType{GoName: "error"}},
 			}
 		}
 		return goReturnInfo{Type: toIR(info.Results[0].Type)}
@@ -4092,4 +4104,460 @@ func (l *Lowerer) exprToString(expr Expr) string {
 	default:
 		return "/* expr */"
 	}
+}
+
+// --- Result/Option IR Expansion ---
+
+// expandLambdaParams is the IRLambda equivalent of expandFuncParams.
+func expandLambdaParams(lam *IRLambda, ctx *expandCtx) {
+	var expanded []IRParamDecl
+	for _, p := range lam.Params {
+		switch pt := p.Type.(type) {
+		case IRResultType:
+			if isUnitType(pt.Ok) {
+				expanded = append(expanded, IRParamDecl{GoName: p.GoName, Type: IRNamedType{GoName: "error"}})
+				ctx.splits[p.GoName] = []string{p.GoName}
+			} else {
+				errName := p.GoName + "_err"
+				expanded = append(expanded,
+					IRParamDecl{GoName: p.GoName, Type: pt.Ok},
+					IRParamDecl{GoName: errName, Type: IRNamedType{GoName: "error"}},
+				)
+				ctx.splits[p.GoName] = []string{p.GoName, errName}
+			}
+		case IROptionType:
+			okName := p.GoName + "_ok"
+			expanded = append(expanded,
+				IRParamDecl{GoName: p.GoName, Type: pt.Inner},
+				IRParamDecl{GoName: okName, Type: IRNamedType{GoName: "bool"}},
+			)
+			ctx.splits[p.GoName] = []string{p.GoName, okName}
+		default:
+			expanded = append(expanded, p)
+		}
+	}
+	lam.Params = expanded
+}
+
+// expandFuncParams expands Result/Option params into multiple Go params
+// in the IR, and registers the split names in ctx for match resolution.
+func expandFuncParams(fd *IRFuncDecl, ctx *expandCtx) {
+	var expanded []IRParamDecl
+	for _, p := range fd.Params {
+		switch pt := p.Type.(type) {
+		case IRResultType:
+			if isUnitType(pt.Ok) {
+				expanded = append(expanded, IRParamDecl{GoName: p.GoName, Type: IRNamedType{GoName: "error"}})
+				ctx.splits[p.GoName] = []string{p.GoName}
+			} else {
+				errName := p.GoName + "_err"
+				expanded = append(expanded,
+					IRParamDecl{GoName: p.GoName, Type: pt.Ok},
+					IRParamDecl{GoName: errName, Type: IRNamedType{GoName: "error"}},
+				)
+				ctx.splits[p.GoName] = []string{p.GoName, errName}
+			}
+		case IROptionType:
+			okName := p.GoName + "_ok"
+			expanded = append(expanded,
+				IRParamDecl{GoName: p.GoName, Type: pt.Inner},
+				IRParamDecl{GoName: okName, Type: IRNamedType{GoName: "bool"}},
+			)
+			ctx.splits[p.GoName] = []string{p.GoName, okName}
+		default:
+			expanded = append(expanded, p)
+		}
+	}
+	fd.Params = expanded
+}
+
+// expandCtx carries state through the expandResultOption post-pass.
+type expandCtx struct {
+	splits         map[string][]string // "result" → ["result", "result_err"]
+	matchResolved  map[string]bool     // splits already handled by resolveMatchBindings
+	counter        int
+}
+
+func newExpandCtx() *expandCtx {
+	return &expandCtx{
+		splits:        make(map[string][]string),
+		matchResolved: make(map[string]bool),
+	}
+}
+
+func (ctx *expandCtx) nextCounter() int {
+	ctx.counter++
+	return ctx.counter
+}
+
+
+// expandResultOption walks the IR and expands Result/Option constructs so
+// emit.go can mechanically output native Go without special-casing:
+//
+// 1. Tail-position Ok/Error/Some/None → populate ExpandedValues
+// 2. Let bindings of multi-return calls → populate SplitNames
+// 3. Ok/Error/Some/None in call args → flattened into multiple args
+// 4. Match arm binding Sources → resolved to actual Go variable names
+func expandResultOption(e IRExpr, returnType IRType) IRExpr {
+	return expandWithCtx(e, returnType, newExpandCtx())
+}
+
+func expandWithCtx(e IRExpr, returnType IRType, ctx *expandCtx) IRExpr {
+	if e == nil {
+		return nil
+	}
+	switch expr := e.(type) {
+	case IRBlock:
+		for i, s := range expr.Stmts {
+			expr.Stmts[i] = expandStmtWithCtx(s, ctx)
+		}
+		if expr.Expr != nil {
+			expr.Expr = expandWithCtx(expr.Expr, returnType, ctx)
+		}
+		// Mark unreferenced split names as "_". A match resolves its
+		// bindings above; any remaining unresolved split name means the
+		// variable was never matched and is unused in Go.
+		markUnusedSplits(expr.Stmts, expr.Expr, ctx)
+		return expr
+	case IRMatch:
+		// Resolve match arm bindings using split info for the subject.
+		resolveMatchBindings(&expr, ctx)
+		for i := range expr.Arms {
+			expr.Arms[i].Body = expandWithCtx(expr.Arms[i].Body, returnType, ctx)
+		}
+		return expr
+	case IRIfExpr:
+		expr.Then = expandWithCtx(expr.Then, returnType, ctx)
+		expr.Else = expandWithCtx(expr.Else, returnType, ctx)
+		return expr
+	case IRLambda:
+		// Lambda is an inner function — expand its params and body
+		// with its own return type context.
+		lamCtx := newExpandCtx()
+		expandLambdaParams(&expr, lamCtx)
+		expr.Body = expandWithCtx(expr.Body, expr.ReturnType, lamCtx)
+		return expr
+	case IROkCall:
+		return populateOkExpanded(expr)
+	case IRErrorCall:
+		return populateErrorExpanded(expr)
+	case IRSomeCall:
+		expr.ExpandedValues = []IRExpr{expr.Value, IRBoolLit{Value: true}}
+		return expr
+	case IRNoneExpr:
+		if ot, ok := expr.Type.(IROptionType); ok {
+			expr.ExpandedValues = []IRExpr{irZeroExpr(ot.Inner), IRBoolLit{Value: false}}
+		}
+		return expr
+	default:
+		return expandCallArgs(e)
+	}
+}
+
+// resolveMatchBindings rewrites match arm binding Sources to actual Go
+// variable names from the split map. Also marks unused split names as "_"
+// so the Go multi-assign uses blank identifiers — no `_ = x` suppress needed.
+func resolveMatchBindings(m *IRMatch, ctx *expandCtx) {
+	subject := ""
+	if ident, ok := m.Subject.(IRIdent); ok {
+		subject = ident.GoName
+	}
+	names, ok := ctx.splits[subject]
+	if !ok {
+		return
+	}
+
+	used := make([]bool, len(names))
+
+	for i := range m.Arms {
+		switch p := m.Arms[i].Pattern.(type) {
+		case IRResultOkPattern:
+			if p.Binding != nil && len(names) >= 1 {
+				p.Binding.Source = names[0]
+				used[0] = true
+				m.Arms[i].Pattern = p
+			}
+		case IRResultErrorPattern:
+			if p.Binding != nil {
+				idx := len(names) - 1
+				p.Binding.Source = names[idx]
+				used[idx] = true
+				m.Arms[i].Pattern = p
+			}
+		case IROptionSomePattern:
+			if p.Binding != nil && len(names) >= 1 {
+				p.Binding.Source = names[0]
+				used[0] = true
+				m.Arms[i].Pattern = p
+			}
+		}
+	}
+
+	// Replace unused split names with "_" so the let assignment discards them.
+	for i, u := range used {
+		if !u {
+			names[i] = "_"
+		}
+	}
+	ctx.splits[subject] = names
+	ctx.matchResolved[subject] = true
+}
+
+// markUnusedSplits scans the block's stmts for split variables that were
+// never referenced by a subsequent match (resolveMatchBindings already
+// handled matched ones). Any split name that still appears as a real
+// identifier (not "_") but is never used in the block → mark as "_".
+func markUnusedSplits(stmts []IRStmt, tailExpr IRExpr, ctx *expandCtx) {
+	refs := make(map[string]bool)
+	for _, s := range stmts {
+		collectStmtRefs(s, refs)
+	}
+	collectExprRefs(tailExpr, refs)
+	// For each split NOT already resolved by a match, blank unreferenced names.
+	for key, names := range ctx.splits {
+		if ctx.matchResolved[key] {
+			continue
+		}
+		for i, name := range names {
+			if name != "_" && !refs[name] {
+				names[i] = "_"
+			}
+		}
+	}
+}
+
+func collectStmtRefs(s IRStmt, refs map[string]bool) {
+	switch stmt := s.(type) {
+	case IRExprStmt:
+		collectExprRefs(stmt.Expr, refs)
+	case IRLetStmt:
+		// The let's own SplitNames are declarations, not references.
+		// But the value expression may reference other split vars.
+		collectExprRefs(stmt.Value, refs)
+	case IRTryLetStmt:
+		collectExprRefs(stmt.CallExpr, refs)
+	}
+}
+
+func collectExprRefs(e IRExpr, refs map[string]bool) {
+	if e == nil { return }
+	switch expr := e.(type) {
+	case IRIdent:
+		refs[expr.GoName] = true
+	case IRFnCall:
+		for _, a := range expr.Args { collectExprRefs(a, refs) }
+	case IRMethodCall:
+		collectExprRefs(expr.Receiver, refs)
+		for _, a := range expr.Args { collectExprRefs(a, refs) }
+	case IRFieldAccess:
+		collectExprRefs(expr.Expr, refs)
+	case IRBlock:
+		for _, s := range expr.Stmts { collectStmtRefs(s, refs) }
+		collectExprRefs(expr.Expr, refs)
+	case IRMatch:
+		collectExprRefs(expr.Subject, refs)
+		for _, arm := range expr.Arms { collectExprRefs(arm.Body, refs) }
+	case IRIfExpr:
+		collectExprRefs(expr.Cond, refs)
+		collectExprRefs(expr.Then, refs)
+		collectExprRefs(expr.Else, refs)
+	case IRBinaryExpr:
+		collectExprRefs(expr.Left, refs)
+		collectExprRefs(expr.Right, refs)
+	case IRStringInterp:
+		for _, a := range expr.Args { collectExprRefs(a, refs) }
+	case IRLambda:
+		collectExprRefs(expr.Body, refs)
+	case IRIndexAccess:
+		collectExprRefs(expr.Expr, refs)
+		collectExprRefs(expr.Index, refs)
+	}
+}
+
+func populateOkExpanded(expr IROkCall) IROkCall {
+	if rt, ok := expr.Type.(IRResultType); ok {
+		if isUnitType(rt.Ok) {
+			expr.ExpandedValues = []IRExpr{IRIdent{GoName: "nil"}}
+		} else {
+			expr.ExpandedValues = []IRExpr{expr.Value, IRIdent{GoName: "nil"}}
+		}
+	}
+	return expr
+}
+
+func populateErrorExpanded(expr IRErrorCall) IRErrorCall {
+	if rt, ok := expr.Type.(IRResultType); ok {
+		if isUnitType(rt.Ok) {
+			expr.ExpandedValues = []IRExpr{expr.Value}
+		} else {
+			expr.ExpandedValues = []IRExpr{irZeroExpr(rt.Ok), expr.Value}
+		}
+	}
+	return expr
+}
+
+func expandStmtWithCtx(s IRStmt, ctx *expandCtx) IRStmt {
+	switch stmt := s.(type) {
+	case IRLetStmt:
+		if isMultiReturnType(stmt.Value.irType()) || isGoMultiReturn(stmt.Value) {
+			stmt = expandLetToMultiLet(stmt)
+			if len(stmt.SplitNames) > 0 {
+				ctx.splits[stmt.GoName] = stmt.SplitNames
+			}
+			return stmt
+		}
+		stmt.Value = expandCallArgs(stmt.Value)
+		return stmt
+	case IRTryLetStmt:
+		return expandTryLetStmt(stmt, ctx)
+	case IRExprStmt:
+		stmt.Expr = expandCallArgs(stmt.Expr)
+		return stmt
+	default:
+		return s
+	}
+}
+
+func expandTryLetStmt(stmt IRTryLetStmt, ctx *expandCtx) IRTryLetStmt {
+	// Expand call args inside the try expression (e.g. NewTodo(0, "", None, None)?)
+	stmt.CallExpr = expandCallArgs(stmt.CallExpr)
+	n := ctx.nextCounter()
+
+	errorOnly := false
+	if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
+		errorOnly = isUnitType(rt.Ok)
+	}
+
+	if errorOnly {
+		errName := fmt.Sprintf("__err%d", n)
+		stmt.SplitNames = []string{errName}
+		stmt.ValueName = ""
+
+		// Propagate: return type determines shape
+		if rt, ok := stmt.ReturnType.(IRResultType); ok {
+			if isUnitType(rt.Ok) {
+				stmt.PropagateValues = []IRExpr{IRIdent{GoName: errName}}
+			} else {
+				stmt.PropagateValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
+			}
+		} else {
+			// Non-Result return (panic path)
+			stmt.PropagateValues = nil
+		}
+	} else {
+		valName := fmt.Sprintf("__val%d", n)
+		errName := fmt.Sprintf("__err%d", n)
+		if stmt.GoName == "_" {
+			valName = "_"
+		}
+		stmt.SplitNames = []string{valName, errName}
+		stmt.ValueName = valName
+
+		if rt, ok := stmt.ReturnType.(IRResultType); ok {
+			if isUnitType(rt.Ok) {
+				stmt.PropagateValues = []IRExpr{IRIdent{GoName: errName}}
+			} else {
+				stmt.PropagateValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
+			}
+		} else {
+			stmt.PropagateValues = nil
+		}
+	}
+
+	return stmt
+}
+
+func expandLetToMultiLet(stmt IRLetStmt) IRLetStmt {
+	switch stmt.Value.irType().(type) {
+	case IRResultType:
+		rt := stmt.Value.irType().(IRResultType)
+		if isUnitType(rt.Ok) {
+			stmt.SplitNames = []string{stmt.GoName}
+		} else {
+			stmt.SplitNames = []string{stmt.GoName, fmt.Sprintf("%s_err", stmt.GoName)}
+		}
+	case IROptionType:
+		stmt.SplitNames = []string{stmt.GoName, fmt.Sprintf("%s_ok", stmt.GoName)}
+	}
+	return stmt
+}
+
+// expandCallArgs recursively walks an expression and flattens
+// Ok/Error/Some/None in ALL nested call argument lists.
+func expandCallArgs(e IRExpr) IRExpr {
+	switch expr := e.(type) {
+	case IRFnCall:
+		for i := range expr.Args {
+			expr.Args[i] = expandCallArgs(expr.Args[i])
+		}
+		expr.Args = flattenArgs(expr.Args)
+		return expr
+	case IRMethodCall:
+		for i := range expr.Args {
+			expr.Args[i] = expandCallArgs(expr.Args[i])
+		}
+		expr.Args = flattenArgs(expr.Args)
+		return expr
+	}
+	return e
+}
+
+func flattenArgs(args []IRExpr) []IRExpr {
+	var out []IRExpr
+	for _, a := range args {
+		switch expr := a.(type) {
+		case IROkCall:
+			if rt, ok := expr.Type.(IRResultType); ok {
+				if isUnitType(rt.Ok) {
+					out = append(out, IRIdent{GoName: "nil"})
+				} else {
+					out = append(out, expr.Value, IRIdent{GoName: "nil"})
+				}
+			} else {
+				out = append(out, a)
+			}
+		case IRErrorCall:
+			if rt, ok := expr.Type.(IRResultType); ok {
+				if isUnitType(rt.Ok) {
+					out = append(out, expr.Value)
+				} else {
+					out = append(out, irZeroExpr(rt.Ok), expr.Value)
+				}
+			} else {
+				out = append(out, a)
+			}
+		case IRSomeCall:
+			out = append(out, expr.Value, IRBoolLit{Value: true})
+		case IRNoneExpr:
+			if ot, ok := expr.Type.(IROptionType); ok {
+				out = append(out, irZeroExpr(ot.Inner), IRBoolLit{Value: false})
+			} else {
+				out = append(out, a)
+			}
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// irZeroExpr returns an IR expression representing the Go zero value for a type.
+func irZeroExpr(t IRType) IRExpr {
+	switch tt := t.(type) {
+	case IRNamedType:
+		switch tt.GoName {
+		case "int", "float64", "byte":
+			return IRIntLit{Value: 0}
+		case "string":
+			return IRStringLit{Value: ""}
+		case "bool":
+			return IRBoolLit{Value: false}
+		case "struct{}":
+			return IRIdent{GoName: "struct{}{}"}
+		}
+		return IRIdent{GoName: tt.GoName + "{}"}
+	case IRPointerType, IRListType, IRMapType, IRInterfaceType:
+		return IRIdent{GoName: "nil"}
+	}
+	return IRIdent{GoName: "nil"}
 }

@@ -282,27 +282,33 @@ type IRFieldValue struct {
 	Source SourceInfo // Name = original Arca field name
 }
 
-// Builtin constructors
+// Builtin constructors. The ExpandedValues field is populated by the
+// expandResultOption post-pass so emit can mechanically output native
+// Go multi-return without knowing about Result/Option semantics.
 type IROkCall struct {
-	Value    IRExpr
-	TypeArgs string // "[User, error]"
-	Type     IRType
+	Value          IRExpr
+	TypeArgs       string   // "[User, error]"
+	Type           IRType
+	ExpandedValues []IRExpr // e.g. [val, nil] — populated by post-pass
 }
 
 type IRErrorCall struct {
-	Value    IRExpr
-	TypeArgs string
-	Type     IRType
+	Value          IRExpr
+	TypeArgs       string
+	Type           IRType
+	ExpandedValues []IRExpr // e.g. [zero, err] — populated by post-pass
 }
 
 type IRSomeCall struct {
-	Value IRExpr
-	Type  IRType
+	Value          IRExpr
+	Type           IRType
+	ExpandedValues []IRExpr // e.g. [val, true] — populated by post-pass
 }
 
 type IRNoneExpr struct {
-	TypeArg string // "[string]" etc.
-	Type    IRType
+	TypeArg        string // "[string]" etc.
+	Type           IRType
+	ExpandedValues []IRExpr // e.g. [zero, false] — populated by post-pass
 }
 
 // Lambda
@@ -391,6 +397,10 @@ type IRMatchPattern interface {
 type IRResultOkPattern struct{ Binding *IRBinding }
 type IRResultErrorPattern struct{ Binding *IRBinding }
 type IROptionSomePattern struct{ Binding *IRBinding }
+
+func (p IRResultOkPattern) GetBinding() *IRBinding    { return p.Binding }
+func (p IRResultErrorPattern) GetBinding() *IRBinding  { return p.Binding }
+func (p IROptionSomePattern) GetBinding() *IRBinding   { return p.Binding }
 type IROptionNonePattern struct{}
 type IREnumPattern struct{ GoValue string }
 type IRSumTypePattern struct {
@@ -449,17 +459,23 @@ type IRStmt interface {
 }
 
 type IRLetStmt struct {
-	GoName string
-	Value  IRExpr
-	Type   IRType
-	Pos    Pos // source position of the `let` keyword, used for diagnostics
+	GoName     string
+	Value      IRExpr
+	Type       IRType
+	Pos        Pos      // source position of the `let` keyword, used for diagnostics
+	SplitNames []string // for multi-return calls: ["r", "r_err"] — populated by post-pass
 }
 
-// Try let: let x = expr? — error propagation
+// Try let: let x = expr? — error propagation.
+// SplitNames/PropagateValues/ValueName are populated by the expandResultOption
+// post-pass so emit can mechanically output the try pattern.
 type IRTryLetStmt struct {
-	GoName     string // "_" for discard
-	CallExpr   IRExpr
-	ReturnType IRType // enclosing function's return type, for Err_ type args
+	GoName          string   // "_" for discard
+	CallExpr        IRExpr
+	ReturnType      IRType   // enclosing function's return type
+	SplitNames      []string // ["__val1", "__err1"] — multi-receive names
+	PropagateValues []IRExpr // error return values: [zero, IRIdent{__err1}]
+	ValueName       string   // which split name holds the unwrapped value
 }
 
 type IRExprStmt struct {

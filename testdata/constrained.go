@@ -66,30 +66,16 @@ func (v User) ArcaValidate() error {
 	return err
 }
 
-func createUser() Result_[User, error] {
-	__try_val1, __try_err1 := NewUser(1, "Alice", 30)
-	if __try_err1 != nil {
-		return Err_[User, error](__try_err1)
+func createUser() (User, error) {
+	__val1, __err1 := NewUser(1, "Alice", 30)
+	if __err1 != nil {
+		return User{}, __err1
 	}
-	user := __try_val1
-	return Ok_[User, error](user)
+	user := __val1
+	return user, nil
 }
 
 func main() {
-	result := createUser()
+	result, _ := createUser()
 	fmt.Println(result)
-}
-
-type Result_[T any, E any] struct {
-	Value T
-	Err   E
-	IsOk  bool
-}
-
-func Ok_[T any, E any](v T) Result_[T, E] {
-	return Result_[T, E]{Value: v, IsOk: true}
-}
-
-func Err_[T any, E any](e E) Result_[T, E] {
-	return Result_[T, E]{Err: e}
 }

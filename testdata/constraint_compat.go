@@ -43,10 +43,10 @@ func greet(age Age) string {
 }
 
 func main() {
-	__try_val1, __try_err1 := NewAdultAge(25)
-	if __try_err1 != nil {
-		panic(__try_err1)
+	__val1, __err1 := NewAdultAge(25)
+	if __err1 != nil {
+		panic(__err1)
 	}
-	adult := __try_val1
+	adult := __val1
 	fmt.Println(greet(Age(adult)))
 }

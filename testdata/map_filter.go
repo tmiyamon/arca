@@ -9,9 +9,15 @@ func nums() []int {
 }
 
 func main() {
-	doubled := Map_(nums(), func(x int) int { return x * 2 })
-	positives := Filter_(nums(), func(x int) bool { return x > 0 })
-	sum := Fold_(nums(), 0, func(acc int, x int) int { return acc + x })
+	doubled := Map_(nums(), func(x int) int {
+		return x * 2
+	})
+	positives := Filter_(nums(), func(x int) bool {
+		return x > 0
+	})
+	sum := Fold_(nums(), 0, func(acc int, x int) int {
+		return acc + x
+	})
 	fmt.Println(doubled)
 	fmt.Println(positives)
 	fmt.Println(sum)
