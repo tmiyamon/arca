@@ -8,8 +8,9 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ## 2026-04-12
 
-- [Merge validate into lower](decisions/transpiler.md#2026-04-12-merge-validate-into-lower) — Delete validate.go, move structural checks (type existence, arg/field count, match exhaustiveness) into lower. Pipeline becomes Parse → Lower → Emit.
+- [Symmetric boundary conversion (idea)](decisions/ideas.md#2026-04-12-symmetric-boundary-conversion--eliminate-synthetic-types-idea) — Make Go↔Arca type conversion bidirectional. Result/Option exist in IR only; generated Go uses native `(T, error)`, `error`, `(T, bool)`. Eliminates all synthetic types (`Result_`, `Option_`, `Ok_`, `Err_`). Blocked on traits (Error trait).
 - [Go FFI nullable/pointer ambiguity (idea)](decisions/ideas.md#2026-04-12-go-ffi-nullablepointer-ambiguity-and-the-stdlib-boundary-idea) — Compiler can't auto-infer Go's nullable/pointer intent. Safe APIs go in stdlib (human-written wrappers); Go FFI stays as-is. Error representation: `Result[Unit, Error]` alias (leaning) vs `Option[Error]` (deferred). Blocked on traits.
+- [Merge validate into lower](decisions/transpiler.md#2026-04-12-merge-validate-into-lower) — Delete validate.go, move structural checks (type existence, arg/field count, match exhaustiveness) into lower. Pipeline becomes Parse → Lower → Emit.
 - [unify is the single type-check path](decisions/transpiler.md#2026-04-12-unify-is-the-single-type-check-path) — delete `irTypesMatch`, fold constraint compatibility into `Lowerer.unify`, `checkTypeHint` routes hints through HM. Fixes a silent `IRMapType` gap caught by Phase-1 fallback flip.
 - [Lowerer.unify always reports](decisions/transpiler.md#2026-04-12-lowererunify-always-reports-substitution-only-uses-linferunify) — the silent flag is gone; type checks go through `l.unify(a, b, pos)`, raw substitution through `l.infer.unify(a, b)`. 2 dead unify sites deleted, 5 demoted to raw substitution.
 - [if/else branch mismatch reported](decisions/transpiler.md#2026-04-12-lowererunify-always-reports-substitution-only-uses-linferunify) — covered by the unify cleanup; if/else promoted to reporting.

@@ -4,6 +4,47 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-12: Symmetric boundary conversion — eliminate synthetic types (idea)
+
+**Core principle:** The Go↔Arca type conversion should be symmetric. Currently Arca wraps Go multi-return into Result/Option at call sites (Go→Arca), but doesn't unwrap back at function boundaries (Arca→Go). Making the conversion bidirectional eliminates the need for synthetic runtime types (`Result_`, `Option_`, `Ok_`, `Err_`, `Some_`, `None_`) in generated Go.
+
+**Symmetric mapping:**
+
+| Go | Arca (IR) | Go (emit) |
+|---|---|---|
+| `(T, error)` | `Result[T, Error]` | `(T, error)` |
+| `error` | `Result[Unit, Error]` | `error` |
+| `(T, bool)` | `Option[T]` | `(T, bool)` |
+
+- **Call site (Go→Arca):** Go multi-return is wrapped into Result/Option. Already implemented.
+- **Function boundary (Arca→Go):** Result/Option is unwrapped back to Go multi-return / error / (T, bool). **New.**
+
+**Why synthetic types disappear:**
+- `Result_[T, E]` struct → replaced by native Go `(T, error)` multi-return
+- `Option_[T]` struct → replaced by native Go `(T, bool)` multi-return
+- `Ok_() / Err_() / Some_() / None_()` → replaced by native tuple construction
+- `IsOk / Valid` discriminator flags → replaced by `err == nil` / `bool` check (Go's own conventions)
+- Stored Result/Option values → degrade to Arca's existing `IRTupleType` emit (`struct{ First T; Second E }`), no separate synthetic type needed
+
+**What this achieves:**
+- Generated Go is **idiomatic Go**. No alien types, no Scala-style synthetic class problem.
+- Type safety lives entirely in the **compiler (IR + lowerer)**, not in generated runtime structs.
+- Go tools (go vet, godoc, debuggers) work naturally on output.
+- `fun handler() -> error` just works — boundary auto-unwraps `Result[Unit, Error]` to Go `error`.
+- `?` emits as native `if err != nil { return ..., err }` — standard Go error handling.
+
+**Requires:**
+- Error trait (so internal Arca uses `Error` not Go's nullable `error`)
+- Trait system (minimal: just `trait Error`)
+- emit.go rewrite for Result/Option → native Go patterns
+- All testdata snapshot regeneration
+
+**Prior art:** Roc's platform model (pure immutable app, mutable host, typed boundary). Arca's structure is nearly identical — immutable app, Go as mutable host, stdlib as boundary. The difference is Arca rides Go's existing ecosystem.
+
+**Status:** Idea. Direction is settled. Blocked on trait system (minimal Error trait). Estimated scope: 4-5 days.
+
+---
+
 ## 2026-04-12: Go FFI nullable/pointer ambiguity and the stdlib boundary (idea)
 
 **Context:** Arca wraps Go's `(T, error)` as `Result[T, error]` and `error` alone as `Result[Unit, error]`. Writing `fun handler() -> error` clashes because the body returns `Result[Unit, error]`. This friction led to a discussion about how to model Go's `error` in Arca's type system, which in turn exposed a deeper problem: **Go's nullable/pointer semantics are implicit and ambiguous, and Arca can't auto-infer intent from Go type signatures alone.**
