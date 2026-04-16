@@ -6,6 +6,14 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-15
+
+- [FFI has multiple boundaries, one per danger](decisions/ffi.md#2026-04-15-ffi-has-multiple-boundaries-one-mechanism-per-danger) — Per-danger boundaries, not a single universal mechanism. Rejects `@adapter`, public-API purity checks, separate `opaque` keyword, effect system, linear/typestate. Consistent with Rust per-call markers, Kotlin pragmatism, serde/Codable derive.
+- [Phase ordering revised](decisions/foundations.md#2026-04-15-goal-framing--best-practical-backend-language) — Layer 1 completion before DB schema projection (previously Phase 1 head).
+- [FFI design principle](decisions/foundations.md#2026-04-15-goal-framing--best-practical-backend-language) — "Arca makes guarantees. FFI is allowed only where guarantees can be preserved." Single rule mechanically decides nil/panic/`any`/mutation handling.
+- [Two-layer architecture](decisions/foundations.md#2026-04-15-goal-framing--best-practical-backend-language) — Layer 1 (safety: nil/panic/any/mutation sealing) is prerequisite. Layer 2 (SSOT as derived) is byproduct. Layer 1 necessity comes from Layer 2's validity requirement, not from "safer than Go" pitch.
+- [Goal framing — "best practical backend language"](decisions/foundations.md#2026-04-15-goal-framing--best-practical-backend-language) — Goal is internal compass; SSOT and safety are consequences, not identity. Positioning is the combination no competitor offers simultaneously (Go ops + Rust-level types + SSOT byproduct + easy curve).
+
 ## 2026-04-12
 
 - [Symmetric boundary conversion (idea)](decisions/ideas.md#2026-04-12-symmetric-boundary-conversion--eliminate-synthetic-types-idea) — Make Go↔Arca type conversion bidirectional. Result/Option exist in IR only; generated Go uses native `(T, error)`, `error`, `(T, bool)`. Eliminates all synthetic types (`Result_`, `Option_`, `Ok_`, `Err_`). Blocked on traits (Error trait).

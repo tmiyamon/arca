@@ -1,7 +1,17 @@
 # Arca Design Decisions
 
-**Core philosophy: Type as Single Source of Truth.**
-Validation, serialization, schema, domain logic — all derived from the type definition.
+**Goal: be the most practical language for backend development.**
+
+This is the compass for every design decision. "Practical" is the judgment axis — not safety alone, not expressiveness alone, not deployment ergonomics alone, but the combination that lets a backend team ship correct, maintainable services with minimal friction.
+
+Two properties follow from the goal, not the other way around:
+
+- **Layer 1 — safety as prerequisite.** To stand on top of Go at all, Arca seals Go's root dangers (nil panic, typed nil, panic propagation, `interface{}` traps, zero-value surprise, unintended mutation). This is table stakes for any language that claims to improve on Go; it is not the differentiation.
+- **Layer 2 — Single Source of Truth as derived property.** Type definition + constrained types + backend focus yield validation, serialization, schema, domain logic as derivations of a single model. SSOT is a consequence of the design; it is not the stated goal.
+
+**Positioning.** "Practical" alone is not a pitch — every language claims it. Arca's distinctive position is the combination no competitor offers simultaneously: Go's operational characteristics (cold start, single binary, compile speed, ecosystem) + ML-level type expressiveness (ADT, HM inference, constrained types) + SSOT as byproduct + Kotlin-level learning curve. Competitors compromise on at least one axis; Arca targets the intersection.
+
+**FFI design principle (derived from the goal).** *Arca makes guarantees. FFI is only allowed to the extent that guarantees can be preserved across it.* This single rule mechanically decides Layer 1 questions: Go `*T` surfaces as `Option[T]`, Go panic becomes `Result`, `interface{}` requires safe cast, Go mutation is absorbed and released via Builder/Freeze. FFI has distinct boundaries for distinct dangers; no single universal wrapping mechanism is needed. See `decisions/ffi.md` 2026-04-15.
 
 This document records language design decisions, their rationale, and trade-offs.
 

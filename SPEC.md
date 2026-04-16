@@ -1,14 +1,19 @@
 # Arca Language Specification v0.2
 
-A statically typed language with ML-level type safety that compiles to Go.
+A statically typed language for backend development that compiles to Go.
 
 ## Design Principles
 
-- Type safety and correctness first
+**Goal: be the most practical language for backend development.** Other properties are consequences of pursuing this goal (see `DESIGN.md`).
+
+- **Layer 1 — safety prerequisite**: nil panic, typed nil, panic propagation, `interface{}` traps, zero-value surprise, unintended mutation are sealed at the FFI boundary. Required to stand on top of Go.
+- **Layer 2 — SSOT as derived property**: validation, serialization, schema, domain logic derive from a single model definition. Constrained types + ADT + backend focus yield this as a byproduct.
+- ML-level type safety and correctness (ADT, HM inference, constrained types)
 - Familiar syntax (Rust-influenced, common conventions)
 - Go ecosystem and runtime (single binary, fast startup, goroutines)
 - Immutable by default
 - Go types are opaque — Arca guarantees its own types, not Go's
+- FFI principle: *Arca makes guarantees. FFI is only allowed to the extent that guarantees can be preserved across it.*
 
 ## Syntax Summary
 

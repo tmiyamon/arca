@@ -4,6 +4,53 @@ Newest first within this topic.
 
 ---
 
+## 2026-04-15: FFI has multiple boundaries, one mechanism per danger
+
+**Context:** Earlier discussion oversimplified the FFI boundary as "the constructor of an Arca type". That is only true for one class of danger (structural Go data becoming an Arca-typed value). Other Go dangers — panic, `interface{}`/`any`, `*T` nil, external mutation, goroutines — have their own distinct boundary mechanisms. Conflating them hides the design work.
+
+**Decision: recognize distinct boundaries, each addressing a specific danger.**
+
+| Danger (Go side) | Boundary (Arca side) | Mechanism |
+|---|---|---|
+| Structural data → Arca value | **Constructor** | Only entry for Arca typed values. Opaque + immutable + no struct literal forbid any other path. |
+| `(T, error)` / `error` / `(T, bool)` | Call site | Auto-wrap to `Result` / `Option` via `goFuncReturnType` (implemented 2026-04-05). |
+| Go panic | Call site | Auto `recover` around FFI call, convert to `Result[T, PanicError]`. *(not yet designed)* |
+| `interface{}` / `any` | Safe cast operator | `cast[T](v: Any) -> Option[T]`. Direct assignment from `any` to a typed Arca slot is not allowed. *(not yet designed)* |
+| Go mutation of held reference | Builder / Freeze | Compiler-generated Builder absorbs mutation; Freeze calls the constructor and severs the Go reference. *(design accepted; implementation Phase 2)* |
+| `*T` nullability | Function signature | Go `*T` returns surface in Arca as `Option[T]`. Non-nullable Go handles (`*sql.DB`) require an explicit declaration. *(partially in place; systematic rule not yet decided)* |
+| Goroutine shared access | — | Open. Concurrency design not yet undertaken. |
+
+**Design principle behind the table:** *Arca makes guarantees. FFI is only allowed to the extent that guarantees can be preserved across it.* Each row of the table is a specific guarantee Arca promises and the matching mechanism that keeps the guarantee intact when Go values cross the boundary.
+
+**What this replaces.** Earlier proposals (`@adapter` package annotations, public-API purity checks, explicit opaque-type layer, effect system) are unnecessary. Each was trying to be a universal boundary mechanism; the correct view is per-danger boundaries.
+
+**What this is consistent with.**
+
+- Rust's per-call `unsafe` marker and `-sys` / safe-wrapper convention (no single language-wide boundary; different dangers use different markers).
+- Kotlin's pragmatic Java interop (Java types visible, Kotlin-typed values get Kotlin guarantees; no artificial wrapping of the ecosystem).
+- Swift Codable / Rust serde (compiler-synthesized derive converts external shape to typed values; the constructor is the validating step, not a separate type).
+
+**Explicit non-goals.**
+
+- No `@adapter` package annotation.
+- No public-API purity check ("Go types can't appear in public signatures of Go-importing packages"). Go types in signatures are fine; Arca types still get their guarantees.
+- No `opaque` keyword separate from existing type semantics. Arca's constrained types are already opaque.
+- No effect system at this stage. Layer 1 boundaries don't need effects; concurrency may revisit this.
+- No typestate / linear / rank-N polymorphism for Builder. Opaque + immutable + construction-only entry is sufficient; Builder is compile-time synthesized code, not a user-visible type.
+
+**Status:** Design direction accepted. Implementation mapping to Phase 1:
+
+1. Systematic rule for Go `*T` → `Option[T]`.
+2. Panic recovery around FFI calls.
+3. Safe cast operator for `any`.
+4. Rewrite `examples/todo` to demonstrate that these rules together seal the dangers that leak in the current version.
+
+DB schema projection and other Layer 2 work come after this.
+
+**Reference:** See `decisions/foundations.md` 2026-04-15 for the two-layer framing this derives from.
+
+---
+
 ## 2026-04-05: Go FFI return type → Result auto-wrapping
 
 **Context:** Go FFI calls returning `error` or `(T, error)` need to be wrapped in `Result[Unit, error]` or `Result[T, error]`. Current approach uses ad-hoc detection (`isErrorOnlyCall`, `isConstrainedConstructor`) in `lowerLetStmt` — prone to missed cases (e.g. method calls on let-bound variables).
