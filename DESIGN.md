@@ -107,11 +107,14 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Qualified types**: `http.ResponseWriter`, `*http.Request` are passed through as-is
 - **Return type mapping** (mechanical, in `goFuncReturnType`):
   - `(T, error)` → `Result[T, error]` (GoMultiReturn)
+  - `(*T, error)` → `Result[Option[*T], error]` (GoMultiReturn)
   - `(T, bool)` → `Option[T]` (GoMultiReturn)
   - `(error)` → `Result[Unit, error]` (GoMultiReturn)
+  - `*T` → `Option[*T]`
   - `(T)` → `T`
   - `(T1, T2, ...)` → Tuple (GoMultiReturn)
 - **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection.
+- **Pointer Option auto-wrap**: Go `*T` returns are wrapped in `IROptionType` at the IR level. Single `*T` → `Option[*T]`, `(*T, error)` → `Result[Option[*T], Error]`. The `?` operator double-unwraps with a nil check. Implements the FFI design principle: Go pointer nullability sealed at the boundary.
 - **Pointer types**: `*Type` syntax exists solely for Go FFI interop
 - **Project structure**: `go.mod` at project root, managed by user with `go get`. `build/go.mod` copied from parent.
 
@@ -142,9 +145,14 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 ## Error Propagation
 
-- `?` syntax is **provisional**
-- Alternatives considered: `let!`, `try {}`, `for-yield`
-- Decision deferred — `?` works for now, final syntax TBD
+- `?` unwraps `Result`, propagating `Error` to the enclosing Result context
+- `?` on `Option[T]` performs a nil check and unwraps (returns `Error` on `None`)
+- `?` is only valid inside Result-returning functions or `try {}` blocks — compile error otherwise
+- `try { ... }` block expression creates a Result context where `?` can be used in non-Result functions
+  - Emitted as a Go IIFE: `func() (T, error) { ... }()`
+  - Final expression is auto-wrapped in `Ok`
+  - HM inference: fresh type var for Ok type, unified with final expression
+- `try` is not a keyword — only `try {` triggers recognition. `let try = 42` is valid
 - `?` has the downside that the error point is at end of line, easy to miss
 
 ## Prelude (Built-in Functions)

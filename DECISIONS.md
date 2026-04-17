@@ -6,6 +6,14 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-18
+
+- [Go `*T` → Option auto-wrap](decisions/ffi.md#2026-04-18-go-t--option-auto-wrap) — Go pointer returns automatically wrapped in `IROptionType`. `*T` → `Option[*T]`, `(*T, error)` → `Result[Option[*T], Error]`. `?` double-unwraps with nil check. Implements systematic `*T` nullability rule from FFI boundary table.
+- [try {} block](decisions/transpiler.md#2026-04-18-try-block) — `try { ... }` block expression creates a Result context for `?` in non-Result functions. Emitted as Go IIFE. HM inference via fresh type var + unify. `try` is not a keyword; only `try {` is recognized.
+- [? compile error outside Result context](decisions/transpiler.md#2026-04-18--compile-error-outside-result-context) — `?` outside Result-returning functions and try blocks is now a compile error. Previously generated panic.
+- [w.Unreachable()](decisions/transpiler.md#2026-04-18-wunreachable) — Exhaustive match Go compiler stubs separated from intentional panic via `w.Unreachable()`. Distinguishes "structurally impossible" from "runtime assertion".
+- [IR naming: ErrorReturnValues + NilCheckReturnValues](decisions/transpiler.md#2026-04-18-ir-naming-errorreturnvalues--nilcheckreturnvalues) — `PropagateValues` renamed to `ErrorReturnValues`. Added `NilCheckReturnValues` for Option `?` unwrap paths.
+
 ## 2026-04-15
 
 - [FFI has multiple boundaries, one per danger](decisions/ffi.md#2026-04-15-ffi-has-multiple-boundaries-one-mechanism-per-danger) — Per-danger boundaries, not a single universal mechanism. Rejects `@adapter`, public-API purity checks, separate `opaque` keyword, effect system, linear/typestate. Consistent with Rust per-call markers, Kotlin pragmatism, serde/Codable derive.

@@ -536,10 +536,11 @@ func TestValidateConstraintCompatibility(t *testing.T) {
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
 fun greet(age: Age) -> String { "hello" }
-fun main() {
+fun test() -> Result[String, error] {
   let adult = AdultAge(25)?
-  greet(adult)
+  Ok(greet(adult))
 }
+fun main() { let _ = test() }
 `)
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors for AdultAge->Age, got: %v", errs)
@@ -550,10 +551,11 @@ fun main() {
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
 fun drink(age: AdultAge) -> String { "cheers" }
-fun main() {
+fun test() -> Result[String, error] {
   let age = Age(10)?
-  drink(age)
+  Ok(drink(age))
 }
+fun main() { let _ = test() }
 `)
 	if len(errs) == 0 {
 		t.Fatal("expected error for Age->AdultAge")
@@ -571,6 +573,21 @@ fun main() {
 `)
 	if len(errs) == 0 {
 		t.Fatal("expected error for OrderId->UserId")
+	}
+}
+
+func TestTryOutsideResultContext(t *testing.T) {
+	t.Parallel()
+	// ? in non-Result function without try block is a compile error
+	errs := validateSource(`
+import go "strconv"
+fun main() {
+  let n = strconv.Atoi("42")?
+  println(n)
+}
+`)
+	if !hasErrorCode(errs, ErrTryOutsideResultContext) {
+		t.Errorf("expected ErrTryOutsideResultContext, got: %v", errs)
 	}
 }
 

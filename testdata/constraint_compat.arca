@@ -8,6 +8,12 @@ fun greet(age: Age) -> String {
 }
 
 fun main() {
-  let adult = AdultAge(25)?
-  fmt.Println(greet(adult))
+  let r = try {
+    let adult = AdultAge(25)?
+    greet(adult)
+  }
+  match r {
+    Ok(msg) => fmt.Println(msg)
+    Error(err) => fmt.Println(err)
+  }
 }

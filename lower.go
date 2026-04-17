@@ -20,10 +20,11 @@ type Lowerer struct {
 	goPackages    map[string]*GoPackage // short name → Go package info (carries Pos/SideEffect/Used)
 
 	// Per-function state
-	currentRetType  Type
-	currentReceiver string
-	currentTypeName string
-	matchHint       IRType // type hint for match arm bodies
+	currentRetType    Type
+	currentIRRetType  IRType // overrides currentRetType when set (for try blocks with type vars)
+	currentReceiver   string
+	currentTypeName   string
+	matchHint         IRType // type hint for match arm bodies
 
 	// Collected during lowering
 	imports      []IRImport
@@ -337,6 +338,14 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 	case IRLambda:
 		expr.Body = l.resolveExprTypes(expr.Body)
 		return expr
+	case IRTryBlock:
+		for i, stmt := range expr.Stmts {
+			expr.Stmts[i] = l.resolveStmtTypes(stmt)
+		}
+		expr.Expr = l.resolveExprTypes(expr.Expr)
+		expr.OkType = l.resolveDeep(expr.OkType)
+		expr.ErrType = l.resolveDeep(expr.ErrType)
+		return expr
 	default:
 		return e
 	}
@@ -378,6 +387,9 @@ func (l *Lowerer) resolveStmtTypes(s IRStmt) IRStmt {
 		return stmt
 	case IRTryLetStmt:
 		stmt.CallExpr = l.resolveExprTypes(stmt.CallExpr)
+		if stmt.ReturnType != nil {
+			stmt.ReturnType = l.resolveDeep(stmt.ReturnType)
+		}
 		// Same unresolved-type-var check as IRLetStmt: `let x = f()?` where
 		// f's generic T can't be inferred would otherwise hand `x` to the
 		// rest of the function with an unresolved type. Try always wraps a
@@ -1775,6 +1787,8 @@ func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 		return l.lowerConstructorCallHint(e, hint)
 	case Block:
 		return l.lowerBlockHint(e, hint)
+	case TryBlockExpr:
+		return l.lowerTryBlock(e)
 	case MatchExpr:
 		return l.lowerMatchExprHint(e, hint)
 	case Lambda:
@@ -2250,12 +2264,12 @@ func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRTyp
 				Type: IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRNamedType{GoName: "error"}},
 			}
 		}
-		return goReturnInfo{Type: toIR(info.Results[0].Type)}
+		return goReturnInfo{Type: wrapPointerInOption(toIR(info.Results[0].Type))}
 	}
 	if len(info.Results) == 2 {
 		if info.Results[1].Type == "error" {
 			return goReturnInfo{
-				Type:          IRResultType{Ok: toIR(info.Results[0].Type), Err: IRNamedType{GoName: "error"}},
+				Type:          IRResultType{Ok: wrapPointerInOption(toIR(info.Results[0].Type)), Err: IRNamedType{GoName: "error"}},
 				GoMultiReturn: true,
 			}
 		}
@@ -2269,7 +2283,7 @@ func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRTyp
 	// 2+ non-special or 3+ returns → Tuple
 	elems := make([]IRType, len(info.Results))
 	for i, r := range info.Results {
-		elems[i] = toIR(r.Type)
+		elems[i] = wrapPointerInOption(toIR(r.Type))
 	}
 	return goReturnInfo{
 		Type:          IRTupleType{Elements: elems},
@@ -2293,6 +2307,15 @@ func (l *Lowerer) instantiateGeneric(info *FuncInfo) (vars map[string]IRType, pa
 	}
 	ret = l.goFuncReturnTypeWithVars(info, vars)
 	return
+}
+
+// wrapPointerInOption wraps IRPointerType in IROptionType for Go FFI returns.
+// *T → Option[*T] (IROptionType{Inner: IRPointerType{Inner: T}}).
+func wrapPointerInOption(t IRType) IRType {
+	if _, isPtr := t.(IRPointerType); isPtr {
+		return IROptionType{Inner: t}
+	}
+	return t
 }
 
 // goTypeToIRName converts a go/types type string to a short Go type name.
@@ -2978,6 +3001,46 @@ func (l *Lowerer) lowerBlockHint(b Block, hint IRType) IRExpr {
 	}
 }
 
+func (l *Lowerer) lowerTryBlock(tb TryBlockExpr) IRExpr {
+	prevRet := l.currentRetType
+	prevIRRet := l.currentIRRetType
+
+	// Fresh type var for Ok — will be unified with final expr type
+	okVar := l.freshTypeVar()
+	errType := IRNamedType{GoName: "error"}
+	l.currentIRRetType = IRResultType{Ok: okVar, Err: errType}
+	// currentRetType stays as-is (not Result); lowerTryLetStmt uses currentIRRetType
+
+	stmts := make([]IRStmt, 0, len(tb.Body.Stmts))
+	for _, s := range tb.Body.Stmts {
+		stmts = append(stmts, l.lowerStmt(s)...)
+	}
+
+	var expr IRExpr
+	okType := IRType(IRNamedType{GoName: "struct{}"})
+	if tb.Body.Expr != nil {
+		inner := l.lowerExpr(tb.Body.Expr)
+		if t := inner.irType(); t != nil {
+			l.unify(okVar, t, tb.Pos)
+			okType = l.resolveDeep(okVar)
+		}
+		// Wrap in IROkCall so expand populates ExpandedValues and emit uses returnLeaf
+		resultType := IRResultType{Ok: okType, Err: errType}
+		expr = IROkCall{Value: inner, Type: resultType}
+	}
+
+	l.currentRetType = prevRet
+	l.currentIRRetType = prevIRRet
+	l.builtins["result"] = true
+
+	return IRTryBlock{
+		Stmts:   stmts,
+		Expr:    expr,
+		OkType:  okType,
+		ErrType: errType,
+	}
+}
+
 func (l *Lowerer) lowerLambdaHint(lam Lambda, hint IRType) IRExpr {
 	return l.lowerLambda(lam)
 }
@@ -3235,10 +3298,14 @@ func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
 
 	goVarName := "_"
 	if s.Name != "_" {
-		// Try unwraps Result: the variable gets the Ok type
+		// Try unwraps Result: the variable gets the Ok type.
+		// If Ok is Option[*T] (from Go *T return), double-unwrap to *T.
 		var irType IRType
 		if rt, ok := loweredExpr.irType().(IRResultType); ok {
 			irType = rt.Ok
+			if optT, isOpt := irType.(IROptionType); isOpt {
+				irType = optT.Inner
+			}
 		}
 		goVarName = l.registerSymbol(SymbolRegInfo{
 			Name:     s.Name,
@@ -3250,11 +3317,23 @@ func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
 	}
 
 	var retType IRType
-	if l.currentRetType != nil {
+	if l.currentIRRetType != nil {
+		retType = l.currentIRRetType
+	} else if l.currentRetType != nil {
 		retType = l.lowerType(l.currentRetType)
 	}
-	if isIRResultType(retType) {
-		l.builtins["result"] = true
+	if !isIRResultType(retType) {
+		l.addCompileError(ErrTryOutsideResultContext, s.Pos, TryOutsideResultContextData{})
+		return []IRStmt{IRExprStmt{Expr: loweredExpr}}
+	}
+	l.builtins["result"] = true
+
+	// NilCheckReturnValues is populated by expandTryLetStmt when
+	// the call returns Result[Option[*T], Error].
+	if rt, ok := loweredExpr.irType().(IRResultType); ok {
+		if _, isOpt := rt.Ok.(IROptionType); isOpt {
+			l.builtins["fmt"] = true
+		}
 	}
 
 	return []IRStmt{IRTryLetStmt{
@@ -4219,6 +4298,18 @@ func expandWithCtx(e IRExpr, returnType IRType, ctx *expandCtx) IRExpr {
 		// variable was never matched and is unused in Go.
 		markUnusedSplits(expr.Stmts, expr.Expr, ctx)
 		return expr
+	case IRTryBlock:
+		// try { ... } is an IIFE — expand with its own counter scope
+		rbCtx := newExpandCtx()
+		rbRetType := IRResultType{Ok: expr.OkType, Err: expr.ErrType}
+		for i, s := range expr.Stmts {
+			expr.Stmts[i] = expandStmtWithCtx(s, rbCtx)
+		}
+		if expr.Expr != nil {
+			expr.Expr = expandWithCtx(expr.Expr, rbRetType, rbCtx)
+		}
+		markUnusedSplits(expr.Stmts, expr.Expr, rbCtx)
+		return expr
 	case IRMatch:
 		// Resolve match arm bindings using split info for the subject.
 		resolveMatchBindings(&expr, ctx)
@@ -4399,6 +4490,10 @@ func populateErrorExpanded(expr IRErrorCall) IRErrorCall {
 func expandStmtWithCtx(s IRStmt, ctx *expandCtx) IRStmt {
 	switch stmt := s.(type) {
 	case IRLetStmt:
+		// Expand try blocks inside let values (IIFE scope)
+		if _, isRB := stmt.Value.(IRTryBlock); isRB {
+			stmt.Value = expandWithCtx(stmt.Value, nil, ctx)
+		}
 		if isMultiReturnType(stmt.Value.irType()) || isGoMultiReturn(stmt.Value) {
 			stmt = expandLetToMultiLet(stmt)
 			if len(stmt.SplitNames) > 0 {
@@ -4436,13 +4531,13 @@ func expandTryLetStmt(stmt IRTryLetStmt, ctx *expandCtx) IRTryLetStmt {
 		// Propagate: return type determines shape
 		if rt, ok := stmt.ReturnType.(IRResultType); ok {
 			if isUnitType(rt.Ok) {
-				stmt.PropagateValues = []IRExpr{IRIdent{GoName: errName}}
+				stmt.ErrorReturnValues = []IRExpr{IRIdent{GoName: errName}}
 			} else {
-				stmt.PropagateValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
+				stmt.ErrorReturnValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
 			}
 		} else {
 			// Non-Result return (panic path)
-			stmt.PropagateValues = nil
+			stmt.ErrorReturnValues = nil
 		}
 	} else {
 		valName := fmt.Sprintf("__val%d", n)
@@ -4455,12 +4550,29 @@ func expandTryLetStmt(stmt IRTryLetStmt, ctx *expandCtx) IRTryLetStmt {
 
 		if rt, ok := stmt.ReturnType.(IRResultType); ok {
 			if isUnitType(rt.Ok) {
-				stmt.PropagateValues = []IRExpr{IRIdent{GoName: errName}}
+				stmt.ErrorReturnValues = []IRExpr{IRIdent{GoName: errName}}
 			} else {
-				stmt.PropagateValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
+				stmt.ErrorReturnValues = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
 			}
 		} else {
-			stmt.PropagateValues = nil
+			stmt.ErrorReturnValues = nil
+		}
+
+		// Nil check for pointer Option: (*T, error) where val==nil && err==nil
+		if callRT, ok := stmt.CallExpr.irType().(IRResultType); ok {
+			if _, isOpt := callRT.Ok.(IROptionType); isOpt && valName != "_" {
+				nilErr := IRFnCall{
+					Func: "fmt.Errorf",
+					Args: []IRExpr{IRStringLit{Value: "unexpected nil value"}},
+				}
+				if rt, ok := stmt.ReturnType.(IRResultType); ok {
+					if isUnitType(rt.Ok) {
+						stmt.NilCheckReturnValues = []IRExpr{nilErr}
+					} else {
+						stmt.NilCheckReturnValues = []IRExpr{irZeroExpr(rt.Ok), nilErr}
+					}
+				}
+			}
 		}
 	}
 

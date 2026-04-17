@@ -184,17 +184,35 @@ for i in 0..10 {
 }
 ```
 
-### Error Propagation (provisional)
+### Error Propagation
 
 ```
+// ? in Result-returning functions
 pub fun findUser(id: Int) -> Result[User, Error] {
   let row = db.query_row("SELECT ...", id)?
   let user = scan(row)?
   Ok(user)
 }
+
+// try {} block — creates a Result context for ? in non-Result functions
+fun main() {
+  let result = try {
+    let row = db.query_row("SELECT ...", 1)?
+    let user = scan(row)?
+    user
+  }
+  match result {
+    Ok(user) => println(user.name)
+    Error(err) => println("failed: ${err}")
+  }
+}
 ```
 
-> Note: The `?` syntax is provisional. Final error propagation syntax TBD.
+- `?` unwraps `Result`, propagating `Error` to the enclosing Result context
+- `?` on `Option[T]` (e.g. Go `*T` returns) performs a nil check and unwraps
+- `?` is only valid inside Result-returning functions or `try {}` blocks (compile error otherwise)
+- `try { ... }` is a block expression that returns `Result[T, Error]` where T is the type of the final expression
+- `try` is not a keyword — only `try {` is recognized as a try block. `let try = 42` is valid
 
 ### Visibility
 
@@ -347,9 +365,13 @@ let _ = db.Exec("INSERT ...")?   // discard success value, propagate error
 
 | Go return type | Arca type |
 |----------------|-----------|
-| (T, error) | Result[T, Error] |
-| (T, bool) | Option[T] |
+| `(T, error)` | `Result[T, Error]` |
+| `(*T, error)` | `Result[Option[*T], Error]` |
+| `(T, bool)` | `Option[T]` |
+| `*T` | `Option[*T]` |
 | Other multi-return | Tuple |
+
+Go pointer returns are automatically wrapped in `Option` to prevent nil panics. The `?` operator double-unwraps `Result[Option[*T], Error]` with a nil check.
 
 **Mutability boundary:**
 - Arca-defined types are fully immutable (language-guaranteed)

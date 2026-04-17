@@ -376,6 +376,8 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		return em.emitTupleLit(expr)
 	case IRRefExpr:
 		return "&" + em.emitExpr(expr.Expr)
+	case IRTryBlock:
+		return em.emitTryBlockExpr(expr)
 	default:
 		return "/* unsupported expr */"
 	}
@@ -636,6 +638,7 @@ func isControlFlowValue(e IRExpr) bool {
 	return false
 }
 
+
 // letStmtType returns the declared or inferred Go type for a let binding.
 // Prefers the explicit annotation when present; otherwise falls back to the
 // value's own IR type so control-flow values get a concrete var declaration.
@@ -671,7 +674,7 @@ func isUnitType(t IRType) bool {
 func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
 	w := em.w
 
-	// SplitNames, PropagateValues, and ValueName are pre-computed by
+	// SplitNames, ErrorReturnValues, and ValueName are pre-computed by
 	// the expandResultOption post-pass. Emit is mechanical.
 	names := strings.Join(stmt.SplitNames, ", ")
 	if len(stmt.SplitNames) == 1 {
@@ -681,24 +684,42 @@ func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
 	}
 
 	errName := stmt.SplitNames[len(stmt.SplitNames)-1]
-	if stmt.PropagateValues != nil {
-		w.If(fmt.Sprintf("%s != nil", errName), func() {
-			parts := make([]string, len(stmt.PropagateValues))
-			for i, v := range stmt.PropagateValues {
+	w.If(fmt.Sprintf("%s != nil", errName), func() {
+		parts := make([]string, len(stmt.ErrorReturnValues))
+		for i, v := range stmt.ErrorReturnValues {
+			parts[i] = em.emitExpr(v)
+		}
+		w.Return(strings.Join(parts, ", "))
+	})
+
+	// Nil check for pointer Option: (*T, error) where val==nil && err==nil
+	if len(stmt.NilCheckReturnValues) > 0 && stmt.ValueName != "" {
+		w.If(fmt.Sprintf("%s == nil", stmt.ValueName), func() {
+			parts := make([]string, len(stmt.NilCheckReturnValues))
+			for i, v := range stmt.NilCheckReturnValues {
 				parts[i] = em.emitExpr(v)
 			}
 			w.Return(strings.Join(parts, ", "))
-		})
-	} else {
-		// Non-Result enclosing function: panic on error
-		w.If(fmt.Sprintf("%s != nil", errName), func() {
-			w.Panic(errName)
 		})
 	}
 
 	if stmt.GoName != "_" && stmt.ValueName != "" {
 		w.Assign(stmt.GoName, stmt.ValueName)
 	}
+}
+
+// emitTryBlockExpr emits try { ... } as a Go IIFE: func() (T, error) { ... }()
+func (em *Emitter) emitTryBlockExpr(rb IRTryBlock) string {
+	sub := &Emitter{w: NewGoWriter()}
+	for _, stmt := range rb.Stmts {
+		sub.emitStmt(stmt)
+	}
+	if rb.Expr != nil {
+		sub.emitReturnExpr(rb.Expr)
+	}
+	body := strings.TrimRight(sub.w.String(), "\n")
+	okStr := em.irTypeStr(rb.OkType)
+	return fmt.Sprintf("func() (%s, error) {\n%s\n}()", okStr, body)
 }
 
 func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
@@ -946,7 +967,7 @@ func (em *Emitter) emitMatchEnum(m IRMatch, mode bodyMode) {
 		}
 		if mode.valueCtx && !em.hasWildcard(m) {
 			w.Default(func() {
-				w.Panic("\"unreachable\"")
+				w.Unreachable()
 			})
 		}
 	})
@@ -976,7 +997,7 @@ func (em *Emitter) emitMatchSumType(m IRMatch, mode bodyMode) {
 		}
 	})
 	if mode.valueCtx && !em.hasWildcard(m) {
-		w.Panic("\"unreachable\"")
+		w.Unreachable()
 	}
 }
 
@@ -1031,7 +1052,7 @@ func (em *Emitter) emitMatchList(m IRMatch, mode bodyMode) {
 	}
 	w.Line("}")
 	if mode.valueCtx {
-		w.Panic("\"unreachable\"")
+		w.Unreachable()
 	}
 }
 

@@ -266,6 +266,14 @@ type IRBlock struct {
 	Type  IRType
 }
 
+// IRTryBlock represents `try { ... }`. Emitted as an IIFE returning (T, error).
+type IRTryBlock struct {
+	Stmts   []IRStmt
+	Expr    IRExpr // final expression (Ok value)
+	OkType  IRType // inner Ok type
+	ErrType IRType // error type (always IRNamedType{GoName: "error"})
+}
+
 // Constructor: resolved to Go struct literal or NewType() call
 type IRConstructorCall struct {
 	GoName        string // "GreetingHello", "User"
@@ -467,15 +475,16 @@ type IRLetStmt struct {
 }
 
 // Try let: let x = expr? — error propagation.
-// SplitNames/PropagateValues/ValueName are populated by the expandResultOption
+// SplitNames/ErrorReturnValues/ValueName are populated by the expandResultOption
 // post-pass so emit can mechanically output the try pattern.
 type IRTryLetStmt struct {
-	GoName          string   // "_" for discard
-	CallExpr        IRExpr
-	ReturnType      IRType   // enclosing function's return type
-	SplitNames      []string // ["__val1", "__err1"] — multi-receive names
-	PropagateValues []IRExpr // error return values: [zero, IRIdent{__err1}]
-	ValueName       string   // which split name holds the unwrapped value
+	GoName               string   // "_" for discard
+	CallExpr             IRExpr
+	ReturnType           IRType   // enclosing function's return type
+	SplitNames           []string // ["__val1", "__err1"] — multi-receive names
+	ErrorReturnValues      []IRExpr // error return values: [zero, IRIdent{__err1}]
+	ValueName            string   // which split name holds the unwrapped value
+	NilCheckReturnValues    []IRExpr // nil check return values: [zero, fmt.Errorf(...)], nil if no check
 }
 
 type IRExprStmt struct {
@@ -544,6 +553,8 @@ func (e IRIfExpr) irExprNode()          {}
 func (e IRIfExpr) irType() IRType       { return e.Type }
 func (e IRBlock) irExprNode()           {}
 func (e IRBlock) irType() IRType        { return e.Type }
+func (e IRTryBlock) irExprNode()     {}
+func (e IRTryBlock) irType() IRType  { return IRResultType{Ok: e.OkType, Err: e.ErrType} }
 func (e IRConstructorCall) irExprNode()    {}
 func (e IRConstructorCall) irType() IRType { return e.Type }
 func (e IROkCall) irExprNode()          {}

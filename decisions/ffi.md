@@ -4,6 +4,32 @@ Newest first within this topic.
 
 ---
 
+## 2026-04-18: Go `*T` → Option auto-wrap
+
+**Context:** Go FFI pointer returns (`*T`) can be nil at runtime, causing nil-pointer panics. The FFI boundary table (2026-04-15) listed `*T` nullability as "partially in place; systematic rule not yet decided".
+
+**Decision: Go pointer returns are automatically wrapped in `IROptionType` at the IR level.**
+
+| Go return | Arca type |
+|---|---|
+| `*T` | `Option[*T]` |
+| `(*T, error)` | `Result[Option[*T], Error]` |
+
+The wrapping happens in `goFuncReturnType` — the same single function that handles all Go→Arca return type conversion. No ad-hoc detection at consumption sites.
+
+**`?` double-unwrap:** For `Result[Option[*T], Error]`, `?` first unwraps the Result (propagating Error), then unwraps the Option (nil check → Error on None). This is mechanical: `?` on Option generates `NilCheckReturnValues` in the IR, emitted as a nil check + early error return.
+
+**Implementation:**
+- `goFuncReturnType` checks if the Go return type is a pointer (`*types.Pointer`). If so, wraps the Arca type in `IROptionType`.
+- For `(*T, error)` returns, the Result's inner type becomes `Option[*T]`.
+- `NilCheckReturnValues` added to IR for the Option `?` path. Emitted as `if val == nil { return ..., fmt.Errorf("unexpected nil") }`.
+
+**What this completes:** Row 6 of the FFI boundary table (`*T` nullability → Function signature → `Option[T]`). The systematic rule is now implemented.
+
+**Status:** Done
+
+---
+
 ## 2026-04-15: FFI has multiple boundaries, one mechanism per danger
 
 **Context:** Earlier discussion oversimplified the FFI boundary as "the constructor of an Arca type". That is only true for one class of danger (structural Go data becoming an Arca-typed value). Other Go dangers — panic, `interface{}`/`any`, `*T` nil, external mutation, goroutines — have their own distinct boundary mechanisms. Conflating them hides the design work.
@@ -17,7 +43,7 @@ Newest first within this topic.
 | Go panic | Call site | Auto `recover` around FFI call, convert to `Result[T, PanicError]`. *(not yet designed)* |
 | `interface{}` / `any` | Safe cast operator | `cast[T](v: Any) -> Option[T]`. Direct assignment from `any` to a typed Arca slot is not allowed. *(not yet designed)* |
 | Go mutation of held reference | Builder / Freeze | Compiler-generated Builder absorbs mutation; Freeze calls the constructor and severs the Go reference. *(design accepted; implementation Phase 2)* |
-| `*T` nullability | Function signature | Go `*T` returns surface in Arca as `Option[T]`. Non-nullable Go handles (`*sql.DB`) require an explicit declaration. *(partially in place; systematic rule not yet decided)* |
+| `*T` nullability | Function signature | Go `*T` returns surface in Arca as `Option[*T]`. `(*T, error)` → `Result[Option[*T], Error]`. `?` double-unwraps. *(implemented 2026-04-18)* |
 | Goroutine shared access | — | Open. Concurrency design not yet undertaken. |
 
 **Design principle behind the table:** *Arca makes guarantees. FFI is only allowed to the extent that guarantees can be preserved across it.* Each row of the table is a specific guarantee Arca promises and the matching mechanism that keeps the guarantee intact when Go values cross the boundary.
@@ -40,7 +66,7 @@ Newest first within this topic.
 
 **Status:** Design direction accepted. Implementation mapping to Phase 1:
 
-1. Systematic rule for Go `*T` → `Option[T]`.
+1. ~~Systematic rule for Go `*T` → `Option[T]`.~~ Done (2026-04-18).
 2. Panic recovery around FFI calls.
 3. Safe cast operator for `any`.
 4. Rewrite `examples/todo` to demonstrate that these rules together seal the dangers that leak in the current version.

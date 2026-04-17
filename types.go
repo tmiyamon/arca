@@ -26,6 +26,7 @@ const (
 	ErrCannotInferType
 	ErrUnusedPackage
 	ErrCannotInferTypeParam
+	ErrTryOutsideResultContext
 )
 
 type CompileError struct {
@@ -67,6 +68,8 @@ func (e CompileError) Message() string {
 			return fmt.Sprintf("cannot infer type of %s — add explicit type args, e.g. %s[T](...)", d.Binding, d.Suggestion)
 		}
 		return fmt.Sprintf("cannot infer type parameter — add explicit type args, e.g. %s[T](...)", d.Suggestion)
+	case TryOutsideResultContextData:
+		return "? operator outside Result context — use inside a Result-returning function or try { ... } block"
 	case MessageData:
 		return d.Text
 	default:
@@ -125,6 +128,8 @@ type CannotInferTypeParamData struct {
 	Binding    string // `let x = ...` → "x"
 	Suggestion string // function name to show in the explicit-type-args hint
 }
+
+type TryOutsideResultContextData struct{}
 
 // MessageData is a fallback for errors not yet structured
 type MessageData struct {

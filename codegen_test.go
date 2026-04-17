@@ -444,6 +444,32 @@ fun main() {
 		}
 	})
 
+	t.Run("pointer_error_becomes_result_option", func(t *testing.T) {
+		t.Parallel()
+		// net/url.Parse: func(rawURL string) (*URL, error).
+		// (*T, error) → Result[Option[*T], Error].
+		// ? double-unwraps: Result then Option, variable gets *T type.
+		result, err := transpileSource(`
+import go "net/url"
+
+fun parseURL(s: String) -> Result[String, error] {
+  let u = url.Parse(s)?
+  Ok(u.Host)
+}
+
+fun main() {
+  let _ = parseURL("https://example.com")
+}
+`)
+		if err != nil {
+			t.Fatalf("transpile error: %v", err)
+		}
+		// The generated Go must include nil check for the pointer value
+		if !strings.Contains(result.goCode, "== nil") {
+			t.Error("expected nil check in generated Go for pointer return")
+		}
+	})
+
 	t.Run("option_match_binding_type_propagates", func(t *testing.T) {
 		t.Parallel()
 		// The Some binding must have type String (inner of Option[String]).
@@ -467,4 +493,48 @@ fun main() {
 			t.Errorf("unexpected error: %s", err)
 		}
 	})
+}
+
+func TestTryBlock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("try_block_in_non_result_function", func(t *testing.T) {
+		t.Parallel()
+		// try { ... } creates a Result context, allowing ? in non-Result functions.
+		result, err := transpileSource(`
+import go "strconv"
+
+fun main() {
+  let r = try {
+    let n = strconv.Atoi("42")?
+    n + 1
+  }
+  match r {
+    Ok(v) => println(v)
+    Error(e) => println(e)
+  }
+}
+`)
+		if err != nil {
+			t.Fatalf("transpile error: %v", err)
+		}
+		if !strings.Contains(result.goCode, "func()") {
+			t.Error("expected IIFE in generated Go for try block")
+		}
+	})
+
+	t.Run("try_without_brace_is_variable", func(t *testing.T) {
+		t.Parallel()
+		// "try" without { is a normal identifier, not a keyword
+		_, err := transpileSource(`
+fun main() {
+  let try = 42
+  println(try)
+}
+`)
+		if err != nil {
+			t.Fatalf("transpile error: %v", err)
+		}
+	})
+
 }

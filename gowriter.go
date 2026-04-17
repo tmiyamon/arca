@@ -187,6 +187,14 @@ func (w *GoWriter) Panic(expr string) {
 	fmt.Fprintf(&w.buf, "panic(%s)\n", expr)
 }
 
+// Unreachable emits panic("unreachable") as a Go compiler stub.
+// Used after exhaustive match where Arca guarantees all cases are covered
+// but Go's definite-return analysis cannot prove it.
+func (w *GoWriter) Unreachable() {
+	w.writeIndent()
+	fmt.Fprint(&w.buf, "panic(\"unreachable\")\n")
+}
+
 // --- Type declarations ---
 
 func (w *GoWriter) Struct(name string, body func()) {

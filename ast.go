@@ -217,9 +217,17 @@ type RefExpr struct {
 	Expr Expr
 }
 
-func (RefExpr) exprNode()         {}
-func (RangeExpr) exprNode()       {}
-func (BinaryExpr) exprNode()      {}
+// TryBlockExpr represents `try { stmts... expr }`.
+// Creates a Result context where ? can be used.
+type TryBlockExpr struct {
+	NodePos
+	Body Block
+}
+
+func (RefExpr) exprNode()          {}
+func (TryBlockExpr) exprNode()     {}
+func (RangeExpr) exprNode()        {}
+func (BinaryExpr) exprNode()       {}
 
 // --- Patterns ---
 

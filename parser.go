@@ -953,6 +953,16 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		return p.parseListLit()
 
 	case TkIdent:
+		// try { ... } block expression
+		if tok.Lit == "try" && p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkLBrace {
+			p.advance() // skip 'try'
+			blockExpr, err := p.parseBlockExpr()
+			if err != nil {
+				return nil, err
+			}
+			return TryBlockExpr{NodePos: AtTok(tok), Body: blockExpr.(Block)}, nil
+		}
+
 		p.advance()
 		// Shorthand lambda: x => body
 		if p.peek().Kind == TkFatArrow {
