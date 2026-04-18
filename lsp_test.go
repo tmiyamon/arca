@@ -589,7 +589,8 @@ fun main() {
 }
 `
 		diags := collectDiagnostics(source, "/tmp/diag_argcount.arca")
-		if !hasDiagContaining(diags, "expects 2 arguments, got 1") {
+		expected := WrongArgCountData{Func: "add", Expected: 2, Actual: 1}.Message()
+		if !hasDiagContaining(diags, expected) {
 			t.Errorf("expected wrong-arg-count diagnostic, got: %v", diagMessages(diags))
 		}
 	})

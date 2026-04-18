@@ -29,11 +29,17 @@ const (
 	ErrTryOutsideResultContext
 )
 
+// ErrorData is implemented by all structured error data types.
+// Each data struct owns its own message format — no central switch.
+type ErrorData interface {
+	Message() string
+}
+
 type CompileError struct {
 	Code  ErrorCode
 	Pos   Pos
-	Phase string      // "parse", "lower", "validate"
-	Data  interface{} // error-specific structured data
+	Phase string    // "parse", "lower", "validate"
+	Data  ErrorData // error-specific structured data
 }
 
 func (e CompileError) Error() string {
@@ -41,54 +47,63 @@ func (e CompileError) Error() string {
 }
 
 func (e CompileError) Message() string {
-	switch d := e.Data.(type) {
-	case TypeMismatchData:
-		return fmt.Sprintf("type mismatch: expected %s, got %s", d.Expected, d.Actual)
-	case UnknownVariableData:
-		return fmt.Sprintf("undefined variable: %s", d.Name)
-	case UnknownTypeData:
-		return fmt.Sprintf("unknown type: %s", d.Name)
-	case WrongArgCountData:
-		if d.AtLeast {
-			return fmt.Sprintf("'%s' expects at least %d arguments, got %d", d.Func, d.Expected, d.Actual)
-		}
-		return fmt.Sprintf("'%s' expects %d arguments, got %d", d.Func, d.Expected, d.Actual)
-	case NonExhaustiveMatchData:
-		return fmt.Sprintf("non-exhaustive match: missing %s", d.Missing)
-	case PackageNotFoundData:
-		return fmt.Sprintf("package %s not found. Run: go get %s", d.Path, d.Path)
-	case FieldAccessOnWrappedData:
-		return fmt.Sprintf("cannot access .%s on %s type. %s", d.Field, d.TypeName, d.Suggestion)
-	case CannotInferTypeData:
-		return fmt.Sprintf("cannot infer %s type for match subject", d.TypeName)
-	case UnusedPackageData:
-		return fmt.Sprintf("unused package: %s", d.Name)
-	case CannotInferTypeParamData:
-		if d.Binding != "" {
-			return fmt.Sprintf("cannot infer type of %s — add explicit type args, e.g. %s[T](...)", d.Binding, d.Suggestion)
-		}
-		return fmt.Sprintf("cannot infer type parameter — add explicit type args, e.g. %s[T](...)", d.Suggestion)
-	case TryOutsideResultContextData:
-		return "? operator outside Result context — use inside a Result-returning function or try { ... } block"
-	case MessageData:
-		return d.Text
-	default:
+	if e.Data == nil {
 		return "unknown error"
 	}
+	return e.Data.Message()
 }
 
-// Error data types
+// CompileErrors wraps a list of CompileError as a single `error` so callers
+// can use errors.As to recover structured error codes.
+type CompileErrors struct {
+	File   string
+	Errors []CompileError
+}
+
+func (ce *CompileErrors) Error() string {
+	parts := make([]string, len(ce.Errors))
+	for i, e := range ce.Errors {
+		parts[i] = formatError(ce.File, e.Pos, e.Message())
+	}
+	return strings.Join(parts, "\n")
+}
+
+// --- Error data types ---
+
 type TypeMismatchData struct {
 	Expected string
 	Actual   string
+}
+
+func (d TypeMismatchData) Message() string {
+	return fmt.Sprintf("type mismatch: expected %s, got %s", d.Expected, d.Actual)
+}
+
+type ArgTypeMismatchData struct {
+	Func     string
+	ArgIndex int // 1-based
+	Expected string
+	Actual   string
+}
+
+func (d ArgTypeMismatchData) Message() string {
+	return fmt.Sprintf("type mismatch: argument %d of '%s' expects %s, got %s", d.ArgIndex, d.Func, d.Expected, d.Actual)
 }
 
 type UnknownVariableData struct {
 	Name string
 }
 
+func (d UnknownVariableData) Message() string {
+	return fmt.Sprintf("undefined variable: %s", d.Name)
+}
+
 type UnknownTypeData struct {
 	Name string
+}
+
+func (d UnknownTypeData) Message() string {
+	return fmt.Sprintf("unknown type: %s", d.Name)
 }
 
 type WrongArgCountData struct {
@@ -98,12 +113,27 @@ type WrongArgCountData struct {
 	AtLeast  bool
 }
 
+func (d WrongArgCountData) Message() string {
+	if d.AtLeast {
+		return fmt.Sprintf("wrong argument count: '%s' expects at least %d, got %d", d.Func, d.Expected, d.Actual)
+	}
+	return fmt.Sprintf("wrong argument count: '%s' expects %d, got %d", d.Func, d.Expected, d.Actual)
+}
+
 type NonExhaustiveMatchData struct {
 	Missing string
 }
 
+func (d NonExhaustiveMatchData) Message() string {
+	return fmt.Sprintf("non-exhaustive match: missing %s", d.Missing)
+}
+
 type PackageNotFoundData struct {
 	Path string
+}
+
+func (d PackageNotFoundData) Message() string {
+	return fmt.Sprintf("package not found: %s (run 'go get %s')", d.Path, d.Path)
 }
 
 type FieldAccessOnWrappedData struct {
@@ -112,12 +142,24 @@ type FieldAccessOnWrappedData struct {
 	Suggestion string
 }
 
+func (d FieldAccessOnWrappedData) Message() string {
+	return fmt.Sprintf("cannot access field '.%s' on %s: %s", d.Field, d.TypeName, d.Suggestion)
+}
+
 type CannotInferTypeData struct {
 	TypeName string
 }
 
+func (d CannotInferTypeData) Message() string {
+	return fmt.Sprintf("cannot infer type: match subject has no %s type", d.TypeName)
+}
+
 type UnusedPackageData struct {
 	Name string // short name as used in Arca source (e.g. "time", "stdlib")
+}
+
+func (d UnusedPackageData) Message() string {
+	return fmt.Sprintf("unused package: %s", d.Name)
 }
 
 // CannotInferTypeParamData describes a let binding whose inferred type still
@@ -129,11 +171,26 @@ type CannotInferTypeParamData struct {
 	Suggestion string // function name to show in the explicit-type-args hint
 }
 
+func (d CannotInferTypeParamData) Message() string {
+	if d.Binding != "" {
+		return fmt.Sprintf("cannot infer type: %s needs explicit type args, e.g. %s[T](...)", d.Binding, d.Suggestion)
+	}
+	return fmt.Sprintf("cannot infer type parameter: add explicit type args, e.g. %s[T](...)", d.Suggestion)
+}
+
 type TryOutsideResultContextData struct{}
+
+func (d TryOutsideResultContextData) Message() string {
+	return "? operator outside Result context: use inside a Result-returning function or try { ... } block"
+}
 
 // MessageData is a fallback for errors not yet structured
 type MessageData struct {
 	Text string
+}
+
+func (d MessageData) Message() string {
+	return d.Text
 }
 
 // --- Constraint Dimensions ---

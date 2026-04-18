@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"go/format"
 	"os"
 	"os/exec"
@@ -22,6 +23,15 @@ func transpileSource(source string) (*transpileResult, error) {
 		return nil, err
 	}
 	return transpile(arcaFile)
+}
+
+// compileErrorsOf extracts []CompileError from a transpile error, or nil.
+func compileErrorsOf(err error) []CompileError {
+	var ce *CompileErrors
+	if errors.As(err, &ce) {
+		return ce.Errors
+	}
+	return nil
 }
 
 // runE2E is a helper for E2E tests: transpile → go run → check output.
@@ -245,8 +255,8 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected error for wrong argument count")
 		}
-		if !strings.Contains(err.Error(), "expects 2 arguments, got 1") {
-			t.Errorf("unexpected error: %s", err)
+		if !hasErrorCode(compileErrorsOf(err), ErrWrongArgCount) {
+			t.Errorf("expected ErrWrongArgCount, got: %s", err)
 		}
 	})
 
@@ -262,8 +272,8 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected error for wrong argument type")
 		}
-		if !strings.Contains(err.Error(), "expects string, got int") {
-			t.Errorf("unexpected error: %s", err)
+		if !hasErrorCode(compileErrorsOf(err), ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch, got: %s", err)
 		}
 	})
 
@@ -320,8 +330,19 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected error for wrong arg type in generic call")
 		}
-		if !strings.Contains(err.Error(), "type mismatch: expected *sql.DB, got String") {
-			t.Errorf("unexpected error: %s", err)
+		errs := compileErrorsOf(err)
+		if !hasErrorCode(errs, ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch, got: %s", err)
+		}
+		// Verify specific Expected/Actual — this is what distinguishes this test
+		found := false
+		for _, e := range errs {
+			if d, ok := e.Data.(TypeMismatchData); ok && d.Expected == "*sql.DB" && d.Actual == "String" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected *sql.DB → String mismatch, got: %s", err)
 		}
 	})
 
@@ -343,11 +364,19 @@ fun handle(r: *http.Request) -> Result[Int, error] {
 		if err == nil {
 			t.Fatal("expected error for unresolved type parameter")
 		}
-		if !strings.Contains(err.Error(), "cannot infer type of todo") {
-			t.Errorf("unexpected error: %s", err)
+		errs := compileErrorsOf(err)
+		if !hasErrorCode(errs, ErrCannotInferTypeParam) {
+			t.Errorf("expected ErrCannotInferTypeParam, got: %s", err)
 		}
-		if !strings.Contains(err.Error(), "BindJSON") {
-			t.Errorf("error should name the function in the suggestion: %s", err)
+		for _, e := range errs {
+			if d, ok := e.Data.(CannotInferTypeParamData); ok {
+				if d.Binding != "todo" {
+					t.Errorf("expected binding 'todo', got %q", d.Binding)
+				}
+				if !strings.Contains(d.Suggestion, "BindJSON") {
+					t.Errorf("expected BindJSON in suggestion, got %q", d.Suggestion)
+				}
+			}
 		}
 	})
 
@@ -384,8 +413,8 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected error for mismatched type parameter binding")
 		}
-		if !strings.Contains(err.Error(), "type mismatch") {
-			t.Errorf("unexpected error: %s", err)
+		if !hasErrorCode(compileErrorsOf(err), ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch, got: %s", err)
 		}
 	})
 }
@@ -489,8 +518,8 @@ fun main() {
 		if err == nil {
 			t.Fatal("expected type mismatch for passing String to Int param")
 		}
-		if !strings.Contains(err.Error(), "type mismatch") {
-			t.Errorf("unexpected error: %s", err)
+		if !hasErrorCode(compileErrorsOf(err), ErrTypeMismatch) {
+			t.Errorf("expected ErrTypeMismatch, got: %s", err)
 		}
 	})
 }

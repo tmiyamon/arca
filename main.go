@@ -459,13 +459,8 @@ func transpile(inputPath string) (*transpileResult, error) {
 
 	// Collect lowering errors
 	t2 := time.Now()
-	var allErrors []string
-	for _, e := range mainLowerer.Errors() {
-		allErrors = append(allErrors, formatError(inputPath, e.Pos, e.Message()))
-	}
-
-	if len(allErrors) > 0 {
-		return nil, fmt.Errorf("%s", strings.Join(allErrors, "\n"))
+	if errs := mainLowerer.Errors(); len(errs) > 0 {
+		return nil, &CompileErrors{File: inputPath, Errors: errs}
 	}
 	timing.validate = time.Since(t2)
 

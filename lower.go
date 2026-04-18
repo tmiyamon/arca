@@ -489,7 +489,7 @@ func (l *Lowerer) addError(pos Pos, format string, args ...interface{}) {
 	})
 }
 
-func (l *Lowerer) addCompileError(code ErrorCode, pos Pos, data interface{}) {
+func (l *Lowerer) addCompileError(code ErrorCode, pos Pos, data ErrorData) {
 	l.errors = append(l.errors, CompileError{Code: code, Pos: pos, Phase: "lower", Data: data})
 }
 
@@ -2178,7 +2178,12 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 		}
 
 		if paramType != "" && !goTypesCompatible(argType, paramType) {
-			l.addError(pos, "argument %d of '%s' expects %s, got %s", i+1, goName, paramType, argType)
+			l.addCompileError(ErrTypeMismatch, pos, ArgTypeMismatchData{
+				Func:     goName,
+				ArgIndex: i + 1,
+				Expected: paramType,
+				Actual:   argType,
+			})
 		}
 	}
 
