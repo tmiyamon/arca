@@ -312,22 +312,23 @@ Error trait interface is now resolved — see the 2026-04-19 "Error trait interf
 
 Idea. Direction is settled. Implementation is partial:
 
-- **Return-position wrapping** (`*T`, `(*T, error)`): implemented. `wrapPointerInOption` produces `IROptionType{IRRefType{T}}` at the FFI return boundary.
-- **Param / field / generic-inner wrapping**: pending. These positions still carry raw `IRPointerType` through to Arca-facing IR; a transitional `unify` compat accepts `IRPointerType` and `IRRefType` interchangeably so user-written `Ref[T]` annotations can meet FFI types.
+- **Return-position wrapping** (`*T`, `(*T, error)`, and now nested pointers inside generics like `[]*T`): implemented. `wrapPointerInOption` walks the IR recursively and turns every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`.
+- **Param / field / generic-inner wrapping**: deferred. These positions still carry raw `IRPointerType` into Arca-facing IR; a transitional `unify` compat accepts `IRPointerType` and `IRRefType` interchangeably so user-written `Ref[T]` annotations can match FFI types.
 - **Receiver**: handled via method dispatch, which unwraps either `IRPointerType` or `IRRefType`. No separate wrap needed.
+
+Why the param/field/generic-inner wrap is deferred:
+
+Forcing `*T` param types to `Option<Ref<T>>` demands `Some(&v)` / `None` ceremony at every FFI call site (or uses at the opt-in `tags { arca: nonnull }` override, which doesn't exist yet). This would rewrite dozens of test sources and stdlib signatures for little ergonomic gain before the override mechanism lands. The decision is recorded; the implementation is paused until either:
+- the `arca: nonnull` tag mechanism is implemented (relieves the ceremony for obviously-non-null pointers), or
+- a dedicated session can absorb the full migration cost.
 
 Blocks (broader rollout):
 - Refactor of remaining `IRPointerType` callers at the param / field / generic-inner paths.
-- Monadic stdlib methods (`flatMap`, `map`, `okOr`, etc.) — landed 2026-04-19.
+- Design and implementation of `tags { arca: nonnull }` as an ergonomic escape hatch.
 - Synthetic Builder generation is its own multi-phase implementation.
 - Existing code migration for `testdata`, `examples/todo`, stdlib signatures.
 
-Removing the transitional `unify` compat requires:
-1. Wrap param types with `Option<Ref<...>>` at the Go FFI parameter-lowering path.
-2. Same for struct field types.
-3. Same for generic inner arguments in Go generic instantiations.
-4. Update callers to use `Some(&v)` / `None` (or the nonnull tag override).
-5. Drop the compat branches in `unify`.
+Removing the transitional `unify` compat requires the full rollout above.
 
 No current estimate; this is a multi-week shift in Arca's FFI model.
 
