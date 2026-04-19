@@ -2079,6 +2079,12 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 			}
 			return IRFnCall{Func: fnName, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos, Name: fa.Field}}
 		}
+		// Monadic methods on Result/Option desugar to try-block expressions.
+		// Handled before regular method dispatch so emit stays unchanged.
+		if desugared := l.tryDesugarMonadicMethod(fa, e); desugared != nil {
+			return l.lowerExprHint(desugared, hint)
+		}
+
 		// Regular method call: obj.method(args)
 		methodName := l.resolveMethodName(fa.Field)
 		args := l.lowerCallArgs(e)
@@ -2413,6 +2419,197 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 		return goPkg.FullPath, parts[1], true
 	}
 	return "", "", false
+}
+
+// tryDesugarMonadicMethod detects monadic method calls on Result and Option
+// and returns an equivalent match-based AST expression. Returns nil for
+// non-monadic calls or unsupported methods.
+//
+// All methods desugar to match expressions so emit reuses existing
+// Result/Option match lowering — no new IR nodes or emit code.
+func (l *Lowerer) tryDesugarMonadicMethod(fa FieldAccess, call FnCall) Expr {
+	recvIR := l.lowerExpr(fa.Expr)
+	recvType := l.resolveDeep(recvIR.irType())
+	switch recvType.(type) {
+	case IRResultType:
+		switch fa.Field {
+		case "map":
+			return buildResultMapDesugar(fa.Expr, call.Args, call.Pos)
+		case "flatMap":
+			return buildResultFlatMapDesugar(fa.Expr, call.Args, call.Pos)
+		case "mapError":
+			return buildResultMapErrorDesugar(fa.Expr, call.Args, call.Pos)
+		}
+	case IROptionType:
+		switch fa.Field {
+		case "map":
+			return buildOptionMapDesugar(fa.Expr, call.Args, call.Pos)
+		case "flatMap":
+			return buildOptionFlatMapDesugar(fa.Expr, call.Args, call.Pos)
+		case "okOr":
+			return buildOptionOkOrDesugar(fa.Expr, call.Args, call.Pos)
+		case "okOrElse":
+			return buildOptionOkOrElseDesugar(fa.Expr, call.Args, call.Pos)
+		}
+	}
+	return nil
+}
+
+// buildResultMapDesugar: r.map(f)  →
+//   match r { Ok(v) => Ok(f(v)); Error(e) => Error(e) }
+func buildResultMapDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	f := args[0]
+	vName := "__monadic_v"
+	eName := "__monadic_e"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	eRef := Ident{Name: eName, NodePos: AtPos(pos)}
+	apply := FnCall{NodePos: AtPos(pos), Fn: f, Args: []Expr{vRef}}
+	okBody := ConstructorCall{NodePos: AtPos(pos), Name: "Ok", Fields: []FieldValue{{Value: apply}}}
+	errBody := ConstructorCall{NodePos: AtPos(pos), Name: "Error", Fields: []FieldValue{{Value: eRef}}}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Ok", Fields: []FieldPattern{{Binding: vName}}}, Body: okBody},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Error", Fields: []FieldPattern{{Binding: eName}}}, Body: errBody},
+		},
+	}
+}
+
+// buildResultFlatMapDesugar: r.flatMap(f)  →
+//   match r { Ok(v) => f(v); Error(e) => Error(e) }
+func buildResultFlatMapDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	f := args[0]
+	vName := "__monadic_v"
+	eName := "__monadic_e"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	eRef := Ident{Name: eName, NodePos: AtPos(pos)}
+	apply := FnCall{NodePos: AtPos(pos), Fn: f, Args: []Expr{vRef}}
+	errBody := ConstructorCall{NodePos: AtPos(pos), Name: "Error", Fields: []FieldValue{{Value: eRef}}}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Ok", Fields: []FieldPattern{{Binding: vName}}}, Body: apply},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Error", Fields: []FieldPattern{{Binding: eName}}}, Body: errBody},
+		},
+	}
+}
+
+// buildResultMapErrorDesugar: r.mapError(f)  →
+//   match r { Ok(v) => Ok(v); Error(e) => Error(f(e)) }
+func buildResultMapErrorDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	f := args[0]
+	vName := "__monadic_v"
+	eName := "__monadic_e"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	eRef := Ident{Name: eName, NodePos: AtPos(pos)}
+	apply := FnCall{NodePos: AtPos(pos), Fn: f, Args: []Expr{eRef}}
+	okBody := ConstructorCall{NodePos: AtPos(pos), Name: "Ok", Fields: []FieldValue{{Value: vRef}}}
+	errBody := ConstructorCall{NodePos: AtPos(pos), Name: "Error", Fields: []FieldValue{{Value: apply}}}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Ok", Fields: []FieldPattern{{Binding: vName}}}, Body: okBody},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Error", Fields: []FieldPattern{{Binding: eName}}}, Body: errBody},
+		},
+	}
+}
+
+// buildOptionMapDesugar: opt.map(f)  →
+//   match opt { Some(v) => Some(f(v)); None => None }
+func buildOptionMapDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	f := args[0]
+	vName := "__monadic_v"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	apply := FnCall{NodePos: AtPos(pos), Fn: f, Args: []Expr{vRef}}
+	someBody := ConstructorCall{NodePos: AtPos(pos), Name: "Some", Fields: []FieldValue{{Value: apply}}}
+	noneBody := ConstructorCall{NodePos: AtPos(pos), Name: "None"}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Some", Fields: []FieldPattern{{Binding: vName}}}, Body: someBody},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "None"}, Body: noneBody},
+		},
+	}
+}
+
+// buildOptionFlatMapDesugar: opt.flatMap(f)  →
+//   match opt { Some(v) => f(v); None => None }
+func buildOptionFlatMapDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	f := args[0]
+	vName := "__monadic_v"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	apply := FnCall{NodePos: AtPos(pos), Fn: f, Args: []Expr{vRef}}
+	noneBody := ConstructorCall{NodePos: AtPos(pos), Name: "None"}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Some", Fields: []FieldPattern{{Binding: vName}}}, Body: apply},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "None"}, Body: noneBody},
+		},
+	}
+}
+
+// buildOptionOkOrDesugar: opt.okOr(err)  →
+//   match opt { Some(v) => Ok(v); None => Error(err) }
+func buildOptionOkOrDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	err := args[0]
+	vName := "__monadic_v"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	okBody := ConstructorCall{NodePos: AtPos(pos), Name: "Ok", Fields: []FieldValue{{Value: vRef}}}
+	errBody := ConstructorCall{NodePos: AtPos(pos), Name: "Error", Fields: []FieldValue{{Value: err}}}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Some", Fields: []FieldPattern{{Binding: vName}}}, Body: okBody},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "None"}, Body: errBody},
+		},
+	}
+}
+
+// buildOptionOkOrElseDesugar: opt.okOrElse(fn)  →
+//   match opt { Some(v) => Ok(v); None => Error(fn()) }
+func buildOptionOkOrElseDesugar(receiver Expr, args []Expr, pos Pos) Expr {
+	if len(args) != 1 {
+		return nil
+	}
+	fn := args[0]
+	vName := "__monadic_v"
+	vRef := Ident{Name: vName, NodePos: AtPos(pos)}
+	okBody := ConstructorCall{NodePos: AtPos(pos), Name: "Ok", Fields: []FieldValue{{Value: vRef}}}
+	call := FnCall{NodePos: AtPos(pos), Fn: fn, Args: nil}
+	errBody := ConstructorCall{NodePos: AtPos(pos), Name: "Error", Fields: []FieldValue{{Value: call}}}
+	return MatchExpr{
+		NodePos: AtPos(pos),
+		Subject: receiver,
+		Arms: []MatchArm{
+			{Pos: pos, Pattern: ConstructorPattern{Name: "Some", Fields: []FieldPattern{{Binding: vName}}}, Body: okBody},
+			{Pos: pos, Pattern: ConstructorPattern{Name: "None"}, Body: errBody},
+		},
+	}
 }
 
 // resolveMethodReturnType resolves the return type of a method call on a Go or Arca type.
@@ -4393,16 +4590,19 @@ func resolveMatchBindings(m *IRMatch, ctx *expandCtx) {
 	}
 
 	used := make([]bool, len(names))
+	hasResultOrOptionPattern := false
 
 	for i := range m.Arms {
 		switch p := m.Arms[i].Pattern.(type) {
 		case IRResultOkPattern:
+			hasResultOrOptionPattern = true
 			if p.Binding != nil && len(names) >= 1 {
 				p.Binding.Source = names[0]
 				used[0] = true
 				m.Arms[i].Pattern = p
 			}
 		case IRResultErrorPattern:
+			hasResultOrOptionPattern = true
 			if p.Binding != nil {
 				idx := len(names) - 1
 				p.Binding.Source = names[idx]
@@ -4410,12 +4610,21 @@ func resolveMatchBindings(m *IRMatch, ctx *expandCtx) {
 				m.Arms[i].Pattern = p
 			}
 		case IROptionSomePattern:
+			hasResultOrOptionPattern = true
 			if p.Binding != nil && len(names) >= 1 {
 				p.Binding.Source = names[0]
 				used[0] = true
 				m.Arms[i].Pattern = p
 			}
 		}
+	}
+
+	// For Result/Option matches, the last split name (err or bool) is
+	// consumed by the discriminator (`if err == nil { ... }` or the bool
+	// test) even when no arm binds it. Without this, the let-assignment
+	// drops the discriminator and emit references an undeclared name.
+	if hasResultOrOptionPattern && len(names) > 0 {
+		used[len(names)-1] = true
 	}
 
 	// Replace unused split names with "_" so the let assignment discards them.
@@ -4524,8 +4733,11 @@ func populateErrorExpanded(expr IRErrorCall) IRErrorCall {
 func expandStmtWithCtx(s IRStmt, ctx *expandCtx) IRStmt {
 	switch stmt := s.(type) {
 	case IRLetStmt:
-		// Expand try blocks inside let values (IIFE scope)
-		if _, isRB := stmt.Value.(IRTryBlock); isRB {
+		// Expand nested control-flow values so match subjects get
+		// resolveMatchBindings applied and Ok/Error/Some/None leaves get
+		// ExpandedValues populated.
+		switch stmt.Value.(type) {
+		case IRTryBlock, IRMatch, IRIfExpr:
 			stmt.Value = expandWithCtx(stmt.Value, nil, ctx)
 		}
 		if isMultiReturnType(stmt.Value.irType()) || isGoMultiReturn(stmt.Value) {
@@ -4540,7 +4752,15 @@ func expandStmtWithCtx(s IRStmt, ctx *expandCtx) IRStmt {
 	case IRTryLetStmt:
 		return expandTryLetStmt(stmt, ctx)
 	case IRExprStmt:
-		stmt.Expr = expandCallArgs(stmt.Expr)
+		// Recurse into control-flow expressions so match subjects get
+		// resolveMatchBindings applied. Without this, statement-form
+		// `match r { ... }` after a let binding misses its split.
+		switch stmt.Expr.(type) {
+		case IRMatch, IRIfExpr, IRTryBlock:
+			stmt.Expr = expandWithCtx(stmt.Expr, nil, ctx)
+		default:
+			stmt.Expr = expandCallArgs(stmt.Expr)
+		}
 		return stmt
 	default:
 		return s

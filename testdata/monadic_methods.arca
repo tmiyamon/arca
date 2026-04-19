@@ -1,0 +1,32 @@
+import go "strconv"
+import go "os"
+
+fun double(x: Int) -> Int { x * 2 }
+fun isPositive(x: Int) -> Result[Int, error] {
+  if x > 0 { Ok(x) } else { Error(strconv.ErrRange) }
+}
+
+fun main() {
+  // Result.map: apply function to Ok value
+  let parsed = strconv.Atoi("21")
+  let mapped = parsed.map(double)
+  match mapped {
+    Ok(n) => println(n)
+    Error(e) => println(e)
+  }
+
+  // Result.flatMap: chain Result-returning functions
+  let chained = parsed.flatMap(isPositive)
+  match chained {
+    Ok(n) => println(n)
+    Error(e) => println(e)
+  }
+
+  // Option.okOr: convert Option to Result with provided error
+  let home = os.LookupEnv("HOME")
+  let required = home.okOr(strconv.ErrRange)
+  match required {
+    Ok(s) => println(s)
+    Error(e) => println(e)
+  }
+}

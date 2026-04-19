@@ -503,6 +503,13 @@ func (em *Emitter) assignMode(goName string) bodyMode {
 	return bodyMode{leaf: em.assignLeaf(goName), valueCtx: true}
 }
 
+// assignMultiMode assigns expanded Result/Option values to multiple split names.
+// Used when a control-flow expression (match/if) appears as the value of a
+// multi-return let binding.
+func (em *Emitter) assignMultiMode(names []string) bodyMode {
+	return bodyMode{leaf: em.assignMultiLeaf(names), valueCtx: true}
+}
+
 func (em *Emitter) emitBody(e IRExpr, mode bodyMode) {
 	if e == nil {
 		return
@@ -569,6 +576,51 @@ func (em *Emitter) assignLeaf(goName string) emitLeaf {
 	}
 }
 
+// assignMultiLeaf reads ExpandedValues from a leaf Result/Option constructor
+// (Ok/Error/Some/None) and assigns each to its split name.
+func (em *Emitter) assignMultiLeaf(names []string) emitLeaf {
+	return func(e IRExpr) {
+		vals := expandedValues(e)
+		if len(vals) != len(names) {
+			// Leaf isn't an expanded Result/Option constructor — fall back
+			// so partial output is still visible rather than silently dropped.
+			em.w.Set(strings.Join(names, ", "), em.emitExpr(e))
+			return
+		}
+		parts := make([]string, len(vals))
+		for i, v := range vals {
+			parts[i] = em.emitExpr(v)
+		}
+		em.w.Set(strings.Join(names, ", "), strings.Join(parts, ", "))
+	}
+}
+
+// declareSplitVars emits `var name T` for each split name, typed from the
+// outer multi-return type (Result/Option).
+func (em *Emitter) declareSplitVars(names []string, multiType IRType) {
+	types := em.splitVarTypes(multiType, len(names))
+	for i, name := range names {
+		em.w.Var(name, types[i])
+	}
+}
+
+// splitVarTypes returns the Go types for each split name given the outer
+// multi-return type. For Result[T, E]: [T, E]. For Option[T]: [T, bool].
+func (em *Emitter) splitVarTypes(t IRType, n int) []string {
+	switch tt := t.(type) {
+	case IRResultType:
+		return []string{em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err)}
+	case IROptionType:
+		return []string{em.irTypeStr(tt.Inner), "bool"}
+	}
+	// Fallback: all interface{} (shouldn't hit in practice)
+	types := make([]string, n)
+	for i := range types {
+		types[i] = "interface{}"
+	}
+	return types
+}
+
 // Backwards-compatible wrappers so existing call sites stay short.
 func (em *Emitter) emitReturnExpr(e IRExpr) { em.emitBody(e, em.returnMode()) }
 func (em *Emitter) emitVoidBody(e IRExpr)   { em.emitBody(e, em.voidMode()) }
@@ -599,6 +651,15 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 	w := em.w
 	if stmt.GoName == "_" {
 		w.Stmt(fmt.Sprintf("_ = %s", em.emitExpr(stmt.Value)))
+		return
+	}
+	// Multi-return calls with control-flow value: declare all split names,
+	// then walk the body so each Ok/Error/Some/None leaf assigns to all
+	// split names via expanded values. Covers `let x = match r { ... }`
+	// where arms produce Result/Option values.
+	if len(stmt.SplitNames) > 0 && isControlFlowValue(stmt.Value) {
+		em.declareSplitVars(stmt.SplitNames, stmt.Value.irType())
+		em.emitBody(stmt.Value, em.assignMultiMode(stmt.SplitNames))
 		return
 	}
 	// Multi-return calls: SplitNames populated by expandResultOption post-pass.
