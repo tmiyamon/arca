@@ -107,6 +107,31 @@ Explicit-first principle applies, with **one exception**: field access and metho
 
 Rationale: field/method access is the most common operation, and `(*r).field` is visually noisy. Rust, Go, Swift, Kotlin, Java all follow this convention. Per the "make-everything-explicit" principle, this is the documented exception.
 
+### Match patterns
+
+Patterns preserve the type they match against — no implicit deref of `Ref<T>`:
+
+| Subject type | Pattern | Binding type |
+|---|---|---|
+| `Option<Ref<User>>` | `Some(v)` | `v: Ref<User>` |
+| `Option<T>` | `Some(v)` | `v: T` |
+| `Result<Ref<User>, E>` | `Ok(u)` | `u: Ref<User>` |
+| `Result<T, E>` | `Error(e)` | `e: E` |
+
+Usage with auto-deref keeps typical code natural:
+```arca
+match opt {  // opt: Option<Ref<User>>
+  Some(v) => v.name         // v: Ref<User>, field access auto-derefs
+  None => "anonymous"
+}
+```
+
+Rejected alternatives:
+- Auto-deref in patterns (`Some(v)` binds `v: User`) — implicit, violates explicit-first.
+- Mandatory deref syntax (`Some(*v)` for unwrap) — unnecessary ceremony for the common case (auto-deref covers field/method).
+
+Explicit pattern deref syntax (e.g. `Some(*v)` → `v: User`) is left open for future addition if a concrete need emerges. `Ref v` as a destructuring pattern is not introduced — `Ref<T>` is transparent at the pattern level.
+
 ### `?` operator
 
 Single-layer unwrap, context must match:
@@ -201,8 +226,7 @@ The Builder itself never appears in user code.
 
 1. Generic types with Ref: `List<Ref<T>>`, `Map<K, Ref<V>>` — presumably allowed but unexplored.
 2. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
-3. Match patterns on Ref/Option: does `Some(r)` give `Ref<T>` to bind? Pattern deref syntax?
-4. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
+3. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
 
 ### Prior art and references
 
