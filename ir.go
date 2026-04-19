@@ -21,6 +21,14 @@ type IRPointerType struct {
 	Inner IRType
 }
 
+// IRRefType is Arca's safe non-null reference (Ref[T]).
+// Distinct from IRPointerType (FFI-internal raw Go pointer).
+// Both emit as *T in Go; the distinction is in semantic guarantees
+// enforced via construction rules in the lowerer.
+type IRRefType struct {
+	Inner IRType
+}
+
 type IRTupleType struct {
 	Elements []IRType
 }
@@ -51,6 +59,7 @@ type IRTypeVar struct {
 
 func (IRNamedType) irTypeNode()     {}
 func (IRPointerType) irTypeNode()   {}
+func (IRRefType) irTypeNode()       {}
 func (IRTupleType) irTypeNode()     {}
 func (IRListType) irTypeNode()      {}
 func (IRMapType) irTypeNode()       {}

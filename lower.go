@@ -93,6 +93,8 @@ func (s *InferScope) resolveDeep(t IRType) IRType {
 		return IRTupleType{Elements: elems}
 	case IRPointerType:
 		return IRPointerType{Inner: s.resolveDeep(tt.Inner)}
+	case IRRefType:
+		return IRRefType{Inner: s.resolveDeep(tt.Inner)}
 	case IRNamedType:
 		if len(tt.Params) == 0 {
 			return tt
@@ -180,6 +182,12 @@ func (s *InferScope) unify(a, b IRType) bool {
 		return true
 	case IRPointerType:
 		bt, ok := b.(IRPointerType)
+		if !ok {
+			return false
+		}
+		return s.unify(at.Inner, bt.Inner)
+	case IRRefType:
+		bt, ok := b.(IRRefType)
 		if !ok {
 			return false
 		}
@@ -421,6 +429,8 @@ func containsUnresolvedTypeVar(t IRType) bool {
 	case IRTypeVar:
 		return true
 	case IRPointerType:
+		return containsUnresolvedTypeVar(tt.Inner)
+	case IRRefType:
 		return containsUnresolvedTypeVar(tt.Inner)
 	case IRListType:
 		return containsUnresolvedTypeVar(tt.Elem)
@@ -1357,6 +1367,8 @@ func irTypeDisplayStr(t IRType) string {
 		return base + "[" + strings.Join(params, ", ") + "]"
 	case IRPointerType:
 		return "*" + irTypeDisplayStr(tt.Inner)
+	case IRRefType:
+		return "Ref[" + irTypeDisplayStr(tt.Inner) + "]"
 	case IRResultType:
 		return "Result[" + irTypeDisplayStr(tt.Ok) + ", " + irTypeDisplayStr(tt.Err) + "]"
 	case IROptionType:
@@ -1442,7 +1454,7 @@ func (l *Lowerer) checkTypeExists(t Type) {
 // isKnownTypeName checks if a name is a known type in the lowerer context.
 func (l *Lowerer) isKnownTypeName(name string) bool {
 	switch name {
-	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "error", "Self":
+	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "error", "Self":
 		return true
 	}
 	if strings.Contains(name, ".") {
@@ -1565,6 +1577,8 @@ func substituteTypeVars(t IRType, vars map[string]IRType) IRType {
 		return IRNamedType{GoName: tt.GoName, Params: params}
 	case IRPointerType:
 		return IRPointerType{Inner: substituteTypeVars(tt.Inner, vars)}
+	case IRRefType:
+		return IRRefType{Inner: substituteTypeVars(tt.Inner, vars)}
 	case IRListType:
 		return IRListType{Elem: substituteTypeVars(tt.Elem, vars)}
 	case IROptionType:
@@ -1589,6 +1603,8 @@ func irTypeEmitStr(t IRType) string {
 	case IRNamedType:
 		return tt.GoName
 	case IRPointerType:
+		return "*" + irTypeEmitStr(tt.Inner)
+	case IRRefType:
 		return "*" + irTypeEmitStr(tt.Inner)
 	case IRResultType:
 		return "(" + irTypeEmitStr(tt.Ok) + ", error)"
@@ -1695,6 +1711,11 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 			}
 		}
 		return IRMapType{Key: IRInterfaceType{}, Value: IRInterfaceType{}}
+	case "Ref":
+		if len(nt.Params) > 0 {
+			return IRRefType{Inner: l.lowerType(nt.Params[0])}
+		}
+		return IRRefType{Inner: IRInterfaceType{}}
 	case "Option":
 		l.builtins["option"] = true
 		if len(nt.Params) > 0 {
@@ -1805,7 +1826,7 @@ func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 		return l.lowerBinaryExpr(e)
 	case RefExpr:
 		inner := l.lowerExpr(e.Expr)
-		return IRRefExpr{Expr: inner, Type: IRPointerType{Inner: inner.irType()}}
+		return IRRefExpr{Expr: inner, Type: IRRefType{Inner: inner.irType()}}
 	case RangeExpr:
 		// RangeExpr as standalone expression (not inside for) — shouldn't happen often
 		return IRFnCall{

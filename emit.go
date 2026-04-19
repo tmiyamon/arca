@@ -1185,6 +1185,8 @@ func (em *Emitter) irTypeStr(t IRType) string {
 		return tt.GoName
 	case IRPointerType:
 		return "*" + em.irTypeStr(tt.Inner)
+	case IRRefType:
+		return "*" + em.irTypeStr(tt.Inner)
 	case IRTupleType:
 		if len(tt.Elements) == 2 {
 			return fmt.Sprintf("struct{ First %s; Second %s }", em.irTypeStr(tt.Elements[0]), em.irTypeStr(tt.Elements[1]))

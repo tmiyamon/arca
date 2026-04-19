@@ -1,0 +1,12 @@
+type User {
+  User(name: String)
+}
+
+fun process(r: Ref[User]) -> String {
+  r.name
+}
+
+fun main() {
+  let u = User("Alice")
+  let _ = process(&u)
+}
