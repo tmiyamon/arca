@@ -2347,13 +2347,30 @@ func (l *Lowerer) instantiateGeneric(info *FuncInfo) (vars map[string]IRType, pa
 	return
 }
 
-// wrapPointerInOption wraps Go pointer returns as Option<Ref<T>> for Arca.
-// Go *T → Option[Ref[T]] (IROptionType{Inner: IRRefType{Inner: T}}).
-// The raw IRPointerType from goTypeToIR is replaced by IRRefType here — Ptr
-// is FFI-internal, Ref is the user-facing safe reference.
+// wrapPointerInOption recursively walks a Go-sourced IR type and converts
+// every IRPointerType to IROptionType{IRRefType{...}} — the safe Arca form
+// for Go pointers that may be nil. Walks inside List/Map/Tuple/Option/Result
+// so nested pointer positions are wrapped too (e.g. `[]*T` → `List[Option[Ref[T]]]`).
+// Applied at FFI positions where Go pointers cross into Arca: return types,
+// parameter types, struct fields, generic inner arguments.
 func wrapPointerInOption(t IRType) IRType {
-	if ptr, isPtr := t.(IRPointerType); isPtr {
-		return IROptionType{Inner: IRRefType{Inner: ptr.Inner}}
+	switch tt := t.(type) {
+	case IRPointerType:
+		return IROptionType{Inner: IRRefType{Inner: wrapPointerInOption(tt.Inner)}}
+	case IRListType:
+		return IRListType{Elem: wrapPointerInOption(tt.Elem)}
+	case IRMapType:
+		return IRMapType{Key: wrapPointerInOption(tt.Key), Value: wrapPointerInOption(tt.Value)}
+	case IRTupleType:
+		elems := make([]IRType, len(tt.Elements))
+		for i, e := range tt.Elements {
+			elems[i] = wrapPointerInOption(e)
+		}
+		return IRTupleType{Elements: elems}
+	case IROptionType:
+		return IROptionType{Inner: wrapPointerInOption(tt.Inner)}
+	case IRResultType:
+		return IRResultType{Ok: wrapPointerInOption(tt.Ok), Err: wrapPointerInOption(tt.Err)}
 	}
 	return t
 }
