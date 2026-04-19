@@ -92,6 +92,35 @@ Go emit:
 
 No user-visible escape hatch. The only way to get a Ref from a Ptr is through boundary wrapping that produces `Option<Ref<T>>` (requires explicit unwrap).
 
+### Ref as return type
+
+Functions may return `Ref<T>`:
+```arca
+fun getUser(name: String) -> Ref<User> {
+  let u = User(name, ...)
+  &u
+}
+```
+
+`Ref<T>` at a return position guarantees three things:
+1. **Non-null** — enforced by construction rules
+2. **Valid (non-dangling)** — delegated to Go's GC; escape analysis moves captured locals to the heap
+3. **Immutable** — Arca is immutable by default
+
+Lifetime management is not the user's concern. The compiler emits the Go pointer; the GC keeps the referenced value alive as long as any reference exists.
+
+**Typical uses:**
+- Avoid copying a large struct
+- Interop with Go functions that take `*T`
+- Share the same underlying value among multiple callers (equivalent to copy in semantics because of immutability, better in memory)
+
+**Edge cases (all safe):**
+- Ref to a local value: Go escape analysis moves it to the heap.
+- Ref into a field of another Ref: parent held alive by GC keeps the child valid.
+- Ref to a slice element: Arca slices are immutable, so no reallocation invalidates the pointer.
+
+For small primitives (`Int`, `Bool`, short `String`), `Ref<T>` usually costs more than direct-value return. For large structs or FFI interop, it pays off.
+
 ### Auto-deref
 
 Explicit-first principle applies, with **one exception**: field access and method calls on `Ref<T>` auto-deref.
@@ -245,7 +274,6 @@ The Builder itself never appears in user code.
 ### Open questions (deferred)
 
 1. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
-2. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
 
 ### Prior art and references
 
