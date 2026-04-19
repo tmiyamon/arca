@@ -86,7 +86,9 @@ Auto-Some (2026-04-19 companion entry) produces `IRSomeCall` at the logical IR l
 
 **Status:** Idea. Direction settled. Slice 1 starts next. No compile-time perf concern; IR passes stay linear.
 
-**Progress (2026-04-19):** Slice 1 (Option pointer-backed + auto-Some) implemented. Option-specific split machinery removed; `match opt` uniformly `if subject != nil`; FFI `(T, bool)` wrapped via `__optFrom`; `Some(v)` via `__ptrOf(v)` with Ref/Ptr collapse; `None` as typed nil. Known bugs from the session handoff (`let x: Option<T> = None`, `Some(v)` in let position) auto-resolved. Slice 2 (FFI param/field/generic-inner wrap) starts next. Slice 3 (Result stage-2 formalization with `IRMultiSlotType`) still deferred.
+**Progress (2026-04-19):** Slice 1 (Option pointer-backed + auto-Some) implemented. Option-specific split machinery removed; `match opt` uniformly `if subject != nil`; FFI `(T, bool)` wrapped via `__optFrom`; `Some(v)` via `__ptrOf(v)` with Ref/Ptr collapse; `None` as typed nil. Known bugs from the session handoff (`let x: Option<T> = None`, `Some(v)` in let position) auto-resolved.
+
+**Progress (2026-04-19, continued):** Slice 2 (FFI param/field/generic-inner wrap) implemented. `wrapPointerInOption` now applied at Go FFI param types in `instantiateGeneric`, struct field resolution in `resolveFieldType`, and recursively through generic inners. Go FFI call arg lowering propagates the wrapped param type as a hint so auto-Some lifts `&v` → `Some(&v)` at the call site — no user ceremony needed. Slice 3 (Result stage-2 formalization with `IRMultiSlotType`) still deferred.
 
 ---
 
@@ -434,7 +436,7 @@ Error trait interface is now resolved — see the 2026-04-19 "Error trait interf
 Idea. Direction is settled. Implementation is partial:
 
 - **Return-position wrapping** (`*T`, `(*T, error)`, and now nested pointers inside generics like `[]*T`): implemented. `wrapPointerInOption` walks the IR recursively and turns every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`.
-- **Param / field / generic-inner wrapping**: deferred. These positions still carry raw `IRPointerType` into Arca-facing IR; a transitional `unify` compat accepts `IRPointerType` and `IRRefType` interchangeably so user-written `Ref[T]` annotations can match FFI types.
+- **Param / field / generic-inner wrapping**: implemented (2026-04-19 continuation, Slice 2). `wrapPointerInOption` is applied at Go FFI param types (in `instantiateGeneric`), struct field resolution (`resolveFieldType`), and recursively into generic inners. Arg lowering propagates the wrapped param type as a hint into `lowerExprHint` so auto-Some lifts `&v` into `Some(&v)` at FFI call sites — no ceremony. The transitional `unify` compat between `IRPointerType` and `IRRefType` remains because legacy `*T` Arca syntax still parses to `IRPointerType`; removed when that syntax is retired.
 - **Receiver**: handled via method dispatch, which unwraps either `IRPointerType` or `IRRefType`. No separate wrap needed.
 
 Why the param/field/generic-inner wrap is deferred:

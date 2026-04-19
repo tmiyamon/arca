@@ -334,15 +334,18 @@ fun main() {
 		if !hasErrorCode(errs, ErrTypeMismatch) {
 			t.Errorf("expected ErrTypeMismatch, got: %s", err)
 		}
-		// Verify specific Expected/Actual — this is what distinguishes this test
+		// Verify specific Expected/Actual — this is what distinguishes this test.
+		// Param `db *sql.DB` wraps to `Option[Ref[sql.DB]]` at the FFI boundary;
+		// auto-Some lifts the string literal to `Option[String]`. The mismatch
+		// surfaces at the Option level, which is still informative.
 		found := false
 		for _, e := range errs {
-			if d, ok := e.Data.(TypeMismatchData); ok && d.Expected == "*sql.DB" && d.Actual == "String" {
+			if d, ok := e.Data.(TypeMismatchData); ok && d.Expected == "Option[Ref[sql.DB]]" && d.Actual == "Option[String]" {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("expected *sql.DB → String mismatch, got: %s", err)
+			t.Errorf("expected Option[Ref[sql.DB]] → Option[String] mismatch, got: %s", err)
 		}
 	})
 

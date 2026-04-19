@@ -184,8 +184,9 @@ func (s *InferScope) unify(a, b IRType) bool {
 		if bt, ok := b.(IRPointerType); ok {
 			return s.unify(at.Inner, bt.Inner)
 		}
-		// Transitional compat: IRPointerType and IRRefType emit as same Go *T.
-		// Until FFI boundary is migrated to produce IRRefType, treat as compatible.
+		// Transitional compat: legacy `*T` Arca syntax parses to IRPointerType,
+		// while FFI-wrapped positions now produce IRRefType. Both emit as Go *T.
+		// Keep interchangeable until `*T` user syntax is retired.
 		if rt, ok := b.(IRRefType); ok {
 			return s.unify(at.Inner, rt.Inner)
 		}
@@ -2377,7 +2378,7 @@ func (l *Lowerer) instantiateGeneric(info *FuncInfo) (vars map[string]IRType, pa
 	}
 	paramTypes = make([]IRType, len(info.Params))
 	for i, p := range info.Params {
-		paramTypes[i] = goTypeToIRWithVars(p.Type, vars)
+		paramTypes[i] = wrapPointerInOption(goTypeToIRWithVars(p.Type, vars))
 	}
 	ret = l.goFuncReturnTypeWithVars(info, vars)
 	return
@@ -2696,14 +2697,15 @@ func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goRetu
 
 // resolveFieldType resolves the type of a field access on a Go or Arca type.
 func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
-	// Try Go FFI type first
+	// Try Go FFI type first. Go struct fields of type *T wrap to
+	// Option[Ref[T]] at the Arca boundary (same rule as return/param).
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
 	if ok {
 		typeInfo := l.typeResolver.ResolveType(pkg, typ)
 		if typeInfo != nil {
 			for _, f := range typeInfo.Fields {
 				if f.Name == field {
-					return IRNamedType{GoName: goTypeToIRName(f.Type)}
+					return wrapPointerInOption(goTypeToIR(f.Type))
 				}
 			}
 		}
@@ -2815,15 +2817,56 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		return l.lowerLambda(lam)
 	}
 
-	// Resolve expected type for hint-based type checking and constructor type inference
+	// Resolve expected type for hint-based type checking and constructor type inference.
+	// Covers Arca functions (l.functions) and Go FFI calls (resolved via TypeResolver).
+	// Go pointer params auto-wrap to Option<Ref<T>> so auto-Some lifts `&v` → `Some(&v)`.
 	var hint IRType
 	if fnIdent, ok := call.Fn.(Ident); ok {
 		if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
 			hint = l.lowerType(fn.Params[argIndex].Type)
 		}
 	}
+	if hint == nil {
+		if fa, ok := call.Fn.(FieldAccess); ok {
+			if ident, ok := fa.Expr.(Ident); ok {
+				if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
+					if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
+						paramGoType := resolveGoParamGoType(info, argIndex)
+						if paramGoType != "" {
+							hint = wrapPointerInOption(goTypeToIR(paramGoType))
+						}
+					}
+				}
+			}
+		}
+	}
 	result := l.lowerExprHint(expr, hint)
 	return result
+}
+
+// resolveGoParamGoType returns the effective Go type string for the arg at
+// argIndex of a Go function, peeling the variadic slice for trailing args.
+// Empty string when argIndex is out of range without a variadic fallback,
+// or when the param is an `any` / `interface{}` slot (no useful hint).
+func resolveGoParamGoType(info *FuncInfo, argIndex int) string {
+	if len(info.Params) == 0 {
+		return ""
+	}
+	var raw string
+	if info.Variadic && argIndex >= len(info.Params)-1 {
+		last := info.Params[len(info.Params)-1].Type
+		if strings.HasPrefix(last, "[]") {
+			raw = last[2:]
+		} else {
+			raw = last
+		}
+	} else if argIndex < len(info.Params) {
+		raw = info.Params[argIndex].Type
+	}
+	if raw == "any" || raw == "interface{}" {
+		return ""
+	}
+	return raw
 }
 
 // resolveCallParamFuncType resolves the Go function type for a parameter at argIndex.

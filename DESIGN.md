@@ -119,8 +119,8 @@ Design rationale: Two types with `Error(message: String)` would collide without 
   - `(T)` → `T`
   - `(T1, T2, ...)` → Tuple (GoMultiReturn)
 - **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection. For `(T, bool)` → `Option[T]`, emit wraps the raw call with `__optFrom(...)` to convert Go's multi-return shape into Arca's pointer-backed Option.
-- **Pointer auto-wrap**: `wrapPointerInOption` recursively walks Go-sourced IR types and converts every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`. Applied at return positions today; param / field / generic-inner positions are deferred behind a transitional `unify` compat (see `decisions/ideas.md` 2026-04-19).
-- **Ref vs Ptr**: `IRRefType` is Arca's user-facing safe reference (`Ref[T]`), `IRPointerType` is the FFI-internal raw pointer that only exists transiently before being wrapped. Users write `Ref[T]`; `*T` Arca syntax is legacy (remaining in some test sources, smoothed over by the transitional unify compat).
+- **Pointer auto-wrap**: `wrapPointerInOption` recursively walks Go-sourced IR types and converts every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`. Applied at return, param, field, and generic-inner positions. Arg lowering for Go FFI calls propagates the wrapped param type as a hint so `auto-Some` lifts bare `&v` into `Some(&v)` at the call site, eliminating the ceremony.
+- **Ref vs Ptr**: `IRRefType` is Arca's user-facing safe reference (`Ref[T]`), `IRPointerType` is the FFI-internal raw pointer. Both emit as Go `*T`. A transitional `unify` compat treats them interchangeably because legacy `*T` Arca syntax still produces `IRPointerType`; removed when that syntax is retired.
 - **Project structure**: `go.mod` at project root, managed by user with `go get`. `build/go.mod` copied from parent.
 
 ## Pattern Matching
