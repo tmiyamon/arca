@@ -4,6 +4,127 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-19: Two-stage IR and Option as pointer-backed uniformly (idea)
+
+**Context:** While implementing auto-Some and preparing item 1 (FFI param/field/generic wrap), the test `let x: Option[Int] = Some(10)` exposed a structural bug: emit outputs `x, _ := &10` (invalid Go). Root cause is not a single missing case — it is that IR represents `Option<T>` as a single-slot type while Go emits it as 2-slot `(T, bool)`. The bridging machinery (`ExpandedValues` on leaves, `SplitNames` on declarations, `ctx.splits` on use sites, `flattenArgs` on call args, `resolveMatchBindings` on match subjects, `expandFuncParams` on params) covers the mismatch piecewise. Any new IR position without an updated bridge produces broken Go. This is structural debt, not a local missing case.
+
+Separately: `design_ref_ptr_layers` already specifies "Option<T> where T is primitive → `*T` (nil = None)" as the emit rule, but the current implementation emits `(T, bool)` for `Option<Int>`, `Option<String>`, etc. Spec drift.
+
+**Decision:**
+
+### Part A — Option is pointer-backed uniformly (spec alignment)
+
+Every `Option<T>` emits as a single Go value:
+
+| Arca type | Go emit |
+|---|---|
+| `Option<Int>` | `*int` |
+| `Option<String>` | `*string` |
+| `Option<User>` | `*User` |
+| `Option<Ref<T>>` | `*T` (collapses — Ref is already `*T`) |
+| `Option<Option<Int>>` | `**int` |
+| `Option<List<T>>` | `*[]T` |
+
+- `Some(v)` → `&v` (taking address of the value; escape analysis moves to heap if needed)
+- `None` → `nil` (typed nil at the Go declaration)
+- Match `match opt { Some(v) => ..., None => ... }` → `if opt != nil { v := *opt; ... } else { ... }` (already partially implemented for `Option<Ref<T>>`; generalize)
+
+This eliminates Option-specific split machinery entirely: no Option SplitNames, no Option ExpandedValues, no Option case in `flattenArgs` / `resolveMatchBindings` / `expandFuncParams`. Result keeps multi-return — its `(T, error)` shape is Go-idiomatic and Go's own error convention.
+
+### Part B — Two-stage IR (architectural reframe)
+
+The existing `expandResultOption` post-pass is implicitly a "stage 2" lowering, but it **annotates** rather than rewrites: Option/Result nodes survive into emit, with side-band metadata. Emit then reconciles. That reconciliation is where the bugs live.
+
+Formalize `expandResultOption` into a true lowering: after it runs, Option and Result nodes no longer exist in the IR. Everything is already in its emit-ready shape (pointer types, multi-slot tuples, etc.). Emit becomes mechanical — no bridge interpretation.
+
+Conceptual split:
+
+```
+Stage 1 (Logical IR): Option<T> / Result<T,E> alive, single-slot semantics
+      ↓ stage2Lower (what expandResultOption grows into)
+Stage 2 (Emit-ready IR): Option→Pointer, Result→MultiSlot, Some→Ref, None→typed nil, Ok/Error→tuple
+      ↓ emit (mechanical)
+Go
+```
+
+Mapping (Stage 1 → Stage 2):
+
+| Stage 1 | Stage 2 |
+|---|---|
+| `IROptionType{T}` | `IRPointerType{T}` (or collapsed if T is already pointer) |
+| `IRSomeCall{v}` | `IRRefExpr{v}` (produces `&v`) |
+| `IRNoneExpr` | `IRNilLit{typed}` |
+| `IRResultType{T,E}` | `IRMultiSlotType{T, error}` (explicit 2-slot) |
+| `IROkCall{v}` | `IRMultiValue{v, nil}` |
+| `IRErrorCall{e}` | `IRMultiValue{zero(T), e}` |
+
+After stage 2, emit sees only IRPointerType, IRMultiSlotType, IRRefExpr, IRNilLit, IRMultiValue — uniform representation.
+
+### Rationale
+
+- Single ownership for "how does Option emit": stage 2 lowering. Current machinery is 5-7 consumers each with partial knowledge.
+- Spec drift auto-resolved (Option<Int> → *int) because spec-compliant rule is the stage 2 rule.
+- Bugs like `let x: Option[Int] = Some(10)` become impossible — no splits for Option, so no split-inconsistency to expose.
+- Future features (Trait system, effects) won't accumulate new bridging entry points.
+- Compile-time cost is marginal — `expandResultOption` is already a linear pass.
+
+### Rejected alternatives
+
+- **Synthetic Option/Result struct types internally** (reverting commit `5fc89da`): recovers uniformity but abandons idiomatic-Go output, conflicts with 2026-04-12 "symmetric boundary" direction.
+- **Patch current multi-return bugs without refactor**: fixes today's test but leaves structural debt. Same-shape bugs recur as new positions are added.
+- **Keep Option multi-return, only fix flow gaps**: small now, but Option-primitive is already spec-deviant per `design_ref_ptr_layers`; the deviance would compound rather than resolve.
+
+### Execution plan (incremental)
+
+1. **Slice 1: Option pointer-backed + auto-Some.** Change lower/emit paths so every `IROptionType` at emit is a pointer. Remove Option-specific split code paths (`SplitNames` Option branch, `ExpandedValues` on `IRSomeCall`/`IRNoneExpr`, Option case in `flattenArgs` / `resolveMatchBindings` / `expandFuncParams`, Option-split branch in `emitLetStmt`). Generalize pointer-backed match to all `Option<T>`. Auto-Some already lifts to `IRSomeCall` — same IR, just different emit.
+2. **Slice 2: FFI param/field/generic wrap (item 1).** Now that Option is uniform, `wrapPointerInOption` at param/field/generic-inner positions produces `Option<Ref<T>>` that emits cleanly. Auto-Some eats the ceremony.
+3. **Slice 3 (later): Result stage 2 formalization.** Introduce `IRMultiSlotType`, rewrite Result lowering to produce it, remove Result-specific emit logic.
+
+### Auto-Some interaction
+
+Auto-Some (2026-04-19 companion entry) produces `IRSomeCall` at the logical IR level. Under the new scheme, stage 2 rewrites that to `IRRefExpr`. The lift logic itself is unchanged; the change is downstream in how `IRSomeCall` emits.
+
+**Status:** Idea. Direction settled. Slice 1 starts next. No compile-time perf concern; IR passes stay linear.
+
+**Progress (2026-04-19):** Slice 1 (Option pointer-backed + auto-Some) implemented. Option-specific split machinery removed; `match opt` uniformly `if subject != nil`; FFI `(T, bool)` wrapped via `__optFrom`; `Some(v)` via `__ptrOf(v)` with Ref/Ptr collapse; `None` as typed nil. Known bugs from the session handoff (`let x: Option<T> = None`, `Some(v)` in let position) auto-resolved. Slice 2 (FFI param/field/generic-inner wrap) starts next. Slice 3 (Result stage-2 formalization with `IRMultiSlotType`) still deferred.
+
+---
+
+## 2026-04-19: Auto-Some — hint-driven implicit Option lift (idea)
+
+**Context:** Item 1 of the SSOT Layer 1 roadmap (the `*T` → `Option<Ref<T>>` extension to param/field/generic-inner positions) was deferred because every FFI call site would need `Some(&v)` / `None` ceremony. The `tags { arca: nonnull }` escape hatch was identified as the relief valve but is unimplemented. Separately, Option construction requires `Some(v)` per explicit-first.
+
+**Decision:** At hint-driven positions where the expected type is `Option<T>` and the value's static type is `T`, auto-lift the value into `Some(v)`. Single layer only. `None` stays explicit. `&` (Ref construction) is **not** auto-inserted.
+
+Applies at: function args against typed params, let / field assignment with explicit type, return positions, match arm results. Patterns are not touched — `Some(v)` / `None` in match stay as-is.
+
+- `let x: Option<Int> = 5` → `Some(5)`
+- `let x: Option<Int> = None` → `None`
+- `let x: Option<Int> = opt` where `opt: Option<Int>` → pass-through, no double-lift
+- `let x: Option<Option<Int>> = 5` → compile error (1-layer rule; forces `Some(Some(5))` vs `Some(None)` intent to be explicit)
+- `foo(&v)` where `foo(p: Option<Ref<T>>)` → `foo(Some(&v))` (`&` stays explicit)
+- `foo(None)` → `foo(None)`
+
+**Rationale (explicit-first re-reading, not a new exception):**
+- Typed `Option<T>` position + value `T`: writing `Some` is information-neutral — the type annotation already says "nullable". Only `None` carries information at that position.
+- `&v` vs `v`: value/reference is a genuine 2-choice; auto-insertion would erase intent.
+- `Some(Some(v))` vs `Some(None)`: legitimately-nested Option (e.g. `Map<K, Option<T>>.get` distinguishing "key missing" from "key present with null value") relies on the 2-layer distinction. Auto-multi-lift would destroy it.
+
+The existing explicit-first bullet "Option creation: `Some(v)` / `None` required" tightens to "`None` required; `Some(v)` auto-lifted at typed Option positions." No new language exception needed.
+
+**Effect on item 1:** Unblocks param / field / generic-inner wrap without waiting for `tags { arca: nonnull }`. `nonnull` tag is repositioned as a pure safety feature (reject `None` at the type level), not a ceremony reliever. The two are complementary.
+
+Rejected alternatives:
+- Multi-layer lift: destroys the `Some(None)` vs `Some(Some(v))` distinction.
+- Auto-Ref alongside auto-Some: value/reference is a real 2-choice, not ceremony.
+- Lint warning on declared `Option<Option<T>>`: inconsistent with the rest of the language (no other type-shape warnings). Stays legal.
+
+**Status:** Idea. Small implementation (tail of `lowerExprHint` in `lower.go` — inject a `Some` wrap step when hint is `Option<T>` and value type unifies with `T`). Paired with item 1 implementation in the same slice.
+
+**Progress (2026-04-19):** Implemented as `autoSomeLift` at the tail of `lowerExprHint` in `lower.go`. Skips when result is already Option, is an unresolved `IRInterfaceType`, or is a free `IRTypeVar` (leaves those to `checkTypeHint`). Covered by `testdata/auto_some.arca`. Paired with the Option pointer-backed refactor (same 2026-04-19 slice).
+
+---
+
 ## 2026-04-19: Error trait interface shape (idea)
 
 **Context:** `Result[T, Error]` is the standard error-carrying type in Arca. Go FFI error values need to flow through as Arca Errors, and Arca Errors need to interoperate with Go's `error` interface at the FFI boundary. To close this loop, the `Error` trait needs a concrete shape. Related: `decisions/ideas.md` 2026-04-12 "Go FFI nullable/pointer ambiguity" (Error representation sub-topic), `decisions/ideas.md` 2026-04-11 "Trait system design".

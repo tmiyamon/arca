@@ -305,6 +305,17 @@ map(nums, x => x * 2)              // x type inferred from list element type
 sort.Slice(s, (i, j) => s[i] < s[j])  // i, j inferred from Go FFI signature
 ```
 
+**Auto-Some:** At typed `Option[T]` positions a bare value of type `T` is implicitly lifted into `Some(v)`. Single-layer only — nested `Option[Option[T]]` still requires explicit `Some(Some(v))` or `Some(None)`. `None` is never auto-inserted; `&` (Ref construction) is never auto-inserted.
+
+```
+fun describe(n: Option[Int]) -> String { ... }
+
+let x: Option[Int] = 10       // auto-Some → Some(10)
+let y: Option[Int] = None     // explicit, required
+describe(42)                   // auto-Some → describe(Some(42))
+describe(None)                 // explicit None
+```
+
 Explicit type arguments via `f[T](args)` when inference can't determine:
 
 ```

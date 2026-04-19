@@ -73,11 +73,12 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 ## Option Type
 
-- Emits as native Go, not a wrapper struct. The inner representation depends on position:
-  - Value positions / `(T, bool)` multi-return — paired `(T, bool)` variables split at let bindings
-  - Pointer-backed (`Option[Ref[T]]`, struct fields) — a single Go `*T` pointer (nil = None)
-- `Some(x)` and `None` construct through the expand pass, which populates `ExpandedValues` so emit produces native tuples without alien types.
-- Pattern matching: `if opt_ok { ... }` for value-backed Option, `if opt != nil { ... }` for pointer-backed.
+- Emits as a single Go `*T` pointer uniformly: `Option[T]` → `*T`, nil = None.
+- Collapse rule: when the inner is `Ref[U]` or `Ptr[U]` (both already emit as `*U`), outer Option and inner share the same Go type — `Some(ref)` emits as the ref itself, no extra pointer layer. Non-collapsible inners (value types, nested Option, List, ...) wrap via the `__ptrOf` helper: `Some(10)` → `__ptrOf(10)` (Go disallows `&10` on non-addressable values).
+- `None` emits as a typed nil: `(*T)(nil)`.
+- FFI boundary: Go `(T, bool)` returns are wrapped via `__optFrom(call())` → `*T` so Go's multi-return shape converts cleanly to Arca's uniform pointer-backed Option.
+- Pattern matching: always `if opt != nil { ... } else { ... }`. The `Some(v)` binding passes the pointer through unchanged when inner is `Ref[U]` / `Ptr[U]`, else dereferences once: `v := *opt` for `Option[Int]`, `v := opt` for `Option[Ref[User]]`.
+- No split machinery for Option — no `SplitNames` / `ExpandedValues` / `flattenArgs` entries. The post-pass handles Result only; Option flows through single-value paths uniformly.
 - Monadic methods (`.map`, `.flatMap`, `.okOr`, `.okOrElse`) desugar to `match` at the AST level — no new IR nodes.
 
 ## Result Type
@@ -117,7 +118,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
   - `*T` → `Option[Ref[T]]`
   - `(T)` → `T`
   - `(T1, T2, ...)` → Tuple (GoMultiReturn)
-- **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection.
+- **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection. For `(T, bool)` → `Option[T]`, emit wraps the raw call with `__optFrom(...)` to convert Go's multi-return shape into Arca's pointer-backed Option.
 - **Pointer auto-wrap**: `wrapPointerInOption` recursively walks Go-sourced IR types and converts every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`. Applied at return positions today; param / field / generic-inner positions are deferred behind a transitional `unify` compat (see `decisions/ideas.md` 2026-04-19).
 - **Ref vs Ptr**: `IRRefType` is Arca's user-facing safe reference (`Ref[T]`), `IRPointerType` is the FFI-internal raw pointer that only exists transiently before being wrapped. Users write `Ref[T]`; `*T` Arca syntax is legacy (remaining in some test sources, smoothed over by the transitional unify compat).
 - **Project structure**: `go.mod` at project root, managed by user with `go get`. `build/go.mod` copied from parent.
@@ -129,7 +130,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Priority order in codegen**:
   1. Result patterns (`Ok`/`Error`) → `if subject_err == nil`
   2. List patterns (`[]`/`[first, ..rest]`) → `if len(...) == 0`
-  3. Option patterns (`Some`/`None`) → `if subject_ok` for value-backed Option, `if subject != nil` for pointer-backed Option (`Option[Ref[T]]` or legacy `Option[*T]`)
+  3. Option patterns (`Some`/`None`) → `if subject != nil` uniformly (Option is always pointer-backed). Binding pass-through when inner is `Ref`/`Ptr`, else deref once.
   4. Enum patterns → `switch` on iota
   5. Sum type patterns → `switch v := x.(type)`
 - Patterns preserve the subject's inner type: `Some(v)` on `Option[Ref[User]]` binds `v: Ref[User]`, not `User`. Auto-deref (field/method) keeps access ergonomic.

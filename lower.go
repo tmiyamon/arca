@@ -1783,9 +1783,45 @@ func (l *Lowerer) lowerExprHint(expr Expr, hint IRType) IRExpr {
 	}
 	result := l.dispatchLowerExpr(expr, hint)
 	if hint != nil && result != nil {
+		result = l.autoSomeLift(result, hint)
 		l.checkTypeHint(result, hint, expr)
 	}
 	return result
+}
+
+// autoSomeLift wraps result in Some(...) when the hint is Option<T> and the
+// value's static type is T (not already Option). Single-layer only:
+// Option<Option<T>> does not lift through two levels — the user must write
+// Some(Some(v)) or Some(None) to disambiguate. None and & (Ref construction)
+// are never auto-inserted — they carry information that explicit-first
+// preserves.
+func (l *Lowerer) autoSomeLift(result IRExpr, hint IRType) IRExpr {
+	opt, ok := l.infer.resolve(hint).(IROptionType)
+	if !ok {
+		return result
+	}
+	actualType := result.irType()
+	if actualType == nil {
+		return result
+	}
+	resolved := l.infer.resolve(actualType)
+	// Already an Option value: no lift. Covers pass-through and blocks the
+	// multi-layer lift case (value of type Option<T> into hint Option<Option<T>>
+	// stays as-is so checkTypeHint reports the real mismatch).
+	if _, isOpt := resolved.(IROptionType); isOpt {
+		return result
+	}
+	// Unresolved placeholder or a free type var: let checkTypeHint drive
+	// unification. Lifting here would commit a Some wrap prematurely.
+	if _, isIface := resolved.(IRInterfaceType); isIface {
+		return result
+	}
+	if _, isVar := resolved.(IRTypeVar); isVar {
+		return result
+	}
+	_ = opt
+	l.builtins["option"] = true
+	return IRSomeCall{Value: result, Type: IROptionType{Inner: actualType}}
 }
 
 func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
@@ -4425,6 +4461,7 @@ func (l *Lowerer) exprToString(expr Expr) string {
 // --- Result/Option IR Expansion ---
 
 // expandLambdaParams is the IRLambda equivalent of expandFuncParams.
+// Only Result params are split; Option stays as a single pointer param.
 func expandLambdaParams(lam *IRLambda, ctx *expandCtx) {
 	var expanded []IRParamDecl
 	for _, p := range lam.Params {
@@ -4441,13 +4478,6 @@ func expandLambdaParams(lam *IRLambda, ctx *expandCtx) {
 				)
 				ctx.splits[p.GoName] = []string{p.GoName, errName}
 			}
-		case IROptionType:
-			okName := p.GoName + "_ok"
-			expanded = append(expanded,
-				IRParamDecl{GoName: p.GoName, Type: pt.Inner},
-				IRParamDecl{GoName: okName, Type: IRNamedType{GoName: "bool"}},
-			)
-			ctx.splits[p.GoName] = []string{p.GoName, okName}
 		default:
 			expanded = append(expanded, p)
 		}
@@ -4455,8 +4485,9 @@ func expandLambdaParams(lam *IRLambda, ctx *expandCtx) {
 	lam.Params = expanded
 }
 
-// expandFuncParams expands Result/Option params into multiple Go params
-// in the IR, and registers the split names in ctx for match resolution.
+// expandFuncParams expands Result params into multiple Go params in the IR,
+// and registers the split names in ctx for match resolution. Option is
+// pointer-backed and needs no split.
 func expandFuncParams(fd *IRFuncDecl, ctx *expandCtx) {
 	var expanded []IRParamDecl
 	for _, p := range fd.Params {
@@ -4473,13 +4504,6 @@ func expandFuncParams(fd *IRFuncDecl, ctx *expandCtx) {
 				)
 				ctx.splits[p.GoName] = []string{p.GoName, errName}
 			}
-		case IROptionType:
-			okName := p.GoName + "_ok"
-			expanded = append(expanded,
-				IRParamDecl{GoName: p.GoName, Type: pt.Inner},
-				IRParamDecl{GoName: okName, Type: IRNamedType{GoName: "bool"}},
-			)
-			ctx.splits[p.GoName] = []string{p.GoName, okName}
 		default:
 			expanded = append(expanded, p)
 		}
@@ -4569,14 +4593,6 @@ func expandWithCtx(e IRExpr, returnType IRType, ctx *expandCtx) IRExpr {
 		return populateOkExpanded(expr)
 	case IRErrorCall:
 		return populateErrorExpanded(expr)
-	case IRSomeCall:
-		expr.ExpandedValues = []IRExpr{expr.Value, IRBoolLit{Value: true}}
-		return expr
-	case IRNoneExpr:
-		if ot, ok := expr.Type.(IROptionType); ok {
-			expr.ExpandedValues = []IRExpr{irZeroExpr(ot.Inner), IRBoolLit{Value: false}}
-		}
-		return expr
 	default:
 		return expandCallArgs(e)
 	}
@@ -4616,12 +4632,10 @@ func resolveMatchBindings(m *IRMatch, ctx *expandCtx) {
 				m.Arms[i].Pattern = p
 			}
 		case IROptionSomePattern:
-			hasResultOrOptionPattern = true
-			if p.Binding != nil && len(names) >= 1 {
-				p.Binding.Source = names[0]
-				used[0] = true
-				m.Arms[i].Pattern = p
-			}
+			// Option is pointer-backed: no split names to resolve. The
+			// emit pass reads m.Subject directly and decides pass-through
+			// vs deref based on the inner type (see emitMatchOption).
+			_ = p
 		}
 	}
 
@@ -4837,8 +4851,6 @@ func expandLetToMultiLet(stmt IRLetStmt) IRLetStmt {
 		} else {
 			stmt.SplitNames = []string{stmt.GoName, fmt.Sprintf("%s_err", stmt.GoName)}
 		}
-	case IROptionType:
-		stmt.SplitNames = []string{stmt.GoName, fmt.Sprintf("%s_ok", stmt.GoName)}
 	}
 	return stmt
 }
@@ -4884,14 +4896,6 @@ func flattenArgs(args []IRExpr) []IRExpr {
 				} else {
 					out = append(out, irZeroExpr(rt.Ok), expr.Value)
 				}
-			} else {
-				out = append(out, a)
-			}
-		case IRSomeCall:
-			out = append(out, expr.Value, IRBoolLit{Value: true})
-		case IRNoneExpr:
-			if ot, ok := expr.Type.(IROptionType); ok {
-				out = append(out, irZeroExpr(ot.Inner), IRBoolLit{Value: false})
 			} else {
 				out = append(out, a)
 			}

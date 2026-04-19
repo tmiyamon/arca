@@ -52,11 +52,11 @@ func main() {
 		e := chained_err
 		fmt.Println(e)
 	}
-	home, home_ok := os.LookupEnv("HOME")
+	home := __optFrom(os.LookupEnv("HOME"))
 	var required string
 	var required_err error
-	if home_ok {
-		__monadic_v := home
+	if home != nil {
+		__monadic_v := *home
 		required, required_err = __monadic_v, nil
 	} else {
 		required, required_err = "", strconv.ErrRange
@@ -68,4 +68,15 @@ func main() {
 		e := required_err
 		fmt.Println(e)
 	}
+}
+
+func __ptrOf[T any](v T) *T {
+	return &v
+}
+
+func __optFrom[T any](v T, ok bool) *T {
+	if ok {
+		return &v
+	}
+	return nil
 }

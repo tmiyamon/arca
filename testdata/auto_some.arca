@@ -1,0 +1,21 @@
+import go "fmt"
+
+fun describe(n: Option[Int]) -> String {
+  match n {
+    Some(v) => "value is ${v}"
+    None => "nothing"
+  }
+}
+
+fun wrap(x: Int) -> Option[Int] {
+  x
+}
+
+fun main() {
+  let a: Option[Int] = 10
+  let b: Option[Int] = None
+  fmt.Println(describe(a))
+  fmt.Println(describe(b))
+  fmt.Println(describe(42))
+  fmt.Println(describe(wrap(7)))
+}

@@ -345,9 +345,11 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		}
 		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, args)
 	case IRFnCall:
-		return fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, em.emitArgs(expr.Args))
+		raw := fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, em.emitArgs(expr.Args))
+		return em.wrapGoMultiReturnOption(raw, expr.GoMultiReturn, expr.Type)
 	case IRMethodCall:
-		return fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
+		raw := fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
+		return em.wrapGoMultiReturnOption(raw, expr.GoMultiReturn, expr.Type)
 	case IRFieldAccess:
 		return fmt.Sprintf("%s.%s", em.emitExpr(expr.Expr), expr.Field)
 	case IRIndexAccess:
@@ -360,9 +362,20 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IRErrorCall:
 		return em.emitExpr(expr.Value)
 	case IRSomeCall:
-		// Option in value position → pointer (Some(v) = &v)
-		return "&" + em.emitExpr(expr.Value)
+		// Option<T> emits as *T. Some(v) produces that pointer.
+		// Collapse: when Inner is Ref<U>/Ptr<U>, Value already emits as *U,
+		// so Option<Ref<U>> and Value share the same Go type — pass-through.
+		// Otherwise use __ptrOf helper (handles literals/non-addressable values).
+		if isCollapsibleSomeValue(expr) {
+			return em.emitExpr(expr.Value)
+		}
+		return fmt.Sprintf("__ptrOf(%s)", em.emitExpr(expr.Value))
 	case IRNoneExpr:
+		// None emits as typed nil so assignment without annotation works:
+		// `x := None` → `x := (*int)(nil)` rather than ambiguous `x := nil`.
+		if expr.TypeArg != "" {
+			return fmt.Sprintf("(*%s)(nil)", em.noneInnerGoType(expr))
+		}
 		return "nil"
 	case IRLambda:
 		return em.emitLambda(expr)
@@ -551,16 +564,14 @@ func (em *Emitter) returnLeaf(e IRExpr) {
 }
 
 // expandedValues returns the pre-computed ExpandedValues from the
-// expandResultOption post-pass, or nil if not expanded.
+// expandResultOption post-pass, or nil if not expanded. Only Result leaves
+// produce expanded values now; Option is pointer-backed and emits as a
+// single value via emitExpr.
 func expandedValues(e IRExpr) []IRExpr {
 	switch expr := e.(type) {
 	case IROkCall:
 		return expr.ExpandedValues
 	case IRErrorCall:
-		return expr.ExpandedValues
-	case IRSomeCall:
-		return expr.ExpandedValues
-	case IRNoneExpr:
 		return expr.ExpandedValues
 	}
 	return nil
@@ -605,13 +616,11 @@ func (em *Emitter) declareSplitVars(names []string, multiType IRType) {
 }
 
 // splitVarTypes returns the Go types for each split name given the outer
-// multi-return type. For Result[T, E]: [T, E]. For Option[T]: [T, bool].
+// multi-return type. Only Result remains multi-slot; Option is pointer-backed.
 func (em *Emitter) splitVarTypes(t IRType, n int) []string {
 	switch tt := t.(type) {
 	case IRResultType:
 		return []string{em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err)}
-	case IROptionType:
-		return []string{em.irTypeStr(tt.Inner), "bool"}
 	}
 	// Fallback: all interface{} (shouldn't hit in practice)
 	types := make([]string, n)
@@ -960,19 +969,14 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 
-	// Discriminator: `_ok` flag for value-backed Option (T, bool) style,
-	// or `!= nil` for pointer-backed Option (Option[Ref[T]] from Go *T).
-	// The subject's IR type tells us which emit form applies.
-	okVar := subject + "_ok"
-	cond := okVar
-	negCond := "!" + okVar
-	if isPointerBackedOption(m.Subject.irType()) {
-		cond = subject + " != nil"
-		negCond = subject + " == nil"
-	}
-	// The Some arm's binding Source points to the value var (resolved by post-pass).
-	// The ok var is always subject + "_ok" (set by expandLetToMultiLet / param expansion).
-	// No need to re-derive from convention — just use the fallback for params.
+	// Option is uniformly pointer-backed: `*T` where nil = None.
+	cond := subject + " != nil"
+	negCond := subject + " == nil"
+
+	// Collapsible Option (Inner is Ref/Ptr): Some binding passes the pointer
+	// through unchanged (`v := subject`). Non-collapsible: deref once since
+	// the outer pointer wraps a value that user-Arca expects as the value.
+	collapse := isPointerBackedOption(m.Subject.irType())
 
 	var someArm, noneArm *IRMatchArm
 	for i := range m.Arms {
@@ -996,13 +1000,18 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 		return
 	}
 	emitSomeBinding := func() {
-		if someArm == nil { return }
-		p := someArm.Pattern.(IROptionSomePattern)
-		if p.Binding != nil && p.Binding.Source != "" && p.Binding.Source != ".Value" {
-			w.Assign(p.Binding.GoName, p.Binding.Source)
-		} else if p.Binding != nil {
-			w.Assign(p.Binding.GoName, subject) // fallback for params
+		if someArm == nil {
+			return
 		}
+		p := someArm.Pattern.(IROptionSomePattern)
+		if p.Binding == nil {
+			return
+		}
+		rhs := subject
+		if !collapse {
+			rhs = "*" + subject
+		}
+		w.Assign(p.Binding.GoName, rhs)
 	}
 
 	if noneVoid {
@@ -1024,9 +1033,13 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	})
 }
 
-// isPointerBackedOption reports whether an Option's inner type emits as a
-// Go pointer, where nil naturally represents None. Applies to Option[Ref[T]]
-// (user-written) and Option[*T] remnants (FFI internal).
+// isPointerBackedOption reports whether an Option's inner type is itself
+// pointer-like (Ref or Ptr), so outer and inner share the same Go `*T`
+// encoding. This enables the collapse: `Some(r)` for `Option<Ref<T>>` is
+// emitted as the ref itself, not `__ptrOf(r)`; and the match binding
+// `Some(v)` pass-through assigns `v := subject` rather than `v := *subject`.
+// All `Option<T>` is pointer-backed under the uniform scheme (2026-04-19);
+// this predicate only distinguishes the collapsible sub-case.
 func isPointerBackedOption(t IRType) bool {
 	opt, ok := t.(IROptionType)
 	if !ok {
@@ -1037,6 +1050,48 @@ func isPointerBackedOption(t IRType) bool {
 		return true
 	}
 	return false
+}
+
+// isCollapsibleSomeValue reports whether an IRSomeCall emits as its value
+// directly (no __ptrOf wrap). Fires when the Option's inner is Ref or Ptr:
+// both outer Option and inner Ref emit as `*T`, so the wrap would produce
+// `**T`, which is semantically wrong for the collapse.
+func isCollapsibleSomeValue(sc IRSomeCall) bool {
+	opt, ok := sc.Type.(IROptionType)
+	if !ok {
+		return false
+	}
+	switch opt.Inner.(type) {
+	case IRRefType, IRPointerType:
+		return true
+	}
+	return false
+}
+
+// wrapGoMultiReturnOption converts a Go FFI call that returns `(T, bool)`
+// into a single `*T` at the Arca boundary, so the uniform pointer-backed
+// Option representation holds end-to-end. No-op when the call doesn't need
+// conversion (non-Go-multi-return, or Result — Go's `(T, error)` matches
+// Arca `Result<T, E>` emit without translation).
+func (em *Emitter) wrapGoMultiReturnOption(raw string, goMultiReturn bool, t IRType) string {
+	if !goMultiReturn {
+		return raw
+	}
+	if _, ok := t.(IROptionType); !ok {
+		return raw
+	}
+	return fmt.Sprintf("__optFrom(%s)", raw)
+}
+
+// noneInnerGoType renders the Go type of the inner slot of an IRNoneExpr.
+// For `None` of type `Option<Int>`, emit needs `(*int)(nil)` at the value
+// position so Go can type-infer. The IRNoneExpr's Type carries the Option
+// and the Inner tells us what to cast to.
+func (em *Emitter) noneInnerGoType(n IRNoneExpr) string {
+	if opt, ok := n.Type.(IROptionType); ok {
+		return em.irTypeStr(opt.Inner)
+	}
+	return "interface{}"
 }
 
 func (em *Emitter) emitMatchEnum(m IRMatch, mode bodyMode) {
@@ -1196,11 +1251,24 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		set[b] = true
 	}
 
-	// Result_/Option_ synthetic types fully eliminated. Result/Option are
-	// emitted as native Go multi-return at all positions: function returns,
-	// parameters, try, match, and call arguments.
+	// Result stays as native Go multi-return. Option is uniformly
+	// pointer-backed: `*T` where nil = None. __ptrOf is the helper that
+	// wraps a value into a heap pointer — Go doesn't allow `&10` on literals
+	// and naive `&v` wouldn't cover non-addressable cases uniformly.
 	_ = set["result"]
-	_ = set["option"]
+	if set["option"] {
+		w.Func("__ptrOf[T any]", "v T", "*T", func() {
+			w.Return("&v")
+		})
+		w.Line("")
+		w.Func("__optFrom[T any]", "v T, ok bool", "*T", func() {
+			w.If("ok", func() {
+				w.Return("&v")
+			})
+			w.Return("nil")
+		})
+		w.Line("")
+	}
 	if set["map"] {
 		w.Func("Map_[T any, U any]", "list []T, f func(T) U", "[]U", func() {
 			w.Assign("result", "make([]U, len(list))")
@@ -1302,9 +1370,9 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	}
 }
 
-// irReturnTypeStr renders an IR type as a Go function return type. This is
-// the only position where Go multi-return syntax is valid. Result/Option
-// become native multi-return: (T, error), (T, bool), or bare error.
+// irReturnTypeStr renders an IR type as a Go function return type. Result
+// still uses multi-return (Go-idiomatic), Option is uniformly pointer-backed
+// so it falls through to irTypeStr and emits as `*T`.
 func (em *Emitter) irReturnTypeStr(t IRType) string {
 	switch tt := t.(type) {
 	case IRResultType:
@@ -1312,8 +1380,6 @@ func (em *Emitter) irReturnTypeStr(t IRType) string {
 			return "error"
 		}
 		return fmt.Sprintf("(%s, error)", em.irTypeStr(tt.Ok))
-	case IROptionType:
-		return fmt.Sprintf("(%s, bool)", em.irTypeStr(tt.Inner))
 	}
 	return em.irTypeStr(t)
 }
