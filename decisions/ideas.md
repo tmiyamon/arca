@@ -38,15 +38,18 @@ Rules:
 
 ### FFI boundary mapping
 
-Go signature → Arca type:
+Every Go `*T` position receives a corresponding Arca type. Defaults are nullable (`Option<Ref<T>>`) because Go pointers can hold nil at any of these positions; stricter types are opt-in via a future `tags { arca: nonnull }` marker.
 
-| Go | Arca |
-|---|---|
-| `*T` (return) | `Option<Ref<T>>` |
-| `(*T, error)` | `Result<Option<Ref<T>>, E>` |
-| `*T` (param) | `Option<Ref<T>>` |
-| `(T, bool)` | `Option<T>` (unchanged) |
-| `(T, error)` | `Result<T, E>` (unchanged) |
+| Go position | Arca type | Rationale |
+|---|---|---|
+| Return `*T` | `Option<Ref<T>>` | nil return is "valid absence" |
+| Return `(*T, error)` | `Result<Option<Ref<T>>, E>` | same, plus Go's error channel |
+| Return `(T, error)` | `Result<T, E>` | unchanged |
+| Return `(T, bool)` | `Option<T>` | unchanged |
+| Param `f(p *T)` | `Option<Ref<T>>` | Go params accept nil |
+| Struct field `F *T` | `Option<Ref<T>>` | Go fields can hold nil |
+| Method receiver `(p *T)` | `Ref<T>` at call site | Arca requires non-null for method calls; caller unwraps first |
+| Generic inner `List[*T]` | `List[Option<Ref<T>>]` | Go slices/maps may hold nil elements |
 
 Runtime value transitions at the boundary:
 
@@ -59,6 +62,8 @@ Runtime value transitions at the boundary:
 | `v` alone (return) | `Some(Ref v)` |
 
 `(nil, nil)` is the critical case: it's "successfully found no value", not an error. Converting to `Err(...)` was rejected as semantic corruption.
+
+**Override (future):** `tags { arca: nonnull }` on a Go field, param, or generic argument opts into `Ref<T>` directly, bypassing the Option wrap. Useful when the API author guarantees non-null by construction. Not yet designed in detail.
 
 ### IR representation
 
@@ -198,7 +203,6 @@ The Builder itself never appears in user code.
 2. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
 3. Match patterns on Ref/Option: does `Some(r)` give `Ref<T>` to bind? Pattern deref syntax?
 4. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
-5. FFI Ptr internal flow: implementation detail — how does `IRPointerType` transition into `IROptionType<IRRefType>` at the boundary?
 
 ### Prior art and references
 
@@ -209,11 +213,24 @@ The Builder itself never appears in user code.
 
 ### Status
 
-Idea. Direction is settled. Blocks:
-- Requires refactor of `IRPointerType` usage (method dispatch, auto-address, receiver resolution).
-- Requires monadic methods in stdlib (`flatMap`, `map`, `okOr`, etc.).
-- Synthetic Builder generation is its own multi-phase implementation (generation, Go code emit, runtime integration).
-- Existing code migration: `testdata`, `examples/todo`, stdlib signatures all need updates.
+Idea. Direction is settled. Implementation is partial:
+
+- **Return-position wrapping** (`*T`, `(*T, error)`): implemented. `wrapPointerInOption` produces `IROptionType{IRRefType{T}}` at the FFI return boundary.
+- **Param / field / generic-inner wrapping**: pending. These positions still carry raw `IRPointerType` through to Arca-facing IR; a transitional `unify` compat accepts `IRPointerType` and `IRRefType` interchangeably so user-written `Ref[T]` annotations can meet FFI types.
+- **Receiver**: handled via method dispatch, which unwraps either `IRPointerType` or `IRRefType`. No separate wrap needed.
+
+Blocks (broader rollout):
+- Refactor of remaining `IRPointerType` callers at the param / field / generic-inner paths.
+- Monadic stdlib methods (`flatMap`, `map`, `okOr`, etc.) — landed 2026-04-19.
+- Synthetic Builder generation is its own multi-phase implementation.
+- Existing code migration for `testdata`, `examples/todo`, stdlib signatures.
+
+Removing the transitional `unify` compat requires:
+1. Wrap param types with `Option<Ref<...>>` at the Go FFI parameter-lowering path.
+2. Same for struct field types.
+3. Same for generic inner arguments in Go generic instantiations.
+4. Update callers to use `Some(&v)` / `None` (or the nonnull tag override).
+5. Drop the compat branches in `unify`.
 
 No current estimate; this is a multi-week shift in Arca's FFI model.
 
