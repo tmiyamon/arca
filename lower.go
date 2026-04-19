@@ -3529,14 +3529,11 @@ func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
 
 	goVarName := "_"
 	if s.Name != "_" {
-		// Try unwraps Result: the variable gets the Ok type.
-		// If Ok is Option[*T] (from Go *T return), double-unwrap to *T.
+		// Try unwraps Result once: variable gets Ok type.
+		// (No longer unwraps an inner Option — use .okOr(err)? explicitly.)
 		var irType IRType
 		if rt, ok := loweredExpr.irType().(IRResultType); ok {
 			irType = rt.Ok
-			if optT, isOpt := irType.(IROptionType); isOpt {
-				irType = optT.Inner
-			}
 		}
 		goVarName = l.registerSymbol(SymbolRegInfo{
 			Name:     s.Name,
@@ -3558,14 +3555,6 @@ func (l *Lowerer) lowerTryLetStmt(s LetStmt, inner Expr) []IRStmt {
 		return []IRStmt{IRExprStmt{Expr: loweredExpr}}
 	}
 	l.builtins["result"] = true
-
-	// NilCheckReturnValues is populated by expandTryLetStmt when
-	// the call returns Result[Option[*T], Error].
-	if rt, ok := loweredExpr.irType().(IRResultType); ok {
-		if _, isOpt := rt.Ok.(IROptionType); isOpt {
-			l.builtins["fmt"] = true
-		}
-	}
 
 	return []IRStmt{IRTryLetStmt{
 		GoName:     goVarName,
@@ -4768,8 +4757,14 @@ func expandStmtWithCtx(s IRStmt, ctx *expandCtx) IRStmt {
 }
 
 func expandTryLetStmt(stmt IRTryLetStmt, ctx *expandCtx) IRTryLetStmt {
-	// Expand call args inside the try expression (e.g. NewTodo(0, "", None, None)?)
-	stmt.CallExpr = expandCallArgs(stmt.CallExpr)
+	// Expand call args or recurse into control-flow CallExpr so nested
+	// Ok/Error leaves get ExpandedValues and match subjects get bindings.
+	switch stmt.CallExpr.(type) {
+	case IRMatch, IRIfExpr, IRTryBlock:
+		stmt.CallExpr = expandWithCtx(stmt.CallExpr, nil, ctx)
+	default:
+		stmt.CallExpr = expandCallArgs(stmt.CallExpr)
+	}
 	n := ctx.nextCounter()
 
 	errorOnly := false
@@ -4810,23 +4805,6 @@ func expandTryLetStmt(stmt IRTryLetStmt, ctx *expandCtx) IRTryLetStmt {
 			}
 		} else {
 			stmt.ErrorReturnValues = nil
-		}
-
-		// Nil check for pointer Option: (*T, error) where val==nil && err==nil
-		if callRT, ok := stmt.CallExpr.irType().(IRResultType); ok {
-			if _, isOpt := callRT.Ok.(IROptionType); isOpt && valName != "_" {
-				nilErr := IRFnCall{
-					Func: "fmt.Errorf",
-					Args: []IRExpr{IRStringLit{Value: "unexpected nil value"}},
-				}
-				if rt, ok := stmt.ReturnType.(IRResultType); ok {
-					if isUnitType(rt.Ok) {
-						stmt.NilCheckReturnValues = []IRExpr{nilErr}
-					} else {
-						stmt.NilCheckReturnValues = []IRExpr{irZeroExpr(rt.Ok), nilErr}
-					}
-				}
-			}
 		}
 	}
 

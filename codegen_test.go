@@ -475,14 +475,17 @@ fun main() {
 
 	t.Run("pointer_error_becomes_result_option", func(t *testing.T) {
 		t.Parallel()
-		// net/url.Parse: func(rawURL string) (*URL, error).
-		// (*T, error) → Result[Option[*T], Error].
-		// ? double-unwraps: Result then Option, variable gets *T type.
+		// net/url.Parse: func(rawURL string) (*URL, error) →
+		//   Result[Option[Ref[URL]], Error] in Arca.
+		// ? unwraps one layer only (Result). User must convert the inner
+		// Option via .okOr(err)? to get the Ref[URL].
 		result, err := transpileSource(`
 import go "net/url"
+import go "fmt"
 
 fun parseURL(s: String) -> Result[String, error] {
-  let u = url.Parse(s)?
+  let opt = url.Parse(s)?
+  let u = opt.okOr(fmt.Errorf("nil url"))?
   Ok(u.Host)
 }
 
@@ -493,8 +496,8 @@ fun main() {
 		if err != nil {
 			t.Fatalf("transpile error: %v", err)
 		}
-		// The generated Go must include nil check for the pointer value
-		if !strings.Contains(result.goCode, "== nil") {
+		// Generated Go must still branch on the nil pointer somehow.
+		if !strings.Contains(result.goCode, "!= nil") && !strings.Contains(result.goCode, "== nil") {
 			t.Error("expected nil check in generated Go for pointer return")
 		}
 	})

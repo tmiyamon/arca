@@ -738,7 +738,14 @@ func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
 	// SplitNames, ErrorReturnValues, and ValueName are pre-computed by
 	// the expandResultOption post-pass. Emit is mechanical.
 	names := strings.Join(stmt.SplitNames, ", ")
-	if len(stmt.SplitNames) == 1 {
+	if isControlFlowValue(stmt.CallExpr) {
+		// `let x = match ... { Ok(...) => Ok(...); Error(...) => Error(...) }?`
+		// — the match produces a Result whose multi-return values must be
+		// assigned across the split names. Declare split vars, then walk
+		// the body leaves with a multi-assign mode.
+		em.declareSplitVars(stmt.SplitNames, stmt.CallExpr.irType())
+		em.emitBody(stmt.CallExpr, em.assignMultiMode(stmt.SplitNames))
+	} else if len(stmt.SplitNames) == 1 {
 		w.Assign(names, em.emitExpr(stmt.CallExpr))
 	} else {
 		w.AssignMulti(names, em.emitExpr(stmt.CallExpr))
@@ -953,9 +960,16 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	w := em.w
 	subject := em.emitExpr(m.Subject)
 
-	// Resolve okVar from the post-pass (via Some arm binding Source)
-	// or fall back to param naming convention.
+	// Discriminator: `_ok` flag for value-backed Option (T, bool) style,
+	// or `!= nil` for pointer-backed Option (Option[Ref[T]] from Go *T).
+	// The subject's IR type tells us which emit form applies.
 	okVar := subject + "_ok"
+	cond := okVar
+	negCond := "!" + okVar
+	if isPointerBackedOption(m.Subject.irType()) {
+		cond = subject + " != nil"
+		negCond = subject + " == nil"
+	}
 	// The Some arm's binding Source points to the value var (resolved by post-pass).
 	// The ok var is always subject + "_ok" (set by expandLetToMultiLet / param expansion).
 	// No need to re-derive from convention — just use the fallback for params.
@@ -976,7 +990,7 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 		return
 	}
 	if someVoid {
-		w.If(fmt.Sprintf("!%s", okVar), func() {
+		w.If(negCond, func() {
 			em.emitBody(noneArm.Body, mode)
 		})
 		return
@@ -992,13 +1006,13 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 	}
 
 	if noneVoid {
-		w.If(okVar, func() {
+		w.If(cond, func() {
 			emitSomeBinding()
 			em.emitBody(someArm.Body, mode)
 		})
 		return
 	}
-	w.IfElse(okVar, func() {
+	w.IfElse(cond, func() {
 		if someArm != nil {
 			emitSomeBinding()
 			em.emitBody(someArm.Body, mode)
@@ -1008,6 +1022,21 @@ func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
 			em.emitBody(noneArm.Body, mode)
 		}
 	})
+}
+
+// isPointerBackedOption reports whether an Option's inner type emits as a
+// Go pointer, where nil naturally represents None. Applies to Option[Ref[T]]
+// (user-written) and Option[*T] remnants (FFI internal).
+func isPointerBackedOption(t IRType) bool {
+	opt, ok := t.(IROptionType)
+	if !ok {
+		return false
+	}
+	switch opt.Inner.(type) {
+	case IRRefType, IRPointerType:
+		return true
+	}
+	return false
 }
 
 func (em *Emitter) emitMatchEnum(m IRMatch, mode bodyMode) {
