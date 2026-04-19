@@ -73,20 +73,24 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 ## Option Type
 
-- Implemented as a **generic struct**, not a pointer
-- `Some(x)` → `Some_(x)`, `None` → `None_[T]()`
-- Avoids nil leaking into Go code
-- Pattern matching: `if value.Valid { ... } else { ... }`
+- Emits as native Go, not a wrapper struct. The inner representation depends on position:
+  - Value positions / `(T, bool)` multi-return — paired `(T, bool)` variables split at let bindings
+  - Pointer-backed (`Option[Ref[T]]`, struct fields) — a single Go `*T` pointer (nil = None)
+- `Some(x)` and `None` construct through the expand pass, which populates `ExpandedValues` so emit produces native tuples without alien types.
+- Pattern matching: `if opt_ok { ... }` for value-backed Option, `if opt != nil { ... }` for pointer-backed.
+- Monadic methods (`.map`, `.flatMap`, `.okOr`, `.okOrElse`) desugar to `match` at the AST level — no new IR nodes.
 
 ## Result Type
 
-- Implemented as a **generic struct** with `Value`, `Err`, and `IsOk` fields
-- `Ok(x)` → `Ok_[T, E](x)`, `Error(e)` → `Err_[T, E](e)`
-- `?` operator works on Go FFI calls that return `(T, error)`:
-  - Captures multi-return into temp vars
-  - Checks error, returns `Err_` if non-nil
-  - Otherwise binds the value
-- Pattern matching: `if result.IsOk { ... } else { ... }`
+- Emits as native Go `(T, error)` multi-return. No wrapper struct, no `IsOk` / `Value` / `Err` fields.
+- `Ok(x)` and `Error(e)` populate `ExpandedValues` during the expand pass so emit writes `return x, nil` / `return zero, e` at leaf positions.
+- `?` operator on `Result[T, E]`:
+  - Captures multi-return into temp split vars (`__val1, __err1`).
+  - `if __err1 != nil { return ..., __err1 }` at the caller's return shape.
+  - Otherwise binds the value.
+  - Unwraps exactly one layer. To convert an inner `Option`, use `.okOr(err)?` or a monadic pipeline.
+- Pattern matching: `if result_err == nil { ... } else { ... }` over the split pair.
+- Monadic methods (`.map`, `.flatMap`, `.mapError`) desugar to `match` at the AST level.
 
 ## Type Checking
 
@@ -107,15 +111,15 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Qualified types**: `http.ResponseWriter`, `*http.Request` are passed through as-is
 - **Return type mapping** (mechanical, in `goFuncReturnType`):
   - `(T, error)` → `Result[T, error]` (GoMultiReturn)
-  - `(*T, error)` → `Result[Option[*T], error]` (GoMultiReturn)
+  - `(*T, error)` → `Result[Option[Ref[T]], error]` (GoMultiReturn)
   - `(T, bool)` → `Option[T]` (GoMultiReturn)
   - `(error)` → `Result[Unit, error]` (GoMultiReturn)
-  - `*T` → `Option[*T]`
+  - `*T` → `Option[Ref[T]]`
   - `(T)` → `T`
   - `(T1, T2, ...)` → Tuple (GoMultiReturn)
 - **GoMultiReturn flag**: `IRFnCall`, `IRMethodCall`, `IRConstructorCall` carry this flag. Emitter generates multi-value receive + wrapping. Consumption sites (let, try, match) read IR types — no ad-hoc detection.
-- **Pointer Option auto-wrap**: Go `*T` returns are wrapped in `IROptionType` at the IR level. Single `*T` → `Option[*T]`, `(*T, error)` → `Result[Option[*T], Error]`. The `?` operator double-unwraps with a nil check. Implements the FFI design principle: Go pointer nullability sealed at the boundary.
-- **Pointer types**: `*Type` syntax exists solely for Go FFI interop
+- **Pointer auto-wrap**: `wrapPointerInOption` recursively walks Go-sourced IR types and converts every `IRPointerType` leaf into `IROptionType{IRRefType{...}}`. Applied at return positions today; param / field / generic-inner positions are deferred behind a transitional `unify` compat (see `decisions/ideas.md` 2026-04-19).
+- **Ref vs Ptr**: `IRRefType` is Arca's user-facing safe reference (`Ref[T]`), `IRPointerType` is the FFI-internal raw pointer that only exists transiently before being wrapped. Users write `Ref[T]`; `*T` Arca syntax is legacy (remaining in some test sources, smoothed over by the transitional unify compat).
 - **Project structure**: `go.mod` at project root, managed by user with `go get`. `build/go.mod` copied from parent.
 
 ## Pattern Matching
@@ -123,11 +127,13 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - **Exhaustive**: compiler enforces all constructors are covered
 - **Wildcard**: `_` catches remaining cases
 - **Priority order in codegen**:
-  1. Result patterns (`Ok`/`Error`) → `if result.IsOk`
-  2. List patterns (`[]`/`[first, ..rest]`) → `if len(...)`
-  3. Option patterns (`Some`/`None`) → `if value.Valid`
+  1. Result patterns (`Ok`/`Error`) → `if subject_err == nil`
+  2. List patterns (`[]`/`[first, ..rest]`) → `if len(...) == 0`
+  3. Option patterns (`Some`/`None`) → `if subject_ok` for value-backed Option, `if subject != nil` for pointer-backed Option (`Option[Ref[T]]` or legacy `Option[*T]`)
   4. Enum patterns → `switch` on iota
   5. Sum type patterns → `switch v := x.(type)`
+- Patterns preserve the subject's inner type: `Some(v)` on `Option[Ref[User]]` binds `v: Ref[User]`, not `User`. Auto-deref (field/method) keeps access ergonomic.
+- Match-as-value with Result/Option-producing arms (`let x = match r { Ok(v) => Ok(f(v)); Error(e) => Error(e) }`): emit declares split vars up front and walks the body with a multi-assign mode; each leaf's `ExpandedValues` populate both names.
 
 ## Type Parameters (Generics)
 
@@ -145,15 +151,29 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 
 ## Error Propagation
 
-- `?` unwraps `Result`, propagating `Error` to the enclosing Result context
-- `?` on `Option[T]` performs a nil check and unwraps (returns `Error` on `None`)
-- `?` is only valid inside Result-returning functions or `try {}` blocks — compile error otherwise
-- `try { ... }` block expression creates a Result context where `?` can be used in non-Result functions
+- `?` unwraps exactly one Result layer, propagating `Error` to the enclosing Result context.
+- `?` on `Option[T]` inside a Result-returning function is **a compile error** — semantics don't mix. Use `.okOr(err)?` to convert, or a monadic pipeline (`.flatMap(opt => opt.okOr(err))`).
+- `?` is only valid inside Result-returning functions or `try {}` blocks — compile error otherwise.
+- `try { ... }` block expression creates a Result context where `?` can be used in non-Result functions.
   - Emitted as a Go IIFE: `func() (T, error) { ... }()`
   - Final expression is auto-wrapped in `Ok`
   - HM inference: fresh type var for Ok type, unified with final expression
-- `try` is not a keyword — only `try {` triggers recognition. `let try = 42` is valid
-- `?` has the downside that the error point is at end of line, easy to miss
+- `try` is not a keyword — only `try {` triggers recognition. `let try = 42` is valid.
+- `?` has the downside that the error point is at end of line, easy to miss.
+
+### Monadic methods (Result/Option)
+
+Available on both types, implemented as AST-level desugar to `match`:
+
+- `Result[T, E]`: `.map(f)`, `.flatMap(f)`, `.mapError(f)`
+- `Option[T]`: `.map(f)`, `.flatMap(f)`, `.okOr(err)`, `.okOrElse(fn)`
+
+Useful when the zigzag of `?` would be noisy — e.g. FFI pointer chains:
+```arca
+url.Parse(s)                        // Result[Option[Ref[URL]], E]
+  .flatMap(opt => opt.okOr(NotFound))  // Result[Ref[URL], E]
+  .map(u => u.Host)                    // Result[String, E]
+```
 
 ## Prelude (Built-in Functions)
 

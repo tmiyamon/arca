@@ -208,11 +208,33 @@ fun main() {
 }
 ```
 
-- `?` unwraps `Result`, propagating `Error` to the enclosing Result context
-- `?` on `Option[T]` (e.g. Go `*T` returns) performs a nil check and unwraps
+- `?` unwraps `Result` one layer, propagating `Error` to the enclosing Result context
+- `?` on `Option[T]` is **a compile error** in a Result-returning function — the two semantics do not mix. Convert explicitly with `.okOr(err)?`, or use a monadic pipeline (`.flatMap`, `.map`).
 - `?` is only valid inside Result-returning functions or `try {}` blocks (compile error otherwise)
 - `try { ... }` is a block expression that returns `Result[T, Error]` where T is the type of the final expression
 - `try` is not a keyword — only `try {` is recognized as a try block. `let try = 42` is valid
+
+### Monadic methods on Result/Option
+
+- `Result[T, E]`: `.map(f)`, `.flatMap(f)`, `.mapError(f)`
+- `Option[T]`: `.map(f)`, `.flatMap(f)`, `.okOr(err)`, `.okOrElse(fn)`
+
+Example, converting a Go FFI pointer return into a `Result[T, E]` without the `?`-zigzag:
+
+```
+fun parseHost(s: String) -> Result[String, error] {
+  url.Parse(s)
+    .flatMap(opt => opt.okOr(NotFound))
+    .map(u => u.Host)
+}
+```
+
+### Safe reference type
+
+- `Ref[T]` — non-null reference to an immutable value. Emits as Go `*T`.
+- Construction: `&v` takes a reference from an lvalue (including `&r.field`).
+- Access: field and method calls auto-deref (`r.field`, `r.method()`). Other operations (comparison, pattern binding, etc.) are explicit.
+- `Option[Ref[T]]` is the only way to spell "nullable reference"; Go `*T` FFI returns land here automatically.
 
 ### Visibility
 
@@ -366,12 +388,12 @@ let _ = db.Exec("INSERT ...")?   // discard success value, propagate error
 | Go return type | Arca type |
 |----------------|-----------|
 | `(T, error)` | `Result[T, Error]` |
-| `(*T, error)` | `Result[Option[*T], Error]` |
+| `(*T, error)` | `Result[Option[Ref[T]], Error]` |
 | `(T, bool)` | `Option[T]` |
-| `*T` | `Option[*T]` |
+| `*T` | `Option[Ref[T]]` |
 | Other multi-return | Tuple |
 
-Go pointer returns are automatically wrapped in `Option` to prevent nil panics. The `?` operator double-unwraps `Result[Option[*T], Error]` with a nil check.
+Go pointer returns are automatically wrapped in `Option[Ref[T]]` — `Ref[T]` is the safe non-null reference, `Option` carries the nullability. To reach the underlying `Ref[T]`, use `.okOr(err)?` on the Option or pattern-match; `?` only unwraps the Result layer, not the Option.
 
 **Mutability boundary:**
 - Arca-defined types are fully immutable (language-guaranteed)
