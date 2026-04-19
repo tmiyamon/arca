@@ -132,6 +132,26 @@ Rejected alternatives:
 
 Explicit pattern deref syntax (e.g. `Some(*v)` → `v: User`) is left open for future addition if a concrete need emerges. `Ref v` as a destructuring pattern is not introduced — `Ref<T>` is transparent at the pattern level.
 
+### Generic composition
+
+`Ref<T>` composes with generic types like any other type — no special rule:
+
+| Arca | Go |
+|---|---|
+| `List<Ref<User>>` | `[]*User` |
+| `Map<K, Ref<V>>` | `map[K]*V` |
+| `Option<List<Ref<T>>>` | `*[]*T` (list itself nullable) |
+| `List<Option<Ref<T>>>` | `[]*T` (nil entries allowed) |
+
+Type preservation at access sites keeps patterns consistent:
+```arca
+let users: List<Ref<User>> = [&alice, &bob]
+let first = users[0]          // first: Ref<User>
+let name = users[0].name      // auto-deref on field access
+```
+
+Construction uses `&` per the Ref construction rules; literals populate each slot explicitly. Empty collection type inference behaves as for any other element type — driven by annotation hint.
+
 ### `?` operator
 
 Single-layer unwrap, context must match:
@@ -224,9 +244,8 @@ The Builder itself never appears in user code.
 
 ### Open questions (deferred)
 
-1. Generic types with Ref: `List<Ref<T>>`, `Map<K, Ref<V>>` — presumably allowed but unexplored.
-2. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
-3. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
+1. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
+2. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
 
 ### Prior art and references
 
