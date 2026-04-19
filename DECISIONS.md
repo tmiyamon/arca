@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-19
+
+- [Ref / Option / Ptr three-layer memory model (idea)](decisions/ideas.md#2026-04-19-ref--option--ptr-three-layer-memory-model-idea) — Separate safe `Ref<T>`, nullable `Option<T>`, and FFI-internal `Ptr<T>`. Users write `Ref<T>` and `Option<T>`; `Ptr<T>` stays compiler-internal. Immutability makes the model work without borrow checker. `?` becomes single-layer; monadic pipeline for Option↔Result conversion. Synthetic Builder (per-type, tag-driven) absorbs FFI mutation. Explicit-first principle (field/method auto-deref as the single exception). Replaces 2026-04-18 `*T` → Option auto-wrap.
+
 ## 2026-04-18
 
 - [Go `*T` → Option auto-wrap](decisions/ffi.md#2026-04-18-go-t--option-auto-wrap) — Go pointer returns automatically wrapped in `IROptionType`. `*T` → `Option[*T]`, `(*T, error)` → `Result[Option[*T], Error]`. `?` double-unwraps with nil check. Implements systematic `*T` nullability rule from FFI boundary table.

@@ -4,6 +4,221 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-19: Ref / Option / Ptr three-layer memory model (idea)
+
+**Core idea:** Separate three concepts that Go conflates into `*T`: `Ref<T>` (safe non-null reference), `Option<T>` (nullable), `Ptr<T>` (FFI-internal, unsafe). Users see `Ref` and `Option`; `Ptr` is compiler-internal. Immutability makes the model work without borrow checker complexity.
+
+**Motivation:** Prior "`*T` → `Option[*T]` auto-wrap" (2026-04-18) was a local fix that conflated "nullable pointer" with "optional pointer". The "double unwrap" framing was a lie — `?` silently stripped two layers at once, mixing Result/Error semantics with Option/Absence semantics. The ChatGPT conversation (2026-04-19 session) framed this more cleanly: concepts are independent and should stay separate.
+
+### Conceptual separation
+
+| Concept | Type | Role |
+|---|---|---|
+| Value | `T` | Default, immutable, copy semantics |
+| Safe reference | `Ref<T>` | Non-null, shared access (immutable) |
+| Nullable | `Option<T>` / `T?` | "Value present or absent" |
+| FFI-internal | `Ptr<T>` | Raw Go pointer, nullable, compiler-only |
+
+Rules:
+- `Ref<T>` is guaranteed non-null (enforced via construction rules, not the type itself)
+- `Option<T>` is the only way to express "might be absent"
+- `Ptr<T>` exists only in IR / FFI boundary; no user syntax
+- Mixing Option with pointer types is natural: `Option<Ref<T>>`
+
+### Syntax
+
+| Surface | Meaning |
+|---|---|
+| `T` | Value, copy semantics |
+| `Ref<T>` | Safe reference, non-null |
+| `Option<T>`, `T?` | Nullable, sugar form exists |
+| `&v` | Ref-creation expression |
+| `Some(v)` / `None` | Option constructors |
+| `*T` | Not valid Arca syntax (current `*T` user-facing form is removed) |
+
+### FFI boundary mapping
+
+Go signature → Arca type:
+
+| Go | Arca |
+|---|---|
+| `*T` (return) | `Option<Ref<T>>` |
+| `(*T, error)` | `Result<Option<Ref<T>>, E>` |
+| `*T` (param) | `Option<Ref<T>>` |
+| `(T, bool)` | `Option<T>` (unchanged) |
+| `(T, error)` | `Result<T, E>` (unchanged) |
+
+Runtime value transitions at the boundary:
+
+| Go value | Arca value |
+|---|---|
+| `(v, nil)` | `Ok(Some(Ref v))` |
+| `(nil, nil)` | `Ok(None)` |
+| `(_, err)` | `Err(err)` |
+| `nil` alone (return) | `None` |
+| `v` alone (return) | `Some(Ref v)` |
+
+`(nil, nil)` is the critical case: it's "successfully found no value", not an error. Converting to `Err(...)` was rejected as semantic corruption.
+
+### IR representation
+
+- `IRRefType{Inner: T}`: new IR node for Arca's safe reference
+- `IRPointerType{Inner: T}`: retained, but restricted to FFI-internal use (raw Go pointer before boundary wrapping)
+- `IROptionType{Inner: T}`: unchanged
+- `IROptionType{Inner: IRRefType{Inner: T}}`: the canonical FFI-wrapped nullable pointer
+
+Go emit:
+- `Ref<T>` → `*T`
+- `Option<Ref<T>>` → `*T` (nil = None, non-nil = Some)
+- `Option<T>` where T is primitive → `*T` (nil = None) — existing convention
+- `IROptionType{Inner: IRPointerType}` → collapses to `*T` (don't emit `**T`)
+
+### Ref construction (non-null guarantee)
+
+`Ref<T>` is non-null by **construction rules**, not type-level proof:
+
+| Source | Syntax | Safe? |
+|---|---|---|
+| Value (lvalue) | `&v` | Yes (v has concrete value) |
+| Field | `&user.name` | Yes (user exists) |
+| Ref field | `&r.field` | Yes (r is non-null) |
+| FFI return | compiler-generated wrapping | Yes (boundary check) |
+| Ptr | not allowed directly | Must go through `Option<Ref<T>>` |
+
+No user-visible escape hatch. The only way to get a Ref from a Ptr is through boundary wrapping that produces `Option<Ref<T>>` (requires explicit unwrap).
+
+### Auto-deref
+
+Explicit-first principle applies, with **one exception**: field access and method calls on `Ref<T>` auto-deref.
+
+| Operation on `r: Ref<T>` | Behavior |
+|---|---|
+| `r.field` | Auto-deref: returns T's field |
+| `r.method()` | Auto-deref: dispatches to T's method (Go handles it) |
+| `r.field = x` | Forbidden (immutable) |
+| `r == r2` | Explicit (no auto-deref for comparison) |
+| Pattern match on r | Explicit deref if needed |
+| Arithmetic, format | Explicit operations |
+
+Rationale: field/method access is the most common operation, and `(*r).field` is visually noisy. Rust, Go, Swift, Kotlin, Java all follow this convention. Per the "make-everything-explicit" principle, this is the documented exception.
+
+### `?` operator
+
+Single-layer unwrap, context must match:
+
+| Context fn returns | `?` operand | Behavior |
+|---|---|---|
+| `Result<T, E>` | `Result<T, E>` | Err propagates |
+| `Result<T, E>` | `Option<T>` | **Compile error** (no implicit conversion) |
+| `Option<T>` | `Option<T>` | None propagates |
+| `Option<T>` | `Result<T, E>` | **Compile error** |
+| (other) | any | Compile error (need try block or Result return) |
+
+`??` operator is **not** introduced. The "double unwrap" convenience is replaced by explicit conversion.
+
+### Option ↔ Result conversion
+
+No implicit conversion. Two idiomatic paths:
+
+**Monadic pipeline (recommended for FFI chains):**
+```arca
+fun parseHost(s: String) -> Result<String, E> {
+  url.Parse(s)
+    .flatMap(opt => opt.okOr(NotFound))
+    .map(u => u.Host)
+}
+```
+
+**Method chain with `?`:**
+```arca
+fun parseHost(s: String) -> Result<String, E> {
+  let u = url.Parse(s)?.okOr(NotFound)?
+  Ok(u.Host)
+}
+```
+
+The monadic form keeps the outer type constant (Result throughout), avoiding the zigzag (Result → Option → Result → T) that the method-chain form produces.
+
+**stdlib required:**
+- `Result<T, E>`: `.map(f)`, `.flatMap(f)`, `.mapError(f)`
+- `Option<T>`: `.map(f)`, `.flatMap(f)`, `.okOr(err)`, `.okOrElse(fn)`
+
+### Explicit-first principle
+
+Where there's a choice between implicit and explicit, choose explicit:
+
+- Ref creation: `&v` required (no auto)
+- Option creation: `Some(v)` / `None` required
+- FFI param passing: no auto-address (user writes `Some(&v)` or `None`)
+- Option/Result conversion: `.okOr(err)` explicit
+- `okOr` eager vs lazy: both provided (`okOr`, `okOrElse`)
+- `Ref<mut T>` visibility: forbidden to user (kept internal)
+
+**Exception:** auto-deref on field/method (see above).
+
+### Mutation: `Ref<mut T>` is hidden
+
+Arca is immutable at user level. `Ref<mut T>` does not appear in user syntax. It exists in IR only to let Synthetic Builder absorb FFI mutation (`c.Bind(&target)`, `rows.Scan(&id, &body)`, etc.). The Builder mechanism is the only sanctioned bridge between user-immutable Arca and mutation-requiring Go APIs.
+
+### Synthetic Builder integration
+
+For each Arca type with relevant tags, the compiler generates a per-type Builder. The Builder uses `Ref<mut T>` internally to receive Go mutation, then freezes into an immutable Arca value.
+
+| Sub-decision | Choice |
+|---|---|
+| A: Generation policy | Tag-based (types with `tags { json, db }` get a Builder) |
+| B: User API | stdlib generic functions (`stdlib.bind[T]`, `stdlib.scan[T]`), not per-type methods |
+| C: Completeness | Type signature drives: `Option<T>` fields default to `None`, others are required |
+| C: Constraint check | At freeze time (not setter time) |
+| C: Typestate | Deferred — runtime check is sufficient for now |
+| D: FFI operation split | Builder is internal core; stdlib functions are thin wrappers |
+| E: Builder type | Per-type, compiler-generated (`__TodoBuilder` etc.), user-invisible |
+| F: freeze semantic | Returns `Result<T, E>` (Go FFI errors + Arca constraint errors merged) |
+
+User-facing shape:
+```arca
+fun handler(c: Ref<echo.Context>) -> Result<Todo, E> {
+  let todo = stdlib.bind[Todo](c)?
+  // ...
+}
+```
+
+The Builder itself never appears in user code.
+
+### What this replaces
+
+- 2026-04-18 "`*T` → Option auto-wrap": systematic `*T` handling was a first attempt. This 3-layer model generalizes and cleans it up.
+- Current user-facing `*T` syntax (seen in `testdata`, `examples/todo`): removed. Users write `Ref<T>` or rely on FFI-generated types.
+- "double unwrap" semantics of `?`: replaced by explicit single-layer unwrap plus monadic conversion.
+- `NilCheckReturnValues` IR mechanism: no longer needed — `?` never mixes Option and Result.
+
+### Open questions (deferred)
+
+1. Generic types with Ref: `List<Ref<T>>`, `Map<K, Ref<V>>` — presumably allowed but unexplored.
+2. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
+3. Match patterns on Ref/Option: does `Some(r)` give `Ref<T>` to bind? Pattern deref syntax?
+4. Ref as return type semantics: dangling-ness is handled by Go GC, but the type invariant is TBD.
+5. FFI Ptr internal flow: implementation detail — how does `IRPointerType` transition into `IROptionType<IRRefType>` at the boundary?
+
+### Prior art and references
+
+- **Rust**: `&T` (non-null), `*const T` (unsafe, nullable), `Option<&T>` (safe nullable reference). Same separation, compiled behind borrow checker.
+- **Kotlin / Swift**: "reference type" is the default, nullable via `T?`. Works because class reference ≠ pointer.
+- **Zig**: `?T` for optional, `*T` for pointer. Explicit `.?` unwrap.
+- **Roc**: platform/app split; app is pure, host is mutable. Analogous to Arca's Builder pattern.
+
+### Status
+
+Idea. Direction is settled. Blocks:
+- Requires refactor of `IRPointerType` usage (method dispatch, auto-address, receiver resolution).
+- Requires monadic methods in stdlib (`flatMap`, `map`, `okOr`, etc.).
+- Synthetic Builder generation is its own multi-phase implementation (generation, Go code emit, runtime integration).
+- Existing code migration: `testdata`, `examples/todo`, stdlib signatures all need updates.
+
+No current estimate; this is a multi-week shift in Arca's FFI model.
+
+---
+
 ## 2026-04-12: Symmetric boundary conversion — eliminate synthetic types (idea)
 
 **Core principle:** The Go↔Arca type conversion should be symmetric. Currently Arca wraps Go multi-return into Result/Option at call sites (Go→Arca), but doesn't unwrap back at function boundaries (Arca→Go). Making the conversion bidirectional eliminates the need for synthetic runtime types (`Result_`, `Option_`, `Ok_`, `Err_`, `Some_`, `None_`) in generated Go.
