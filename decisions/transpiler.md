@@ -60,7 +60,7 @@ fun main() {
 
 ---
 
-### 2026-04-12: Merge validate into lower
+## 2026-04-12: Merge validate into lower
 
 Deleted `validate.go` (766 lines). All structural checks now live in lower.go:
 
