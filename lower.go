@@ -2341,11 +2341,13 @@ func (l *Lowerer) instantiateGeneric(info *FuncInfo) (vars map[string]IRType, pa
 	return
 }
 
-// wrapPointerInOption wraps IRPointerType in IROptionType for Go FFI returns.
-// *T → Option[*T] (IROptionType{Inner: IRPointerType{Inner: T}}).
+// wrapPointerInOption wraps Go pointer returns as Option<Ref<T>> for Arca.
+// Go *T → Option[Ref[T]] (IROptionType{Inner: IRRefType{Inner: T}}).
+// The raw IRPointerType from goTypeToIR is replaced by IRRefType here — Ptr
+// is FFI-internal, Ref is the user-facing safe reference.
 func wrapPointerInOption(t IRType) IRType {
-	if _, isPtr := t.(IRPointerType); isPtr {
-		return IROptionType{Inner: t}
+	if ptr, isPtr := t.(IRPointerType); isPtr {
+		return IROptionType{Inner: IRRefType{Inner: ptr.Inner}}
 	}
 	return t
 }
