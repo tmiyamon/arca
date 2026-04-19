@@ -181,17 +181,23 @@ func (s *InferScope) unify(a, b IRType) bool {
 		}
 		return true
 	case IRPointerType:
-		bt, ok := b.(IRPointerType)
-		if !ok {
-			return false
+		if bt, ok := b.(IRPointerType); ok {
+			return s.unify(at.Inner, bt.Inner)
 		}
-		return s.unify(at.Inner, bt.Inner)
+		// Transitional compat: IRPointerType and IRRefType emit as same Go *T.
+		// Until FFI boundary is migrated to produce IRRefType, treat as compatible.
+		if rt, ok := b.(IRRefType); ok {
+			return s.unify(at.Inner, rt.Inner)
+		}
+		return false
 	case IRRefType:
-		bt, ok := b.(IRRefType)
-		if !ok {
-			return false
+		if bt, ok := b.(IRRefType); ok {
+			return s.unify(at.Inner, bt.Inner)
 		}
-		return s.unify(at.Inner, bt.Inner)
+		if pt, ok := b.(IRPointerType); ok {
+			return s.unify(at.Inner, pt.Inner)
+		}
+		return false
 	}
 
 	return false

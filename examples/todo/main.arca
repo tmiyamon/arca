@@ -7,13 +7,13 @@ import go _ "github.com/mattn/go-sqlite3"
 import stdlib
 
 type App (
-  db: *sql.DB
+  db: Ref[sql.DB]
 ) {
   static fun create() -> Result[Self, error] {
     let db = sql.Open("sqlite3", "./todo.db")?
 
     db.Exec("""
-      create table if not exists todo (
+      create table if not exists todos (
         id          integer   primary key autoincrement, 
         body        text      not null,
         started_at  datetime,
@@ -38,34 +38,25 @@ type Todo (
   tags { json } 
 }
 
-fun getTodo(app: App, c: *echo.Context) -> error {
-  app.db.Exec("select * from todos order by id")?
-
-  c.String(http.StatusOK, "Hello World!")
-}
-
-fun selectTodo(app: App, c: *echo.Context) -> Result[List[Todo], error] {
-	let rows = app.db.Query("SELECT * FROM todos order by id")?
-	defer rows.Close()
-
-	for r in rows.Next() {
-    let id: Int = 0
-    let body: String = ""
-    r.Scan(&id, &body)?
-	}
-}
-
-fun postTodo(app: App, c: *echo.Context) -> error {
-  let result = createTodo(app, c)
+fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
+  let result = stdlib.QueryAs[Todo](app.db, "select * from todos order by id")
   match result {
-    Ok(todo) => c.JSON(http.StatusOK, todo)
-    Error(e) => c.JSON(http.StatusBadRequest, None)
+    Ok(todos) => c.JSON(http.StatusOK, {"todos": todos})
+    Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
   }
 }
 
-fun createTodo(app: App, c: *echo.Context) -> Result[Todo, error] {
+fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
+  let result = createTodo(app, c)
+  match result {
+    Ok(todo) => c.JSON(http.StatusOK, todo)
+    Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
+  }
+}
+
+fun createTodo(app: App, c: Ref[echo.Context]) -> Result[Todo, error] {
   let todo = Todo(0, "", None, None)?
-  c.Bind(todo)?
+  c.Bind(&todo)?
   app.db.Exec("insert into todos (body) values (?)", todo.body)?
   Ok(todo)
 }

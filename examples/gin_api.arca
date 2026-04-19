@@ -15,7 +15,7 @@ type User(id: Int, name: String, email: String) {
 
 // --- DB ---
 
-fun initDb() -> Result[*sqlx.DB, error] {
+fun initDb() -> Result[Ref[sqlx.DB], error] {
   let db = sqlx.Open("sqlite", ":memory:")?
   let _ = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")?
   let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?
@@ -25,13 +25,13 @@ fun initDb() -> Result[*sqlx.DB, error] {
 
 // --- Handlers ---
 
-fun handleGetUsers(db: *sqlx.DB, c: *gin.Context) {
+fun handleGetUsers(db: Ref[sqlx.DB], c: Ref[gin.Context]) {
   let users: List[User] = []
   let _ = db.Select(&users, "SELECT id, name, email FROM users")
   c.JSON(http.StatusOK, users)
 }
 
-fun handleGetUser(db: *sqlx.DB, c: *gin.Context) {
+fun handleGetUser(db: Ref[sqlx.DB], c: Ref[gin.Context]) {
   let id = c.Param("id")
   let user = User(id: 0, name: "", email: "")
   let _ = db.Get(&user, "SELECT id, name, email FROM users WHERE id = ?", id)
@@ -46,8 +46,8 @@ fun main() {
     Ok(db) -> {
       defer db.Close()
       let r = gin.Default()
-      r.GET("/users", (c: *gin.Context) => handleGetUsers(db, c))
-      r.GET("/users/:id", (c: *gin.Context) => handleGetUser(db, c))
+      r.GET("/users", (c: Ref[gin.Context]) => handleGetUsers(db, c))
+      r.GET("/users/:id", (c: Ref[gin.Context]) => handleGetUser(db, c))
       fmt.Println("Starting server on :8080")
       r.Run(":8080")
     }

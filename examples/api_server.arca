@@ -44,7 +44,7 @@ fun findUserById(id: Int) -> Result[User, ApiError] {
 
 // --- Handlers ---
 
-fun handleUser(w: http.ResponseWriter, r: *http.Request) {
+fun handleUser(w: http.ResponseWriter, r: Ref[http.Request]) {
   let idStr = r.URL.Query().Get("id")
   let id = parseId(idStr)
   match id {
@@ -64,7 +64,7 @@ fun parseId(s: String) -> Result[Int, error] {
   Ok(n)
 }
 
-fun handleHealth(w: http.ResponseWriter, r: *http.Request) {
+fun handleHealth(w: http.ResponseWriter, r: Ref[http.Request]) {
   sendJson(w, 200, "{\"status\": \"ok\"}")
 }
 
