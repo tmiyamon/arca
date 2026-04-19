@@ -4,6 +4,32 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-19: Error trait interface shape (idea)
+
+**Context:** `Result[T, Error]` is the standard error-carrying type in Arca. Go FFI error values need to flow through as Arca Errors, and Arca Errors need to interoperate with Go's `error` interface at the FFI boundary. To close this loop, the `Error` trait needs a concrete shape. Related: `decisions/ideas.md` 2026-04-12 "Go FFI nullable/pointer ambiguity" (Error representation sub-topic), `decisions/ideas.md` 2026-04-11 "Trait system design".
+
+**Decision:** Minimum trait with one method; compiler bridges to Go's `error` interface.
+
+```arca
+trait Error {
+  fun message() -> String
+}
+```
+
+- Arca call: `e.message()`
+- Go emit: Arca types implementing `Error` automatically receive a `Error() string` method on the Go side so they satisfy Go's `error` interface transparently. The shim just calls `message()`.
+- Arca naming (`message()`, camelCase) stays consistent with Arca conventions — Go interop is an implementation detail of trait emission.
+
+Rejected alternatives:
+- `fun Error() -> String` — breaks Arca's camelCase convention just to match Go's case.
+- `fun source()`, `fun backtrace()` etc. — premature; add later if a concrete use case appears.
+
+**Status:** Design only. Blocked on trait system implementation (2026-04-11 "Trait system design"). Sub-decisions deferred:
+- How are Arca-native named errors (`NotFound`, `Unauthorized`, ...) modeled? (enum / sum type / struct per variant / mix)
+- How does Arca Error → Go error and back preserve source / wrap chain (`errors.Is`, `errors.As`)?
+
+---
+
 ## 2026-04-19: Ref / Option / Ptr three-layer memory model (idea)
 
 **Core idea:** Separate three concepts that Go conflates into `*T`: `Ref<T>` (safe non-null reference), `Option<T>` (nullable), `Ptr<T>` (FFI-internal, unsafe). Users see `Ref` and `Option`; `Ptr` is compiler-internal. Immutability makes the model work without borrow checker complexity.
@@ -273,7 +299,7 @@ The Builder itself never appears in user code.
 
 ### Open questions (deferred)
 
-1. Error type unification: how are Arca-native errors (e.g., `NotFound`) modeled? Ties to Error trait design.
+Error trait interface is now resolved — see the 2026-04-19 "Error trait interface shape" entry above. Sub-questions (how named errors are modelled; how wrap chains propagate) remain open there.
 
 ### Prior art and references
 
