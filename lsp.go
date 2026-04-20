@@ -646,27 +646,13 @@ func getHoverInfo(source string, filePath string, line, col int) string {
 	return ""
 }
 
+// irTypeDisplayName is the user-facing IR type renderer for hover /
+// diagnostics. Delegates to the single Arca-side renderer so Ref, Map,
+// Interface (→ Any), tuples, and the Go-name-to-Arca-name mapping are all
+// handled consistently. Previously there were two parallel renderers and
+// this one silently missed Ref/Map/Any.
 func irTypeDisplayName(t IRType) string {
-	switch tt := t.(type) {
-	case IRNamedType:
-		return tt.GoName
-	case IRPointerType:
-		return "*" + irTypeDisplayName(tt.Inner)
-	case IRResultType:
-		return "Result[" + irTypeDisplayName(tt.Ok) + ", " + irTypeDisplayName(tt.Err) + "]"
-	case IROptionType:
-		return "Option[" + irTypeDisplayName(tt.Inner) + "]"
-	case IRListType:
-		return "List[" + irTypeDisplayName(tt.Elem) + "]"
-	case IRTupleType:
-		names := make([]string, len(tt.Elements))
-		for i, e := range tt.Elements {
-			names[i] = irTypeDisplayName(e)
-		}
-		return "(" + strings.Join(names, ", ") + ")"
-	default:
-		return "unknown"
-	}
+	return irTypeDisplayStr(t)
 }
 
 func lookupGoPkgMemberHover(pkgShort, member string, lowerer *Lowerer) string {
