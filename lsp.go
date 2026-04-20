@@ -660,7 +660,10 @@ func lookupGoPkgMemberHover(pkgShort, member string, lowerer *Lowerer) string {
 	if !ok {
 		return ""
 	}
-	// Try as function
+	// Try as function. Show the Arca-visible shape: params are wrapped
+	// (`*T` → `Option[Ref[T]]`) and returns go through goFuncReturnType so
+	// `(T, error)` shows as `Result[T, error]`, `(T, bool)` as `Option[T]`,
+	// etc. This matches what the user can actually call from Arca.
 	if info := lowerer.TypeResolver().ResolveFunc(pkg.FullPath, member); info != nil {
 		params := make([]string, len(info.Params))
 		for i, p := range info.Params {
@@ -668,17 +671,14 @@ func lookupGoPkgMemberHover(pkgShort, member string, lowerer *Lowerer) string {
 			if name == "" {
 				name = fmt.Sprintf("arg%d", i)
 			}
-			params[i] = fmt.Sprintf("%s: %s", name, goTypeToIRName(p.Type))
+			params[i] = fmt.Sprintf("%s: %s", name, irTypeDisplayStr(wrapPointerInOption(goTypeToIR(p.Type))))
 		}
 		ret := ""
 		if len(info.Results) > 0 {
-			retTypes := make([]string, len(info.Results))
-			for i, r := range info.Results {
-				retTypes[i] = goTypeToIRName(r.Type)
-			}
-			ret = " -> " + strings.Join(retTypes, ", ")
+			arcaRet := lowerer.goFuncReturnType(info).Type
+			ret = " -> " + irTypeDisplayStr(arcaRet)
 		}
-		return fmt.Sprintf("```go\nfun %s.%s(%s)%s\n```", pkgShort, member, strings.Join(params, ", "), ret)
+		return fmt.Sprintf("```arca\nfun %s.%s(%s)%s\n```", pkgShort, member, strings.Join(params, ", "), ret)
 	}
 	// Try as type
 	if info := lowerer.TypeResolver().ResolveType(pkg.FullPath, member); info != nil {
