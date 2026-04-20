@@ -81,6 +81,13 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - No split machinery for Option — no `SplitNames` / `ExpandedValues` / `flattenArgs` entries. The post-pass handles Result only; Option flows through single-value paths uniformly.
 - Monadic methods (`.map`, `.flatMap`, `.okOr`, `.okOrElse`) desugar to `match` at the AST level — no new IR nodes.
 
+## Any Type
+
+- `Any` surfaces Go's `interface{}` / `any` into Arca. Emits as `interface{}`.
+- Maps to `IRInterfaceType` at the IR level, which the unifier treats permissively (every value can flow in).
+- Extraction is **narrowing via `match v { id: T => ... }`** (match type pattern). No `v.(T)` unsafe cast is provided — panics from failed assertions are kept out of the language surface.
+- Go FFI returns typed `any` / `interface{}` map to `Any` automatically (via `goTypeToIRWithVars`), so `ctx.Value(k)` style APIs are usable end-to-end on the Arca side.
+
 ## Result Type
 
 - Emits as native Go `(T, error)` multi-return. No wrapper struct, no `IsOk` / `Value` / `Err` fields.
@@ -131,6 +138,7 @@ Design rationale: Two types with `Error(message: String)` would collide without 
   1. Result patterns (`Ok`/`Error`) → `if subject_err == nil`
   2. List patterns (`[]`/`[first, ..rest]`) → `if len(...) == 0`
   3. Option patterns (`Some`/`None`) → `if subject != nil` uniformly (Option is always pointer-backed). Binding pass-through when inner is `Ref`/`Ptr`, else deref once.
+  3b. Type patterns (`id: Type`) → Go `switch v := subject.(type) { case T: ... }`. Narrowing via `IRMatchTypePattern`. Any arm being a type pattern promotes the whole match to a type switch. No exhaustiveness check — open type universe.
   4. Enum patterns → `switch` on iota
   5. Sum type patterns → `switch v := x.(type)`
 - Patterns preserve the subject's inner type: `Some(v)` on `Option[Ref[User]]` binds `v: Ref[User]`, not `User`. Auto-deref (field/method) keeps access ergonomic.

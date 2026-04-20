@@ -876,6 +876,15 @@ func (em *Emitter) emitMatch(m IRMatch, mode bodyMode) {
 	if len(m.Arms) == 0 {
 		return
 	}
+	// Type-switch match — a TypePattern anywhere promotes the whole match
+	// to a Go type switch. This check has to run before the head-arm
+	// dispatch below so a leading wildcard doesn't misroute it.
+	for _, arm := range m.Arms {
+		if _, ok := arm.Pattern.(IRMatchTypePattern); ok {
+			em.emitMatchType(m, mode)
+			return
+		}
+	}
 	switch m.Arms[0].Pattern.(type) {
 	case IRResultOkPattern, IRResultErrorPattern:
 		em.emitMatchResult(m, mode)
@@ -890,6 +899,38 @@ func (em *Emitter) emitMatch(m IRMatch, mode bodyMode) {
 	case IRLiteralPattern, IRLiteralDefaultPattern:
 		em.emitMatchLiteral(m, mode)
 	}
+}
+
+// emitMatchType emits a Go type switch. Arms with IRMatchTypePattern
+// become `case T:` clauses; the leading type-switch binding receives the
+// narrowed value. A wildcard arm becomes `default:`.
+//
+// The switch binding uses a compiler-internal name (`__tv`). Each
+// TypePattern arm reassigns to the user-written binding name so the body
+// sees the variable the source declared, regardless of whether arms share
+// the same binding identifier.
+func (em *Emitter) emitMatchType(m IRMatch, mode bodyMode) {
+	w := em.w
+	subject := em.emitExpr(m.Subject)
+	const switchVar = "__tv"
+	w.SwitchType(switchVar, subject, func() {
+		for _, arm := range m.Arms {
+			switch p := arm.Pattern.(type) {
+			case IRMatchTypePattern:
+				goType := em.irTypeStr(p.Target)
+				w.Case(goType, func() {
+					if p.Binding != nil && p.Binding.GoName != switchVar {
+						w.Assign(p.Binding.GoName, switchVar)
+					}
+					em.emitBody(arm.Body, mode)
+				})
+			case IRWildcardPattern:
+				w.Default(func() {
+					em.emitBody(arm.Body, mode)
+				})
+			}
+		}
+	})
 }
 
 func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {

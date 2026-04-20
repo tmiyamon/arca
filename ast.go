@@ -258,12 +258,21 @@ type TuplePattern struct {
 	Elements []Pattern
 }
 
+// TypePattern narrows an Any subject to a concrete type. `id: Int => body`
+// binds id (with type Int) when the runtime dynamic type matches. Only
+// valid against an Any/IRInterfaceType subject. Emits as Go type switch.
+type TypePattern struct {
+	Binding string // identifier bound to the narrowed value
+	Target  Type   // the runtime type to match against
+}
+
 func (ConstructorPattern) patternNode() {}
 func (WildcardPattern) patternNode()    {}
 func (LitPattern) patternNode()         {}
 func (BindPattern) patternNode()        {}
 func (ListPattern) patternNode()        {}
 func (TuplePattern) patternNode()       {}
+func (TypePattern) patternNode()        {}
 
 // --- Statements ---
 

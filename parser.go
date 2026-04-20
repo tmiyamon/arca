@@ -1531,6 +1531,17 @@ func (p *Parser) parsePattern() (Pattern, error) {
 		return p.parseListPattern()
 	case TkIdent:
 		p.advance()
+		// `id: Type` — match type pattern narrowing an Any subject.
+		// Only consumed here (not elsewhere) so the normal bind case
+		// remains the default for a bare identifier.
+		if p.peek().Kind == TkColon {
+			p.advance()
+			target, err := p.parseType()
+			if err != nil {
+				return nil, err
+			}
+			return TypePattern{Binding: tok.Lit, Target: target}, nil
+		}
 		return BindPattern{Name: tok.Lit}, nil
 	case TkString:
 		p.advance()

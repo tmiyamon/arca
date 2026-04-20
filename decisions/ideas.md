@@ -4,6 +4,31 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-19: Any type and match type pattern (implemented)
+
+**Context:** Phase 1 Layer 1 item 3 — safe cast for Go's `interface{}` / `any`. Without this, Go FFI returns typed `any` (e.g. `ctx.Value(k)`, `map[string]any` values) were unusable on the Arca side, and unsafe `v.(T)` remained the only option in Go, with its panic risk. Design predated this session at `memory/design_any_safe_cast.md`.
+
+**Decision (implemented):**
+
+- `Any` type surfaces Go's `interface{}` in Arca. Maps to `IRInterfaceType` at the IR level and `interface{}` at emit.
+- Narrowing via `match v { id: T => body, _ => ... }` — a new `TypePattern` AST node, `IRMatchTypePattern` IR node.
+- Emits as Go type switch: `switch __tv := v.(type) { case T: id := __tv; ... ; default: ... }`.
+- No unsafe `v.(T)` cast syntax in Arca — the failed-assertion panic source is kept out of the language surface.
+- Go FFI returns typed `any` / `interface{}` map to `IRInterfaceType` in `goTypeToIRWithVars`, so APIs like `ctx.Value(k)` are usable.
+- No exhaustiveness check on type matches — the type universe is open; a wildcard arm (`_ => ...`) is recommended.
+
+**Execution:**
+- Slice 3a: `lowerNamedType` "Any" case → `IRInterfaceType{}`; registered in `isKnownTypeName`.
+- Slice 3b: Go `any` / `interface{}` → `IRInterfaceType` in `goTypeToIRWithVars`.
+- Slice 3c: Parser recognises `Ident ":" Type` in pattern position; `TypePattern{Binding, Target}` AST node.
+- Slice 3d: `isTypeMatch` / `lowerTypeMatch` dispatch; binding registered with narrowed type; `IRMatchTypePattern{Binding, Target}`.
+- Slice 3e: `emitMatchType` emits `w.SwitchType("__tv", subject, ...)` with per-case `Assign(binding, "__tv")` when the arm's binding name differs from `__tv`.
+- Slice 3f: `testdata/any_match.arca` + `.go` snapshot covering Int/String/Bool + default.
+
+**Future sugar (deferred):** `as?` (Swift) and `is` + smart cast (Kotlin). Not needed — match type pattern covers all cases with acceptable ergonomics.
+
+---
+
 ## 2026-04-19: Two-stage IR and Option as pointer-backed uniformly (idea)
 
 **Context:** While implementing auto-Some and preparing item 1 (FFI param/field/generic wrap), the test `let x: Option[Int] = Some(10)` exposed a structural bug: emit outputs `x, _ := &10` (invalid Go). Root cause is not a single missing case — it is that IR represents `Option<T>` as a single-slot type while Go emits it as 2-slot `(T, bool)`. The bridging machinery (`ExpandedValues` on leaves, `SplitNames` on declarations, `ctx.splits` on use sites, `flattenArgs` on call args, `resolveMatchBindings` on match subjects, `expandFuncParams` on params) covers the mismatch piecewise. Any new IR position without an updated bridge produces broken Go. This is structural debt, not a local missing case.

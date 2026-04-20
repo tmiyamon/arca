@@ -1461,7 +1461,7 @@ func (l *Lowerer) checkTypeExists(t Type) {
 // isKnownTypeName checks if a name is a known type in the lowerer context.
 func (l *Lowerer) isKnownTypeName(name string) bool {
 	switch name {
-	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "error", "Self":
+	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "error", "Self":
 		return true
 	}
 	if strings.Contains(name, ".") {
@@ -1705,6 +1705,12 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		return IRNamedType{GoName: "string"}
 	case "Bool":
 		return IRNamedType{GoName: "bool"}
+	case "Any":
+		// Arca's unknown-shaped escape hatch. Go emit is `interface{}`, and the
+		// unify rules already treat IRInterfaceType as permissive so any value
+		// can flow in. Narrowing is intended via `match v { id: T => ... }`
+		// (match type pattern — Slice 3c).
+		return IRInterfaceType{}
 	case "List":
 		if len(nt.Params) > 0 {
 			return IRListType{Elem: l.lowerType(nt.Params[0])}
@@ -2431,6 +2437,13 @@ func goTypeToIRWithVars(goType string, vars map[string]IRType) IRType {
 		if v, ok := vars[goType]; ok {
 			return v
 		}
+	}
+	// Go's `any` / `interface{}` surface as Arca's Any (IRInterfaceType).
+	// Without this, FFI returns of `any` became an opaque IRNamedType{"any"}
+	// that didn't unify with anything, so the return was unusable on the
+	// Arca side.
+	if goType == "any" || goType == "interface{}" {
+		return IRInterfaceType{}
 	}
 	return IRNamedType{GoName: goTypeToIRName(goType)}
 }
@@ -3809,6 +3822,9 @@ func (l *Lowerer) lowerMatchExpr(me MatchExpr) IRExpr {
 	if l.isListMatch(me) {
 		return l.lowerListMatch(me)
 	}
+	if l.isTypeMatch(me) {
+		return l.lowerTypeMatch(me)
+	}
 	if l.isLiteralMatch(me) {
 		return l.lowerLiteralMatch(me)
 	}
@@ -3816,6 +3832,50 @@ func (l *Lowerer) lowerMatchExpr(me MatchExpr) IRExpr {
 		return l.lowerEnumMatch(me)
 	}
 	return l.lowerSumTypeMatch(me)
+}
+
+// isTypeMatch recognizes `match v { id: T => ..., _ => ... }` — narrowing
+// an Any subject against concrete types. Any arm being a TypePattern is
+// sufficient; the dispatcher is placed before literal/enum/sum matches
+// since those use other pattern shapes.
+func (l *Lowerer) isTypeMatch(me MatchExpr) bool {
+	for _, arm := range me.Arms {
+		if _, ok := arm.Pattern.(TypePattern); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Lowerer) lowerTypeMatch(me MatchExpr) IRExpr {
+	subject := l.lowerExpr(me.Subject)
+	var arms []IRMatchArm
+	for _, arm := range me.Arms {
+		switch p := arm.Pattern.(type) {
+		case TypePattern:
+			target := l.lowerType(p.Target)
+			symbol := SymbolRegInfo{
+				Name:   p.Binding,
+				IRType: target,
+				Kind:   SymVariable,
+				Pos:    arm.Pos,
+			}
+			body := l.lowerArmBody(arm, []SymbolRegInfo{symbol})
+			arms = append(arms, IRMatchArm{
+				Pattern: IRMatchTypePattern{
+					Binding: &IRBinding{GoName: p.Binding},
+					Target:  target,
+				},
+				Body: body,
+			})
+		case WildcardPattern, BindPattern:
+			body := l.lowerArmBody(arm, nil)
+			arms = append(arms, IRMatchArm{Pattern: IRWildcardPattern{}, Body: body})
+		default:
+			_ = p
+		}
+	}
+	return l.buildMatch(subject, arms, me.Pos)
 }
 
 // lowerArmBody lowers a match arm body within a fresh lexical scope, with the

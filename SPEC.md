@@ -96,6 +96,20 @@ match response {
 }
 ```
 
+**Match type pattern (narrowing):** `id: Type => body` narrows an `Any` subject to a concrete type. Within the arm body, `id` has the narrowed type (smart cast). Emits as Go `switch v := x.(type)`.
+
+```
+fun describe(v: Any) -> String {
+  match v {
+    n: Int => "int: ${n}"
+    s: String => "string: ${s}"
+    _ => "unknown"
+  }
+}
+```
+
+No exhaustiveness check — the universe of types is open. A wildcard arm (`_`) is recommended.
+
 ### Variables (immutable)
 
 ```
@@ -338,6 +352,7 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | Map[K, V] | Hash map (Go map under the hood) |
 | Option[T] | Some(T) / None |
 | Result[T, E] | Ok(T) / Error(E) |
+| Any | unknown-typed (maps to Go `interface{}`) |
 | (A, B, ...) | Tuple |
 
 ### Map

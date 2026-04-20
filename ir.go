@@ -440,6 +440,16 @@ type IRLiteralPattern struct{ Value string }
 type IRLiteralDefaultPattern struct{}
 type IRWildcardPattern struct{}
 
+// IRMatchTypePattern narrows an Any subject to a concrete Go type in a
+// match arm. Emits as a `case T:` clause in a Go type switch; the binding
+// receives the narrowed value.
+type IRMatchTypePattern struct {
+	Binding *IRBinding
+	Target  IRType
+}
+
+func (p IRMatchTypePattern) GetBinding() *IRBinding { return p.Binding }
+
 func (IRResultOkPattern) irMatchPatternNode()       {}
 func (IRResultErrorPattern) irMatchPatternNode()     {}
 func (IROptionSomePattern) irMatchPatternNode()      {}
@@ -452,6 +462,7 @@ func (IRListExactPattern) irMatchPatternNode()       {}
 func (IRListConsPattern) irMatchPatternNode()        {}
 func (IRListDefaultPattern) irMatchPatternNode()     {}
 func (IRLiteralPattern) irMatchPatternNode()         {}
+func (IRMatchTypePattern) irMatchPatternNode()       {}
 func (IRLiteralDefaultPattern) irMatchPatternNode()  {}
 func (IRWildcardPattern) irMatchPatternNode()        {}
 

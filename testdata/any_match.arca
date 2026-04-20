@@ -1,0 +1,17 @@
+import go "fmt"
+
+fun describe(v: Any) -> String {
+  match v {
+    n: Int => "int: ${n}"
+    s: String => "string: ${s}"
+    b: Bool => "bool: ${b}"
+    _ => "unknown"
+  }
+}
+
+fun main() {
+  fmt.Println(describe(42))
+  fmt.Println(describe("hello"))
+  fmt.Println(describe(True))
+  fmt.Println(describe(3.14))
+}
