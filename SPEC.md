@@ -198,6 +198,20 @@ for i in 0..10 {
 }
 ```
 
+### main() -> Result
+
+Arca allows `fun main() -> Result[Unit, error]` so `?` works at the top level without a wrapping `try {}`. On `Err`, the error is printed to stderr and the process exits with status 1. On `Ok`, the process exits normally.
+
+```
+fun main() -> Result[Unit, error] {
+  let n = strconv.Atoi("42")?
+  println(n)
+  Ok(())
+}
+```
+
+This mirrors Rust's `fn main() -> Result<(), Error>`. `main` without a return type continues to work as before.
+
 ### Error Propagation
 
 ```

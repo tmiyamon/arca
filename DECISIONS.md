@@ -6,6 +6,10 @@ Topics: [FFI](decisions/ffi.md) · [Types](decisions/types.md) · [Transpiler](d
 
 ---
 
+## 2026-04-21
+
+- [main() -> Result implemented](decisions/transpiler.md) — `fun main() -> Result[_, _]` allowed. Body lowered as regular Result function; emit wraps in Go `main()` IIFE that prints Err to stderr and `os.Exit(1)`. Mirrors Rust's `fn main() -> Result<(), Error>`. Resolves the "? in main" broken example since 2026-04-18 "? outside Result context = compile error" landed. `fmt` / `os` auto-registered in builtins on detection. Non-Result main unchanged.
+
 ## 2026-04-19
 
 - [Any type + match type pattern implemented](decisions/ideas.md#2026-04-19-any-type-and-match-type-pattern-implemented) — `Any` maps to `IRInterfaceType` at IR and `interface{}` at Go emit. Match type pattern `match v { id: T => ... }` narrows `Any` to concrete types via Go `switch v := subject.(type)`. Completes Phase 1 Layer 1 item 3 (safe cast) — unsafe `v.(T)` is not exposed, so failed-assertion panic source is eliminated from the language surface. Go FFI returns of `any` / `interface{}` surface as `Any` automatically so `ctx.Value(k)` style APIs are usable.

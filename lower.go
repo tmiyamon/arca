@@ -768,6 +768,9 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	if l.builtins["regexp"] {
 		imports = append(imports, IRImport{Path: "regexp"})
 	}
+	if l.builtins["os"] && !l.hasImport("os") {
+		imports = append(imports, IRImport{Path: "os"})
+	}
 
 	return IRProgram{
 		Package:  pkgName,
@@ -1109,6 +1112,16 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 
 	lf := l.lowerFnCommon(fd, "", "")
+
+	// `fun main() -> Result[_, _]` is lowered normally; emit wraps it in
+	// an IIFE that prints Err to stderr and exits. Register the imports
+	// the wrapper needs so they land in the output.
+	if fd.Name == "main" {
+		if _, ok := lf.retType.(IRResultType); ok {
+			l.builtins["fmt"] = true
+			l.builtins["os"] = true
+		}
+	}
 
 	return IRFuncDecl{
 		GoName:     name,

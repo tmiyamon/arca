@@ -7,7 +7,7 @@ import go _ "github.com/mattn/go-sqlite3"
 import stdlib
 
 type App (
-  db: Ref[sql.DB]
+  db: Option[Ref[sql.DB]]
 ) {
   static fun create() -> Result[Self, error] {
     let db = sql.Open("sqlite3", "./todo.db")?
@@ -61,7 +61,7 @@ fun createTodo(app: App, c: Ref[echo.Context]) -> Result[Todo, error] {
   Ok(todo)
 }
 
-fun main() {
+fun main() -> Result[Unit, error] {
   let app = App.create()?
   defer app.finish()
 
@@ -70,10 +70,7 @@ fun main() {
   e.GET("/", c => getTodo(app, c))
   e.POST("/", c => postTodo(app, c))
 
-  let result = e.Start(":8080")
-  match result {
-    Ok(_) => Unit
-    Error(e) => println("error: ${e}")
-  }
+  e.Start(":8080")?
+  Ok(())
 }
 

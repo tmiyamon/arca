@@ -298,12 +298,64 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 		}
 	}
 
+	// Special-case: `fun main() -> Result[_, _]`. Go's `main` takes no args
+	// and returns nothing, but Arca lets users write `fun main() -> Result[...]`
+	// so `?` works at the top level. Wrap the Result-valued body in an IIFE,
+	// exit non-zero on Err. Mirrors Rust's `fn main() -> Result<(), Error>`.
+	if fd.GoName == "main" && fd.Receiver == nil {
+		if rt, ok := fd.ReturnType.(IRResultType); ok {
+			em.emitResultMainWrapper(fd, rt)
+			return
+		}
+	}
+
 	if fd.Receiver != nil {
 		w.Method(fmt.Sprintf("%s %s", fd.Receiver.GoName, fd.Receiver.Type),
 			fd.GoName, strings.Join(params, ", "), retType, body)
 	} else {
 		w.Func(fd.GoName, strings.Join(params, ", "), retType, body)
 	}
+}
+
+// emitResultMainWrapper emits a Go `main()` that runs the Arca body as
+// an inner IIFE returning the Result-shaped multi-return, then exits
+// with the error printed to stderr when the inner returned Err. Ok
+// returns normally.
+func (em *Emitter) emitResultMainWrapper(fd IRFuncDecl, rt IRResultType) {
+	w := em.w
+	// Imports needed by the wrapper (fmt.Fprintln, os.Stderr, os.Exit) are
+	// registered on the Lowerer at the point the main-Result shape is
+	// detected — see lowerFnDecl.
+	innerRet := em.irReturnTypeStr(rt)
+	w.Func("main", "", "", func() {
+		// Error-only shape (Ok is Unit): inner returns bare `error`.
+		if isUnitType(rt.Ok) {
+			w.Stmt(fmt.Sprintf("if err := func() %s {", innerRet))
+			em.indentAndEmitBody(fd.Body)
+			w.Stmt("}(); err != nil {")
+			w.Indent()
+			w.Stmt(`fmt.Fprintln(os.Stderr, err)`)
+			w.Stmt(`os.Exit(1)`)
+			w.Dedent()
+			w.Stmt("}")
+			return
+		}
+		// `(T, error)` shape: discard Ok value on success.
+		w.Stmt(fmt.Sprintf("if _, err := func() %s {", innerRet))
+		em.indentAndEmitBody(fd.Body)
+		w.Stmt("}(); err != nil {")
+		w.Indent()
+		w.Stmt(`fmt.Fprintln(os.Stderr, err)`)
+		w.Stmt(`os.Exit(1)`)
+		w.Dedent()
+		w.Stmt("}")
+	})
+}
+
+func (em *Emitter) indentAndEmitBody(e IRExpr) {
+	em.w.Indent()
+	em.emitReturnExpr(e)
+	em.w.Dedent()
 }
 
 // --- Expressions ---

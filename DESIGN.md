@@ -81,6 +81,12 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - No split machinery for Option — no `SplitNames` / `ExpandedValues` / `flattenArgs` entries. The post-pass handles Result only; Option flows through single-value paths uniformly.
 - Monadic methods (`.map`, `.flatMap`, `.okOr`, `.okOrElse`) desugar to `match` at the AST level — no new IR nodes.
 
+## main() -> Result
+
+- `fun main() -> Result[T, E]` is lowered normally; emit special-cases the Go `main` wrapper. The body runs inside an IIFE returning the Result's multi-return shape; the wrapper checks `err != nil`, prints to stderr, and `os.Exit(1)`.
+- Imports `fmt` and `os` are auto-registered when a Result-returning `main` is lowered.
+- Non-Result `main` unchanged.
+
 ## Any Type
 
 - `Any` surfaces Go's `interface{}` / `any` into Arca. Emits as `interface{}`.
