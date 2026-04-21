@@ -244,6 +244,10 @@ func TestE2ETraitBasic(t *testing.T) {
 	runE2E(t, "testdata/trait_basic.arca", "Alice\n")
 }
 
+func TestE2ETraitError(t *testing.T) {
+	runE2E(t, "testdata/trait_error.arca", "not found: 42\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 

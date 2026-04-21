@@ -680,6 +680,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		rootScope:    root,
 		currentScope: root,
 	}
+	registerPreludeTraits(l)
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -767,6 +768,11 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 		case ImplDecl:
 			funcs = append(funcs, l.lowerImplDecl(d)...)
 		}
+	}
+
+	// Prelude Error trait: emit the Go interface only when the file uses it.
+	if l.builtins["error_trait"] {
+		types = append(types, l.lowerTraitDecl(l.traits["Error"]))
 	}
 
 	l.checkMethodCollisions()
@@ -1184,6 +1190,23 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 // Arca-prefixed to avoid colliding with Go stdlib types (Error, Reader, ...).
 func traitGoName(name string) string { return "Arca" + name }
 
+// registerPreludeTraits seeds built-in traits visible in every file without
+// import or declaration. Currently just `trait Error { fun message() -> String }`.
+// The IRTraitDecl for Error is emitted only when the file actually references
+// the trait (gated via l.builtins["error_trait"]).
+func registerPreludeTraits(l *Lowerer) {
+	l.traits["Error"] = TraitDecl{
+		Name: "Error",
+		Methods: []FnDecl{
+			{
+				Name:         "message",
+				ReceiverType: "Error",
+				ReturnType:   NamedType{Name: "String"},
+			},
+		},
+	}
+}
+
 // lowerTraitDecl emits the Go interface declaration for a trait.
 func (l *Lowerer) lowerTraitDecl(d TraitDecl) IRTraitDecl {
 	methods := make([]IRInterfaceMethod, 0, len(d.Methods))
@@ -1218,6 +1241,9 @@ func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 		l.addCompileError(ErrUnknownType, d.Pos, UnknownTypeData{Name: d.TraitName})
 		return nil
 	}
+	if d.TraitName == "Error" {
+		l.builtins["error_trait"] = true
+	}
 	var funcs []IRFuncDecl
 	for _, method := range d.Methods {
 		// Impl methods must be exported Go methods to satisfy the ArcaTrait
@@ -1225,6 +1251,32 @@ func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 		// source annotation so lowerMethod picks snakeToPascal.
 		method.Public = true
 		funcs = append(funcs, l.lowerMethod(td, method)...)
+	}
+	// Auto-generate the Go `error` shim for impls of the built-in Error trait.
+	// `fun error() -> String { self.message() }` lowers to an IRFuncDecl that
+	// emits as `func (x X) Error() string { return x.Message() }`. Go's
+	// structural interface means X now satisfies both ArcaError and the
+	// stdlib `error` interface.
+	if d.TraitName == "Error" {
+		shim := FnDecl{
+			Pos:     d.Pos,
+			NamePos: d.Pos,
+			Name:    "error",
+			Public:  true,
+			Params:  nil,
+			ReturnType: NamedType{Name: "String"},
+			Body: Block{
+				Expr: FnCall{
+					NodePos: AtPos(d.Pos),
+					Fn: FieldAccess{
+						NodePos: AtPos(d.Pos),
+						Expr:    Ident{NodePos: AtPos(d.Pos), Name: "self"},
+						Field:   "message",
+					},
+				},
+			},
+		}
+		funcs = append(funcs, l.lowerMethod(td, shim)...)
 	}
 	return funcs
 }
@@ -1913,6 +1965,9 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		}
 		// Trait used as a type (trait object): `fun f(e: Error)`.
 		if _, ok := l.traits[nt.Name]; ok {
+			if nt.Name == "Error" {
+				l.builtins["error_trait"] = true
+			}
 			return IRTraitType{Name: nt.Name}
 		}
 		// Qualified Go type (e.g. "sql.DB", "time.Time") marks the package as used.

@@ -1,0 +1,16 @@
+import go "fmt"
+
+type NotFound {
+  NotFound(id: Int)
+}
+
+impl NotFound: Error {
+  fun message() -> String {
+    "not found: ${self.id}"
+  }
+}
+
+fun main() {
+  let e = NotFound(id: 42)
+  fmt.Println(e.message())
+}
