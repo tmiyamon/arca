@@ -752,3 +752,123 @@ fun test() -> Result[Int, error] {
 		}
 	}
 }
+
+func TestTraitImplLowersWithoutErrors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+trait Display {
+  fun show() -> String
+}
+
+type User {
+  User(name: String)
+}
+
+impl User: Display {
+  fun show() -> String {
+    self.name
+  }
+}
+`)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got: %v", errs)
+	}
+}
+
+func TestTraitAsTypeAcceptsConcreteValue(t *testing.T) {
+	t.Parallel()
+	// Passing a concrete User (impl Display) where Display is expected must
+	// pass hint-driven unify via traitImplCompatible.
+	errs := validateSource(`
+trait Display {
+  fun show() -> String
+}
+
+type User {
+  User(name: String)
+}
+
+impl User: Display {
+  fun show() -> String {
+    self.name
+  }
+}
+
+fun render(d: Display) -> String {
+  d.show()
+}
+
+fun main() {
+  let u = User(name: "A")
+  render(u)
+}
+`)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors for concrete→trait coercion, got: %v", errs)
+	}
+}
+
+func TestTraitConcreteWithoutImplRejected(t *testing.T) {
+	t.Parallel()
+	// Display hint with a Dog value that does not impl Display → mismatch.
+	errs := validateSource(`
+trait Display {
+  fun show() -> String
+}
+
+type Dog {
+  Dog(name: String)
+}
+
+fun render(d: Display) -> String {
+  "x"
+}
+
+fun main() {
+  let d = Dog(name: "Rex")
+  render(d)
+}
+`)
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatalf("expected ErrTypeMismatch for concrete without impl, got: %v", errs)
+	}
+}
+
+func TestTraitMethodCollisionWithInherent(t *testing.T) {
+	t.Parallel()
+	// Inherent `show` on User + impl Display with `show` → collision.
+	errs := validateSource(`
+trait Display {
+  fun show() -> String
+}
+
+type User {
+  User(name: String)
+
+  fun show() -> String { self.name }
+}
+
+impl User: Display {
+  fun show() -> String { self.name }
+}
+`)
+	if !hasErrorCode(errs, ErrTraitMethodCollision) {
+		t.Fatalf("expected ErrTraitMethodCollision, got: %v", errs)
+	}
+}
+
+func TestTraitImplTargetUnknownType(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+trait Display {
+  fun show() -> String
+}
+
+impl Nope: Display {
+  fun show() -> String { "x" }
+}
+`)
+	if !hasErrorCode(errs, ErrUnknownType) {
+		t.Fatalf("expected ErrUnknownType for impl on missing type, got: %v", errs)
+	}
+}

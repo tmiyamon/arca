@@ -27,6 +27,7 @@ const (
 	ErrUnusedPackage
 	ErrCannotInferTypeParam
 	ErrTryOutsideResultContext
+	ErrTraitMethodCollision
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -104,6 +105,21 @@ type UnknownTypeData struct {
 
 func (d UnknownTypeData) Message() string {
 	return fmt.Sprintf("unknown type: %s", d.Name)
+}
+
+type TraitMethodCollisionData struct {
+	TypeName  string // the concrete type the impl targets
+	Method    string // offending method name
+	Prior     string // first definer (type name or trait name)
+	PriorKind string // "type" (inherent) or "impl" (prior trait)
+	This      string // the trait whose impl introduces the duplicate
+}
+
+func (d TraitMethodCollisionData) Message() string {
+	if d.PriorKind == "type" {
+		return fmt.Sprintf("method collision: %s.%s is already defined on %s; impl of %s cannot redefine it", d.TypeName, d.Method, d.Prior, d.This)
+	}
+	return fmt.Sprintf("method collision: %s.%s is already provided by impl of %s; impl of %s cannot redefine it", d.TypeName, d.Method, d.Prior, d.This)
 }
 
 type WrongArgCountData struct {

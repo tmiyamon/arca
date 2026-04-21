@@ -11,8 +11,10 @@ import (
 type Lowerer struct {
 	types        map[string]TypeDecl
 	typeAliases  map[string]TypeAliasDecl
-	ctorTypes    map[string]string // constructor name → type name
-	fnNames      map[string]string // arca name → Go name for pub functions
+	traits       map[string]TraitDecl
+	impls        map[string][]ImplDecl // keyed by target type name
+	ctorTypes    map[string]string     // constructor name → type name
+	fnNames      map[string]string     // arca name → Go name for pub functions
 	functions    map[string]FnDecl
 	moduleNames  map[string]bool
 	goModule     string
@@ -199,6 +201,9 @@ func (s *InferScope) unify(a, b IRType) bool {
 			return s.unify(at.Inner, pt.Inner)
 		}
 		return false
+	case IRTraitType:
+		bt, ok := b.(IRTraitType)
+		return ok && at.Name == bt.Name
 	}
 
 	return false
@@ -239,10 +244,41 @@ func (l *Lowerer) unify(a, b IRType, pos Pos) bool {
 	if l.constraintCompatible(a, b) {
 		return true
 	}
+	if l.traitImplCompatible(a, b) {
+		return true
+	}
 	l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
 		Expected: irTypeDisplayStr(l.resolveDeep(b)),
 		Actual:   irTypeDisplayStr(l.resolveDeep(a)),
 	})
+	return false
+}
+
+// traitImplCompatible reports whether a concrete type and a trait type pair
+// via a registered `impl Type: Trait`. Symmetric — either side may be the
+// trait, since unify is order-agnostic at call sites.
+func (l *Lowerer) traitImplCompatible(a, b IRType) bool {
+	an := l.resolveDeep(a)
+	bn := l.resolveDeep(b)
+	if tt, ok := an.(IRTraitType); ok {
+		if nn, ok := bn.(IRNamedType); ok {
+			return l.typeImplementsTrait(nn.GoName, tt.Name)
+		}
+	}
+	if tt, ok := bn.(IRTraitType); ok {
+		if nn, ok := an.(IRNamedType); ok {
+			return l.typeImplementsTrait(nn.GoName, tt.Name)
+		}
+	}
+	return false
+}
+
+func (l *Lowerer) typeImplementsTrait(typeName, traitName string) bool {
+	for _, impl := range l.impls[typeName] {
+		if impl.TraitName == traitName {
+			return true
+		}
+	}
 	return false
 }
 
@@ -632,6 +668,8 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 	l := &Lowerer{
 		types:        make(map[string]TypeDecl),
 		typeAliases:  make(map[string]TypeAliasDecl),
+		traits:       make(map[string]TraitDecl),
+		impls:        make(map[string][]ImplDecl),
 		ctorTypes:    make(map[string]string),
 		fnNames:      make(map[string]string),
 		functions:    make(map[string]FnDecl),
@@ -692,6 +730,10 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 				l.fnNames[d.Name] = snakeToPascal(d.Name)
 			}
 			l.registerSymbol(SymbolRegInfo{Name: d.Name, Kind: SymFunction, Pos: d.NamePos})
+		case TraitDecl:
+			l.traits[d.Name] = d
+		case ImplDecl:
+			l.impls[d.TypeName] = append(l.impls[d.TypeName], d)
 		}
 	}
 	return l
@@ -720,8 +762,12 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 				}
 				funcs = append(funcs, l.lowerFnDecl(d))
 			}
+		case ImplDecl:
+			funcs = append(funcs, l.lowerImplDecl(d)...)
 		}
 	}
+
+	l.checkMethodCollisions()
 
 	// Expand sum type methods to per-variant implementations
 	funcs = l.expandSumTypeMethods(funcs)
@@ -1132,6 +1178,58 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 }
 
+// lowerImplDecl emits impl methods as Go methods on the target concrete type.
+// Go's structural interface satisfaction means no extra registration is
+// needed on the Go side — ArcaError interface emit (Slice 4c) will pick up
+// matching methods automatically.
+func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
+	td, ok := l.types[d.TypeName]
+	if !ok {
+		l.addCompileError(ErrUnknownType, d.Pos, UnknownTypeData{Name: d.TypeName})
+		return nil
+	}
+	if _, ok := l.traits[d.TraitName]; !ok {
+		l.addCompileError(ErrUnknownType, d.Pos, UnknownTypeData{Name: d.TraitName})
+		return nil
+	}
+	var funcs []IRFuncDecl
+	for _, method := range d.Methods {
+		funcs = append(funcs, l.lowerMethod(td, method)...)
+	}
+	return funcs
+}
+
+// checkMethodCollisions rejects any collision between inherent type methods
+// and impl methods, and between two impls of different traits on the same
+// type. Phase 1: no disambiguation syntax — any overlap is a compile error.
+func (l *Lowerer) checkMethodCollisions() {
+	for typeName, impls := range l.impls {
+		// seen: method name → (kind, trait or type)
+		type origin struct{ kind, source string }
+		seen := map[string]origin{}
+		if td, ok := l.types[typeName]; ok {
+			for _, m := range td.Methods {
+				seen[m.Name] = origin{kind: "type", source: typeName}
+			}
+		}
+		for _, impl := range impls {
+			for _, m := range impl.Methods {
+				if prior, dup := seen[m.Name]; dup {
+					l.addCompileError(ErrTraitMethodCollision, m.NamePos, TraitMethodCollisionData{
+						TypeName:  typeName,
+						Method:    m.Name,
+						Prior:     prior.source,
+						PriorKind: prior.kind,
+						This:      impl.TraitName,
+					})
+					continue
+				}
+				seen[m.Name] = origin{kind: "impl", source: impl.TraitName}
+			}
+		}
+	}
+}
+
 func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 	if fd.Static {
 		return []IRFuncDecl{l.lowerAssociatedFunc(td, fd)}
@@ -1407,6 +1505,8 @@ func irTypeDisplayStr(t IRType) string {
 		return "_"
 	case IRInterfaceType:
 		return "Any"
+	case IRTraitType:
+		return tt.Name
 	}
 	return "unknown"
 }
@@ -1484,6 +1584,9 @@ func (l *Lowerer) isKnownTypeName(name string) bool {
 		return true
 	}
 	if _, ok := l.typeAliases[name]; ok {
+		return true
+	}
+	if _, ok := l.traits[name]; ok {
 		return true
 	}
 	if l.isTypeParam(name) {
@@ -1775,6 +1878,10 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		// Type parameter → IRTypeVar (only outside type definitions)
 		if l.infer != nil && l.isTypeParam(nt.Name) {
 			return l.typeParamVar(nt.Name)
+		}
+		// Trait used as a type (trait object): `fun f(e: Error)`.
+		if _, ok := l.traits[nt.Name]; ok {
+			return IRTraitType{Name: nt.Name}
 		}
 		// Qualified Go type (e.g. "sql.DB", "time.Time") marks the package as used.
 		if dot := strings.IndexByte(nt.Name, '.'); dot > 0 {
@@ -2694,6 +2801,15 @@ func buildOptionOkOrElseDesugar(receiver Expr, args []Expr, pos Pos) Expr {
 
 // resolveMethodReturnType resolves the return type of a method call on a Go or Arca type.
 func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goReturnInfo {
+	// Trait object: receiver's static type is IRTraitType → look up in trait's method set.
+	if tt, ok := receiver.irType().(IRTraitType); ok {
+		if trait, ok := l.traits[tt.Name]; ok {
+			if info := l.lookupArcaMethodReturn(trait.Methods, method); info != nil {
+				return *info
+			}
+		}
+	}
+
 	// Try Go FFI type first
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
 	if ok {
@@ -2707,18 +2823,36 @@ func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goRetu
 	arcaTypeName := l.resolveReceiverArcaType(receiver)
 	if arcaTypeName != "" {
 		if td, ok := l.types[arcaTypeName]; ok {
-			for _, m := range td.Methods {
-				if m.Name == method || snakeToCamel(m.Name) == method || snakeToPascal(m.Name) == method {
-					if m.ReturnType != nil {
-						return goReturnInfo{Type: l.lowerType(m.ReturnType)}
-					}
-					return goReturnInfo{Type: IRNamedType{GoName: "struct{}"}}
-				}
+			if info := l.lookupArcaMethodReturn(td.Methods, method); info != nil {
+				return *info
+			}
+		}
+		// Trait-impl methods on the same concrete type.
+		for _, impl := range l.impls[arcaTypeName] {
+			if info := l.lookupArcaMethodReturn(impl.Methods, method); info != nil {
+				return *info
 			}
 		}
 	}
 
 	return goReturnInfo{Type: IRInterfaceType{}}
+}
+
+// lookupArcaMethodReturn scans Arca method declarations for a matching name
+// (identity + snakeToCamel/Pascal variants) and returns the lowered return-type info.
+func (l *Lowerer) lookupArcaMethodReturn(methods []FnDecl, method string) *goReturnInfo {
+	for _, m := range methods {
+		if m.Name != method && snakeToCamel(m.Name) != method && snakeToPascal(m.Name) != method {
+			continue
+		}
+		if m.ReturnType == nil {
+			info := goReturnInfo{Type: IRNamedType{GoName: "struct{}"}}
+			return &info
+		}
+		info := goReturnInfo{Type: l.lowerType(m.ReturnType)}
+		return &info
+	}
+	return nil
 }
 
 // resolveFieldType resolves the type of a field access on a Go or Arca type.

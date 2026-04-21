@@ -53,6 +53,14 @@ type IROptionType struct {
 
 type IRInterfaceType struct{} // fallback: interface{}
 
+// IRTraitType is the Arca trait used as a type (trait object).
+// Emitted as a Go interface named Arca<Name>. Distinct from
+// IRInterfaceType (Any / interface{}): trait objects have a declared
+// method set, while IRInterfaceType is open.
+type IRTraitType struct {
+	Name string // Arca trait name, e.g. "Error"
+}
+
 type IRTypeVar struct {
 	ID int // unique identifier for this type variable
 }
@@ -66,6 +74,7 @@ func (IRMapType) irTypeNode()       {}
 func (IRResultType) irTypeNode()    {}
 func (IROptionType) irTypeNode()    {}
 func (IRInterfaceType) irTypeNode() {}
+func (IRTraitType) irTypeNode()     {}
 func (IRTypeVar) irTypeNode()       {}
 
 // --- Program ---
