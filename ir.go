@@ -130,6 +130,13 @@ type IRTypeAliasDecl struct {
 	Validator *IRValidator
 }
 
+// IRTraitDecl emits as a Go interface declaration. Impl methods satisfy it
+// via Go's structural interface rule; no explicit registration needed.
+type IRTraitDecl struct {
+	GoName  string // Arca<Name>, e.g. "ArcaError"
+	Methods []IRInterfaceMethod
+}
+
 type IRVariantDecl struct {
 	GoName string // "GreetingHello"
 	Fields []IRFieldDecl
@@ -158,6 +165,7 @@ func (IREnumDecl) irTypeDeclNode()      {}
 func (IRStructDecl) irTypeDeclNode()    {}
 func (IRSumTypeDecl) irTypeDeclNode()   {}
 func (IRTypeAliasDecl) irTypeDeclNode() {}
+func (IRTraitDecl) irTypeDeclNode()     {}
 
 // --- Source Info ---
 

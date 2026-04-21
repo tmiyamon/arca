@@ -78,7 +78,26 @@ func (em *Emitter) emitTypeDecl(td IRTypeDecl) {
 		em.emitSumTypeDecl(d)
 	case IRTypeAliasDecl:
 		em.emitTypeAliasDecl(d)
+	case IRTraitDecl:
+		em.emitTraitDecl(d)
 	}
+}
+
+func (em *Emitter) emitTraitDecl(d IRTraitDecl) {
+	w := em.w
+	w.Interface(d.GoName, func() {
+		for _, m := range d.Methods {
+			params := make([]string, len(m.Params))
+			for i, p := range m.Params {
+				params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
+			}
+			retStr := ""
+			if m.ReturnType != nil {
+				retStr = " " + em.irTypeStr(m.ReturnType)
+			}
+			w.Line("%s(%s)%s", m.Name, strings.Join(params, ", "), retStr)
+		}
+	})
 }
 
 func (em *Emitter) emitEnumDecl(d IREnumDecl) {
@@ -1456,6 +1475,8 @@ func (em *Emitter) irTypeStr(t IRType) string {
 		return "*" + em.irTypeStr(tt.Inner)
 	case IRInterfaceType:
 		return "interface{}"
+	case IRTraitType:
+		return traitGoName(tt.Name)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable
 	default:

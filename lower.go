@@ -762,6 +762,8 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 				}
 				funcs = append(funcs, l.lowerFnDecl(d))
 			}
+		case TraitDecl:
+			types = append(types, l.lowerTraitDecl(d))
 		case ImplDecl:
 			funcs = append(funcs, l.lowerImplDecl(d)...)
 		}
@@ -1178,10 +1180,34 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 }
 
+// traitGoName maps an Arca trait name to its emitted Go interface name.
+// Arca-prefixed to avoid colliding with Go stdlib types (Error, Reader, ...).
+func traitGoName(name string) string { return "Arca" + name }
+
+// lowerTraitDecl emits the Go interface declaration for a trait.
+func (l *Lowerer) lowerTraitDecl(d TraitDecl) IRTraitDecl {
+	methods := make([]IRInterfaceMethod, 0, len(d.Methods))
+	for _, m := range d.Methods {
+		var retType IRType
+		if m.ReturnType != nil {
+			retType = l.lowerType(m.ReturnType)
+		}
+		methods = append(methods, IRInterfaceMethod{
+			Name:       snakeToPascal(m.Name),
+			Params:     l.lowerParams(m.Params),
+			ReturnType: retType,
+		})
+	}
+	return IRTraitDecl{
+		GoName:  traitGoName(d.Name),
+		Methods: methods,
+	}
+}
+
 // lowerImplDecl emits impl methods as Go methods on the target concrete type.
 // Go's structural interface satisfaction means no extra registration is
-// needed on the Go side — ArcaError interface emit (Slice 4c) will pick up
-// matching methods automatically.
+// needed on the Go side — the ArcaTrait interface and these methods share
+// PascalCase names, so impl methods transparently satisfy the interface.
 func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 	td, ok := l.types[d.TypeName]
 	if !ok {
@@ -1194,6 +1220,10 @@ func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 	}
 	var funcs []IRFuncDecl
 	for _, method := range d.Methods {
+		// Impl methods must be exported Go methods to satisfy the ArcaTrait
+		// interface's exported method set. Mark as Public regardless of the
+		// source annotation so lowerMethod picks snakeToPascal.
+		method.Public = true
 		funcs = append(funcs, l.lowerMethod(td, method)...)
 	}
 	return funcs
@@ -1742,6 +1772,8 @@ func irTypeEmitStr(t IRType) string {
 			return fmt.Sprintf("struct{ First %s; Second %s }", irTypeEmitStr(tt.Elements[0]), irTypeEmitStr(tt.Elements[1]))
 		}
 		return "interface{}"
+	case IRTraitType:
+		return traitGoName(tt.Name)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable falls back to interface{}
 	default:
@@ -4652,6 +4684,24 @@ func (l *Lowerer) resolveMethodName(name string) string {
 					return snakeToPascal(name)
 				}
 				return snakeToCamel(name)
+			}
+		}
+	}
+	// Trait impls are emitted as exported Go methods so the Go interface
+	// method set is satisfied. See lowerImplDecl's Public override.
+	for _, impls := range l.impls {
+		for _, impl := range impls {
+			for _, m := range impl.Methods {
+				if m.Name == name {
+					return snakeToPascal(name)
+				}
+			}
+		}
+	}
+	for _, trait := range l.traits {
+		for _, m := range trait.Methods {
+			if m.Name == name {
+				return snakeToPascal(name)
 			}
 		}
 	}

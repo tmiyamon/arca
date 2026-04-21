@@ -240,6 +240,10 @@ func TestE2EShorthandLambda(t *testing.T) {
 	runE2E(t, "testdata/shorthand_lambda.arca", "[2 4 6 8 10]\n[1 2 3 4 5]\n15\n")
 }
 
+func TestE2ETraitBasic(t *testing.T) {
+	runE2E(t, "testdata/trait_basic.arca", "Alice\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 

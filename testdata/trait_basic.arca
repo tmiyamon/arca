@@ -1,0 +1,24 @@
+import go "fmt"
+
+trait Display {
+  fun show() -> String
+}
+
+type User {
+  User(name: String)
+}
+
+impl User: Display {
+  fun show() -> String {
+    self.name
+  }
+}
+
+fun render(d: Display) -> String {
+  d.show()
+}
+
+fun main() {
+  let u = User(name: "Alice")
+  fmt.Println(render(u))
+}
