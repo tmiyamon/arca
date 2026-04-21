@@ -359,7 +359,21 @@ type FnDecl struct {
 	ReceiverType string // "" for free functions, "User" for fn User.method(self)
 	Params       []FnParam
 	ReturnType   Type // nil = no return type (void)
-	Body         Expr
+	Body         Expr // nil for trait method signatures
+}
+
+type TraitDecl struct {
+	Pos     Pos
+	NamePos Pos
+	Name    string
+	Methods []FnDecl // body-less (FnDecl.Body == nil)
+}
+
+type ImplDecl struct {
+	Pos       Pos
+	TypeName  string
+	TraitName string
+	Methods   []FnDecl
 }
 
 type FnParam struct {
@@ -372,6 +386,8 @@ func (ImportDecl) declNode()     {}
 func (TypeDecl) declNode()       {}
 func (TypeAliasDecl) declNode()  {}
 func (FnDecl) declNode()         {}
+func (TraitDecl) declNode()      {}
+func (ImplDecl) declNode()       {}
 
 // --- Program ---
 

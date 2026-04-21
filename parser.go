@@ -54,6 +54,10 @@ func (p *Parser) parseDecl() (Decl, error) {
 		return p.parseImportDecl()
 	case TkType:
 		return p.parseTypeDecl()
+	case TkTrait:
+		return p.parseTraitDecl()
+	case TkImpl:
+		return p.parseImplDecl()
 	case TkFn:
 		return p.parseFnDecl(false)
 	case TkPub:
@@ -63,7 +67,7 @@ func (p *Parser) parseDecl() (Decl, error) {
 		}
 		return nil, fmt.Errorf("%d:%d: expected fn after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
 	default:
-		return nil, fmt.Errorf("%d:%d: expected import, type, pub, or fn, got %s", p.peek().Line, p.peek().Col, p.peek())
+		return nil, fmt.Errorf("%d:%d: expected import, type, trait, impl, pub, or fn, got %s", p.peek().Line, p.peek().Col, p.peek())
 	}
 }
 
@@ -289,6 +293,110 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 	}
 	p.advance() // skip '}'
 	return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags}, nil
+}
+
+func (p *Parser) parseTraitDecl() (Decl, error) {
+	traitTok := p.advance() // skip 'trait'
+	pos := Pos{traitTok.Line, traitTok.Col}
+	name, err := p.expect(TkUpperIdent)
+	if err != nil {
+		return nil, err
+	}
+	namePos := Pos{name.Line, name.Col}
+	if _, err := p.expect(TkLBrace); err != nil {
+		return nil, err
+	}
+	var methods []FnDecl
+	for p.peek().Kind != TkRBrace {
+		if p.peek().Kind == TkStatic {
+			tok := p.peek()
+			return nil, fmt.Errorf("%d:%d: static fun is not supported in trait (Phase 1)", tok.Line, tok.Col)
+		}
+		if p.peek().Kind != TkFn {
+			tok := p.peek()
+			return nil, fmt.Errorf("%d:%d: expected fun or }, got %s", tok.Line, tok.Col, tok)
+		}
+		sig, err := p.parseTraitMethodSig(name.Lit)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, sig)
+	}
+	p.advance() // skip '}'
+	return TraitDecl{Pos: pos, NamePos: namePos, Name: name.Lit, Methods: methods}, nil
+}
+
+func (p *Parser) parseTraitMethodSig(traitName string) (FnDecl, error) {
+	pos := Pos{p.peek().Line, p.peek().Col}
+	p.advance() // skip 'fun'
+	name, err := p.expect(TkIdent)
+	if err != nil {
+		return FnDecl{}, err
+	}
+	if _, err := p.expect(TkLParen); err != nil {
+		return FnDecl{}, err
+	}
+	var params []FnParam
+	for p.peek().Kind != TkRParen {
+		param, err := p.parseFnParam()
+		if err != nil {
+			return FnDecl{}, err
+		}
+		params = append(params, param)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ')'
+
+	var retType Type
+	if p.peek().Kind == TkArrow {
+		p.advance()
+		retType, err = p.parseType()
+		if err != nil {
+			return FnDecl{}, err
+		}
+	}
+	return FnDecl{Pos: pos, NamePos: Pos{name.Line, name.Col}, Name: name.Lit, ReceiverType: traitName, Params: params, ReturnType: retType, Body: nil}, nil
+}
+
+func (p *Parser) parseImplDecl() (Decl, error) {
+	implTok := p.advance() // skip 'impl'
+	pos := Pos{implTok.Line, implTok.Col}
+	typeName, err := p.expect(TkUpperIdent)
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind != TkColon {
+		tok := p.peek()
+		return nil, fmt.Errorf("%d:%d: expected ':' after impl type (inherent impl is not supported; define methods in `type %s { fun ... }`)", tok.Line, tok.Col, typeName.Lit)
+	}
+	p.advance() // skip ':'
+	traitName, err := p.expect(TkUpperIdent)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(TkLBrace); err != nil {
+		return nil, err
+	}
+	var methods []FnDecl
+	for p.peek().Kind != TkRBrace {
+		if p.peek().Kind == TkStatic {
+			tok := p.peek()
+			return nil, fmt.Errorf("%d:%d: static fun is not supported in impl (Phase 1)", tok.Line, tok.Col)
+		}
+		if p.peek().Kind != TkFn {
+			tok := p.peek()
+			return nil, fmt.Errorf("%d:%d: expected fun or }, got %s", tok.Line, tok.Col, tok)
+		}
+		method, err := p.parseMethodDecl(typeName.Lit, false)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, method)
+	}
+	p.advance() // skip '}'
+	return ImplDecl{Pos: pos, TypeName: typeName.Lit, TraitName: traitName.Lit, Methods: methods}, nil
 }
 
 func (p *Parser) parseTagsBlock() ([]TagRule, error) {

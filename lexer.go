@@ -35,6 +35,8 @@ const (
 	TkStatic
 	TkIf
 	TkElse
+	TkTrait
+	TkImpl
 
 	// Symbols
 	TkLParen
@@ -79,6 +81,7 @@ var tokenNames = map[TokenKind]string{
 	TkType: "type", TkFn: "fun", TkMatch: "match",
 	TkLet: "let", TkTrue: "True", TkFalse: "False",
 	TkPub: "pub", TkImport: "import", TkFor: "for", TkIn: "in", TkAssert: "assert", TkDefer: "defer", TkTags: "tags", TkStatic: "static", TkIf: "if", TkElse: "else",
+	TkTrait: "trait", TkImpl: "impl",
 	TkLParen: "(", TkRParen: ")",
 	TkLBracket: "[", TkRBracket: "]",
 	TkLBrace: "{", TkRBrace: "}",
@@ -125,6 +128,8 @@ var keywords = map[string]TokenKind{
 	"static": TkStatic,
 	"if":     TkIf,
 	"else":   TkElse,
+	"trait":  TkTrait,
+	"impl":   TkImpl,
 }
 
 type Lexer struct {
