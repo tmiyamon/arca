@@ -4,6 +4,277 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-21: Trait system Phase 1 — minimum viable traits for Error (design)
+
+**Context:** 2026-04-19 "Error trait interface shape" fixed the Error trait's method surface (`fun message() -> String`), but left the underlying trait system unbuilt. `examples/todo` cannot construct Arca-side errors because there is no way to declare a type satisfies `Error`. 2026-04-11 "Trait system design" laid out the shape but explicitly deferred implementation until needed. That time has arrived — Phase 1 Layer 1 item 4 (todo demo) is blocked on having a real `Error` trait. This entry defines the minimum viable trait system that unblocks Error; richer features (default methods, trait inheritance, generic bounds) remain future work.
+
+**Scope:** Only what Error trait needs to function end-to-end, plus the structural decisions that would be painful to change later (syntax form, IR nodes, Go emit strategy). Everything that can be deferred without forcing migration pain stays deferred.
+
+### Syntax
+
+**Decision:** Separate `impl` blocks, Swift-style `impl Type: Trait { ... }`.
+
+```arca
+trait Error {
+    fun message() -> String
+}
+
+type NotFound {
+    NotFound(id: Int)
+}
+
+impl NotFound: Error {
+    fun message() -> String {
+        "not found: " + self.id.toString()
+    }
+}
+```
+
+- Trait, type, and impl are three separate top-level declarations.
+- Inline `type User: Trait { ... }` form rejected: prevents adding trait impls for types defined outside the module (stdlib vision requires `impl ext.Type: LocalTrait`).
+- Rust-style `impl Trait for User` rejected: `for` keyword would be introduced just for this construct; `:` already means "satisfies / is-a" in Arca (`[T: Display]`, `trait Ord: Eq`, `name: String`), so `impl User: Display` stays consistent.
+- The surface syntax can be migrated later with parser-only changes because the IR keeps trait/impl as separate concepts. Syntax is a sugar layer over `TraitDecl` / `TypeDecl` / `ImplDecl`.
+
+### Orphan rule
+
+**Decision:** Adopt Rust's orphan rule, further restricted in Phase 1.
+
+- General rule: `impl T for X` requires *either* `T` or `X` to be declared in the current module.
+- Phase 1 restriction: both `T` and `X` must be local. External-type / external-trait impls are Phase 2+.
+- Forbidden forever: `impl ExtType: ExtTrait` (true orphan) — coherence problem, same reasoning as Rust.
+
+"Allow impls on Go FFI types" (e.g., `impl sql.Rows: Decodable`) is Phase 2; the orphan rule keeps the door open without enabling it now.
+
+### Trait as type (trait objects)
+
+**Decision:** Trait names are valid type expressions. `Result[T, Error]`, `fun f(e: Error)`, `List[Error]` all compile.
+
+- New IR node: `IRTraitType{Name: string}`, distinct from `IRInterfaceType` (which is `Any`).
+- Required for the Error trait to be usable in `Result[T, Error]` — the primary motivating use case.
+
+### Go emit
+
+**Decision:** Trait → Go interface; impl methods → Go methods on the concrete type.
+
+```go
+// trait Error { fun message() -> String }
+type ArcaError interface {
+    Message() string
+}
+
+// impl NotFound: Error { fun message() -> String { ... } }
+type NotFound struct { id int }
+
+func (n NotFound) Message() string { ... }
+```
+
+- Arca method name (camelCase `message`) is capitalised to Go (`Message`) via the existing naming convention — same rule as `pub fun` on `type {}`.
+- Go interface naming: `Arca<Trait>` prefix to avoid collision with Go stdlib (`Error`, `Reader` etc. are common).
+- Go interface satisfaction is structural, so `impl NotFound: Error` needs no explicit registration — the Go compiler sees `NotFound` has `Message() string` and accepts it wherever `ArcaError` is expected.
+
+### Dispatch
+
+**Decision:** Dynamic dispatch only in Phase 1. Every `e.message()` emits as a Go interface method call, regardless of whether `e`'s static type is `Error` or a concrete impl type.
+
+- Rationale: trait objects are in scope (required for Error), so dynamic dispatch must exist. Adding a separate static / monomorphised path would multiply implementation complexity for marginal gain at this stage.
+- Arca rides on Go's interface dispatch: Go runtime handles vtable lookup, and Go's compiler optimises interface calls where profitable. No Arca-side code generation work for dispatch.
+- Static dispatch (monomorphisation) is Phase 2 alongside generic bounds (`[T: Display]`).
+
+### Coercion
+
+**Decision:** Values of concrete impl types coerce implicitly to trait types at hint-driven positions. No explicit cast syntax.
+
+- Mechanism: new `autoTraitLift` in `lowerExprHint`, mirroring the existing `autoSomeLift`. When the hint is `IRTraitType{T}` and the expression's type implements `T`, coercion is a no-op in emit (Go interface satisfaction is structural).
+- Covered positions: function arguments, let annotations, return types, match arms, constructor fields.
+- `Err(NotFound(1))` at a `Result[_, Error]` context automatically flows as `Error`.
+
+### Method resolution
+
+**Decision:** When lowering `x.foo()`, resolve in this order:
+
+1. Inherent methods in `type X { fun foo() ... }` on `x`'s concrete type.
+2. Trait impl methods from any in-scope `impl X: T` where `T` declares `foo`.
+3. If `x`'s static type is a trait, the trait's method set.
+
+Ambiguity — two or more candidates at the same rank — is a compile error in Phase 1 (see "Method name collision" below).
+
+### Match type narrowing on trait types
+
+**Decision:** The existing match type pattern (`match v { id: T => body }`, introduced 2026-04-19 for `Any`) extends to trait types unchanged.
+
+```arca
+fun handle(e: Error) -> String {
+    match e {
+        id: NotFound => "missing " + id.id.toString()
+        id: Timeout  => "timeout"
+        _            => e.message()
+    }
+}
+```
+
+- Emits as Go type switch, same as `Any` narrowing.
+- No exhaustiveness check — trait types are open universe, new impls can appear anywhere.
+- Users who want exhaustive matching define a sum type that implements the trait, and match on the sum type (existing sum-type exhaustiveness check applies).
+
+### `self` syntax
+
+**Decision:** Implicit `self` in trait method signatures and impl bodies, consistent with existing `type { fun }` convention.
+
+```arca
+trait Error {
+    fun message() -> String       // no `self` in signature
+}
+
+impl NotFound: Error {
+    fun message() -> String {
+        self.id.toString()          // `self` bound in body
+    }
+}
+```
+
+- Rust's explicit `self` param exists because Rust encodes receiver kind (`self`, `&self`, `&mut self`) in the parameter. Arca is immutable + value-receiver-only, so the information content is zero.
+- Deviates from the 2026-04-11 "Trait system design" proposal (which wrote `fun display(self)`) — that proposal predated the `type {}` implementation. Implementation-consistent wins over proposal.
+
+### Receiver kind
+
+**Decision:** Value receivers only. Emit as `func (v T) Method() ...` in Go.
+
+- Arca is immutable; there is no mutable receiver semantic to express.
+- Go's escape analysis promotes receivers to the heap when needed; no perf cliff.
+
+### `Self` type and `static fun` in trait/impl
+
+**Decision:** Both forbidden inside `trait { ... }` and `impl ... { ... }` in Phase 1.
+
+- `Self` as a type (`fun compare(other: Self) -> Order`) requires object-safety analysis (traits using `Self` outside receiver cannot be used as trait objects, á la Rust's object-safety rules). Not needed for Error; defer.
+- `static fun` in trait body has no practical use without generic bounds (`fun make[T: Default]() -> T { T.default() }`). Also deferred.
+- Both are already supported in `type {}` bodies (`testdata/static_fun.arca`); the restriction applies only when they appear in a trait/impl context.
+
+### Method name collision
+
+**Decision:** Any collision between candidate methods on the same type is a compile error in Phase 1. No disambiguation syntax.
+
+Collision sources, all rejected:
+- Same method name across two trait impls on the same type.
+- Method name shared between a trait impl and a `type {}` inherent method.
+- Duplicate impl of the same trait on the same type (coherence violation).
+
+Workarounds:
+- Access the method through a trait-typed binding: `let d: Display = u; d.show()`.
+- Rename one trait's method.
+
+Disambiguation syntax (Rust's `<User as Display>::show(&u)` or similar) is Phase 2 if real demand emerges.
+
+### Inherent `impl` blocks
+
+**Decision:** Forbidden in Phase 1. `impl` always requires a `: Trait` clause. Inherent methods belong in `type { fun ... }`.
+
+- Prevents TMTOWTDI ("two ways to add a method").
+- Existing `type {}` body already handles inherent methods.
+- Forbid at parser level with a helpful error message pointing to `type {}`.
+- Future Phase 2 use case (adding methods to FFI types) can re-open this via a separate extension mechanism without syntax change.
+
+### Error trait Go bridge
+
+**Decision (refines 2026-04-19 "Error trait interface shape"):** Arca's `Error` trait emits as a distinct Go interface `ArcaError { Message() string }`, not as Go's `error` interface. A compiler-generated `Error() string` shim per impl satisfies Go's `error`. Go FFI `error` values are wrapped into `ArcaError` via `__goError` at the FFI boundary.
+
+**Why a distinct interface, not aliasing Go's `error`:**
+- SSOT layering: `Error` is an Arca concept; Go's `error` is an FFI implementation detail. Collapsing them locks future extensions (adding `source()`, `cause()`, `kind()` to the trait would diverge from Go's single-method `error`).
+- Consistency with all other traits: `Display`, `Debug`, future `Eq`, `Ord` all emit as `Arca<Trait>`. Error as a one-off alias would be the only exception.
+
+**Emit shape:**
+
+```go
+// One per trait.
+type ArcaError interface {
+    Message() string
+}
+
+// Per impl: the real method + the Go-error shim.
+func (n NotFound) Message() string { return "not found: " + strconv.Itoa(n.id) }
+func (n NotFound) Error() string   { return n.Message() }   // auto-generated
+
+// Per project: the FFI wrapper for Go-side errors crossing into Arca.
+type __goError struct { inner error }
+func (e __goError) Message() string { return e.inner.Error() }
+func (e __goError) Error() string   { return e.inner.Error() }
+func (e __goError) Unwrap() error   { return e.inner }
+```
+
+**Boundary behaviour:**
+
+| Direction | Mechanism | Cost |
+|---|---|---|
+| Arca `NotFound` → Go `error` param (e.g., `fmt.Errorf("%w", e)`) | Shim `Error() string` on the impl | None |
+| Go `error` return → Arca `Error` | Wrap in `__goError{inner: err}` at FFI call site | 1 alloc per non-nil error |
+| Arca `Error` → Arca `Error` propagation | No conversion | None |
+
+`__goError` inserts at the same emit site as the existing `GoMultiReturn` handling for `(T, error)` returns. `Unwrap()` is mandatory so Go's `errors.Is` / `errors.As` see through the wrapper.
+
+**Error `match` narrowing:** users distinguish specific error types via the match type pattern:
+
+```arca
+match err {
+    id: NotFound      => handleNotFound(id)
+    id: Unauthorized  => ...
+    _                 => err.message()
+}
+```
+
+Combined with the closed-universe sum type pattern (`type AppError { NotFound(...) | Timeout(...) }` with `impl AppError: Error`), users can get full exhaustiveness when they want it.
+
+### `error` (Go interface) vs `Error` (Arca trait) — distinct concepts
+
+**Decision:** The lowercase `error` (currently Arca's direct alias for Go's `error` interface) and the new `Error` trait are different concepts and must not be conflated.
+
+- `error` = Go FFI implementation detail. Currently accepted as a type name (see `lower.go` allowed-types list) so that `(T, error)` Go returns surface as `Result[T, error]` in Arca.
+- `Error` = Arca trait (capitalised per Arca type convention). What users write in Arca source.
+- After Phase 1 migration, user-written Arca source uses `Error` only. Lowercase `error` is removed from the language surface. At the FFI boundary, Go `error` values wrap into `__goError` and surface as `Error`.
+
+### Prelude-hosted `trait Error`
+
+**Decision:** `trait Error { fun message() -> String }` is a prelude-built-in, same status as `Option` / `Result`.
+
+- Users can write `Result[T, Error]` without any `import`.
+- Compiler bootstraps the trait before lowering user code, so `Error` name resolves from day one even before any impl exists.
+- Rejected alternative "user must `import arca.error`": adds ceremony to every file that returns Result, inconsistent with `Option` / `Result` being free.
+- Rejected alternative "hardcode without a trait definition": makes `Error` a special case outside the trait system; adding `.message()` methods would need special emit; migration to user-defined Error-like traits would be painful.
+
+### `error` removal migration plan
+
+**Decision:** Plan C — remove lowercase `error` at Slice 4d, the same slice that lands the `__goError` wrapper.
+
+- Slices 4a-4c introduce parser / lower / emit for traits without touching the lowercase `error` path. During this period, both `error` and `Error` coexist in the language (testdata using `Result[T, error]` continues to work).
+- Slice 4d: land `__goError` wrapper, remove lowercase `error` from `isKnownTypeName`, change Go FFI `(T, error)` mapping to produce `Result[T, Error]` with `__goError` wrapping, update all testdata / examples / stdlib that referenced `error` to use `Error`.
+- Plan A (gradual removal across many PRs) and plan B (everything in one slice) considered; both viable because the test suite catches any un-migrated call site. C chosen because the `__goError` wrap is the natural forcing function for migration — once it exists, lowercase `error` has no remaining purpose.
+
+### Out of scope (Phase 1 explicitly excludes)
+
+- Default method implementations.
+- Trait inheritance (`trait Ord: Eq`).
+- Generic bounds on functions / types (`fun f[T: Display](x: T)`).
+- Monomorphisation / static dispatch.
+- Disambiguation syntax for method collision.
+- Inherent `impl` blocks.
+- `Self` type, `static fun` inside trait/impl.
+- Trait impls on Go FFI types (`impl sql.Rows: Decodable`).
+- Object-safety analysis (trivially satisfied because Phase 1 forbids `Self` and generic methods).
+- Value equality / comparison on trait-typed values (needs `Eq` trait, Phase 2).
+
+### Implementation slices (drafted; not started)
+
+1. **4a** Parser + AST. `TraitDecl`, `ImplDecl` top-level nodes. Methods inside use existing `MethodDecl`. Enforce orphan rule and inherent-impl ban in parser.
+2. **4b** Lower. Trait registry, impl registry. `IRTraitType` IR node. Method resolution walks trait impls. `autoTraitLift` in `lowerExprHint`. Method collision check.
+3. **4c** Emit. Trait → Go interface. Impl methods → Go receiver methods. No other per-trait emit logic.
+4. **4d** Error trait shim. Detect `Error` trait, auto-generate `Error() string` on each impl. Emit `__goError` wrapper helper. Update FFI return handling to wrap errors via `__goError`.
+5. **4e** Prelude `trait Error`. Optional: one stdlib error type (e.g., `StringError(msg: String)`) for quick user ergonomics.
+6. **4f** Migrate `examples/todo` to use Arca-typed errors.
+7. **4g** Docs sync — SPEC.md (trait section), DESIGN.md (trait rationale), this entry's status moved from "design" to "implemented".
+
+**Status:** Design only. All 18 decisions recorded. Implementation not started — slice 4a is the next step.
+
+---
+
 ## 2026-04-19: Any type and match type pattern (implemented)
 
 **Context:** Phase 1 Layer 1 item 3 — safe cast for Go's `interface{}` / `any`. Without this, Go FFI returns typed `any` (e.g. `ctx.Value(k)`, `map[string]any` values) were unusable on the Arca side, and unsafe `v.(T)` remained the only option in Go, with its panic risk. Design predated this session at `memory/design_any_safe_cast.md`.
