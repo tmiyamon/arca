@@ -162,6 +162,41 @@ fun main() {
 	}
 }
 
+// Ref[T] should auto-deref at field/method access — completion on a Ref-typed
+// binding must surface the fields of the inner type (Arca auto-deref rule).
+func TestCompletionRefAutoDeref(t *testing.T) {
+	t.Parallel()
+	source := `type User {
+    User(name: String, age: Int)
+}
+
+fun show(u: Ref[User]) -> String {
+    u.
+}
+`
+	items := getCompletionItems(source, "/tmp/ref_auto_test.arca", 6, 7)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for u. where u: Ref[User], got none")
+	}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+	}
+	hasName := false
+	hasAge := false
+	for _, n := range names {
+		if n == "name" {
+			hasName = true
+		}
+		if n == "age" {
+			hasAge = true
+		}
+	}
+	if !hasName || !hasAge {
+		t.Errorf("expected name and age fields on Ref[User], got %v", names)
+	}
+}
+
 // Test chained completion (a.b.c)
 func TestCompletionChained(t *testing.T) {
 	t.Parallel()

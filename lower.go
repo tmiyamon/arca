@@ -2729,6 +2729,12 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 				isNamed = true
 			}
 		}
+		if ref, isRef := irType.(IRRefType); isRef {
+			if inner, isInner := ref.Inner.(IRNamedType); isInner {
+				named = inner
+				isNamed = true
+			}
+		}
 	}
 	if !isNamed || !strings.Contains(named.GoName, ".") {
 		return "", "", false
@@ -3022,8 +3028,21 @@ func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
 }
 
 // resolveReceiverArcaType extracts the Arca type name from an IR expression.
+// Peels Ref[T] / *T so field and method access auto-deref the way SPEC.md
+// describes.
 func (l *Lowerer) resolveReceiverArcaType(expr IRExpr) string {
 	irType := expr.irType()
+	for {
+		switch tt := irType.(type) {
+		case IRRefType:
+			irType = tt.Inner
+			continue
+		case IRPointerType:
+			irType = tt.Inner
+			continue
+		}
+		break
+	}
 	if irType == nil {
 		return ""
 	}

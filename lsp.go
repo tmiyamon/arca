@@ -293,9 +293,12 @@ func getDefinitionLocation(source string, filePath string, line, col int) (strin
 // extractPackageAndType returns the Go package short name and type name from
 // an IR type. Returns ("", "") if the type is not a Go-qualified named type.
 func extractPackageAndType(t IRType) (string, string) {
-	// Unwrap pointer: *sql.DB → sql.DB
+	// Unwrap pointer / ref: *sql.DB and Ref[sql.DB] both surface methods of sql.DB.
 	if pt, ok := t.(IRPointerType); ok {
 		return extractPackageAndType(pt.Inner)
+	}
+	if rt, ok := t.(IRRefType); ok {
+		return extractPackageAndType(rt.Inner)
 	}
 	named, ok := t.(IRNamedType)
 	if !ok {
@@ -394,6 +397,17 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 				curArcaType = sym.Type
 			}
 		}
+	}
+
+	// Ref[T] auto-derefs at field / method access — peel Ref both on the
+	// AST-level curArcaType (from the symbol table) and the IR-level
+	// curIRType so downstream Arca-type-fields and Go-FFI-methods branches
+	// both look through the reference.
+	if nt, ok := curArcaType.(NamedType); ok && nt.Name == "Ref" && len(nt.Params) == 1 {
+		curArcaType = nt.Params[0]
+	}
+	if rt, ok := curIRType.(IRRefType); ok {
+		curIRType = rt.Inner
 	}
 
 	// If the IR type is a user-defined Arca type, map it to curArcaType
@@ -698,6 +712,12 @@ func lookupGoMemberHover(irType IRType, member string, lowerer *Lowerer) string 
 	case IRNamedType:
 		named = tt
 	case IRPointerType:
+		if inner, ok := tt.Inner.(IRNamedType); ok {
+			named = inner
+		} else {
+			return ""
+		}
+	case IRRefType:
 		if inner, ok := tt.Inner.(IRNamedType); ok {
 			named = inner
 		} else {
