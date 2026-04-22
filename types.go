@@ -459,6 +459,19 @@ func typeName(t Type) string {
 			elems[i] = typeName(e)
 		}
 		return "(" + strings.Join(elems, ", ") + ")"
+	case FunctionType:
+		params := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = typeName(p)
+		}
+		ret := typeName(tt.Ret)
+		if len(tt.Params) == 1 {
+			if _, isFn := tt.Params[0].(FunctionType); isFn {
+				return "(" + params[0] + ") -> " + ret
+			}
+			return params[0] + " -> " + ret
+		}
+		return "(" + strings.Join(params, ", ") + ") -> " + ret
 	default:
 		return "unknown"
 	}

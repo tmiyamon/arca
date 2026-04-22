@@ -1521,6 +1521,15 @@ func (em *Emitter) irTypeStr(t IRType) string {
 			return "error"
 		}
 		return traitGoName(tt.Name)
+	case IRFnType:
+		params := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = em.irTypeStr(p)
+		}
+		if tt.Ret == nil {
+			return "func(" + strings.Join(params, ", ") + ")"
+		}
+		return "func(" + strings.Join(params, ", ") + ") " + em.irTypeStr(tt.Ret)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable
 	default:

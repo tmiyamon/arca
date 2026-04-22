@@ -61,6 +61,14 @@ type IRTraitType struct {
 	Name string // Arca trait name, e.g. "Error"
 }
 
+// IRFnType is the IR representation of a function type (`A -> B`,
+// `(A, B) -> C`). n-ary, structural and invariant under unify; emits as Go
+// `func(A, B) C`. Introduced in the 2026-04-22 function-types design.
+type IRFnType struct {
+	Params []IRType
+	Ret    IRType
+}
+
 type IRTypeVar struct {
 	ID int // unique identifier for this type variable
 }
@@ -75,6 +83,7 @@ func (IRResultType) irTypeNode()    {}
 func (IROptionType) irTypeNode()    {}
 func (IRInterfaceType) irTypeNode() {}
 func (IRTraitType) irTypeNode()     {}
+func (IRFnType) irTypeNode()        {}
 func (IRTypeVar) irTypeNode()       {}
 
 // --- Program ---

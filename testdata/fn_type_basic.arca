@@ -1,0 +1,12 @@
+fun inc(n: Int) -> Int {
+  n + 1
+}
+
+fun apply(f: Int -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fun main() {
+  let result = apply(inc, 41)
+  println(result)
+}

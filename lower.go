@@ -106,6 +106,12 @@ func (s *InferScope) resolveDeep(t IRType) IRType {
 			params[i] = s.resolveDeep(p)
 		}
 		return IRNamedType{GoName: tt.GoName, Params: params}
+	case IRFnType:
+		params := make([]IRType, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = s.resolveDeep(p)
+		}
+		return IRFnType{Params: params, Ret: s.resolveDeep(tt.Ret)}
 	default:
 		return t
 	}
@@ -223,6 +229,17 @@ func (s *InferScope) unify(a, b IRType) bool {
 			}
 		}
 		return false
+	case IRFnType:
+		bt, ok := b.(IRFnType)
+		if !ok || len(at.Params) != len(bt.Params) {
+			return false
+		}
+		for i := range at.Params {
+			if !s.unify(at.Params[i], bt.Params[i]) {
+				return false
+			}
+		}
+		return s.unify(at.Ret, bt.Ret)
 	}
 
 	return false
@@ -1640,6 +1657,21 @@ func irTypeDisplayStr(t IRType) string {
 		return "Any"
 	case IRTraitType:
 		return tt.Name
+	case IRFnType:
+		params := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = irTypeDisplayStr(p)
+		}
+		ret := irTypeDisplayStr(tt.Ret)
+		if len(tt.Params) == 1 {
+			// Bare form for single param, parens if the param is itself
+			// a fn type so `(A -> B) -> C` is unambiguous.
+			if _, isFn := tt.Params[0].(IRFnType); isFn {
+				return "(" + params[0] + ") -> " + ret
+			}
+			return params[0] + " -> " + ret
+		}
+		return "(" + strings.Join(params, ", ") + ") -> " + ret
 	}
 	return "unknown"
 }
@@ -1816,6 +1848,16 @@ func (l *Lowerer) lowerTypeWithVars(t Type, vars map[string]IRType) IRType {
 			elems[i] = l.lowerTypeWithVars(e, vars)
 		}
 		return IRTupleType{Elements: elems}
+	case FunctionType:
+		params := make([]IRType, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = l.lowerTypeWithVars(p, vars)
+		}
+		var ret IRType
+		if tt.Ret != nil {
+			ret = l.lowerTypeWithVars(tt.Ret, vars)
+		}
+		return IRFnType{Params: params, Ret: ret}
 	default:
 		return l.lowerType(t)
 	}
@@ -1887,6 +1929,15 @@ func irTypeEmitStr(t IRType) string {
 			return "error"
 		}
 		return traitGoName(tt.Name)
+	case IRFnType:
+		params := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = irTypeEmitStr(p)
+		}
+		if tt.Ret == nil {
+			return "func(" + strings.Join(params, ", ") + ")"
+		}
+		return "func(" + strings.Join(params, ", ") + ") " + irTypeEmitStr(tt.Ret)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable falls back to interface{}
 	default:
@@ -1949,6 +2000,16 @@ func (l *Lowerer) lowerType(t Type) IRType {
 			elems[i] = l.lowerType(e)
 		}
 		return IRTupleType{Elements: elems}
+	case FunctionType:
+		params := make([]IRType, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = l.lowerType(p)
+		}
+		var ret IRType
+		if tt.Ret != nil {
+			ret = l.lowerType(tt.Ret)
+		}
+		return IRFnType{Params: params, Ret: ret}
 	default:
 		return IRInterfaceType{}
 	}
