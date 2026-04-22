@@ -492,14 +492,37 @@ func (p *Parser) parseField() (Field, error) {
 	return Field{Name: name.Lit, Type: typ}, nil
 }
 
+// parseType parses a type with right-associative arrow suffix, so
+// `A -> B -> C` = `A -> (B -> C)`. Paren-wrapped param lists are handled
+// inside parseAtomType via parseTupleOrFnPrefix. `*` binds tighter than
+// `->`: `*A -> B` = `(*A) -> B`.
 func (p *Parser) parseType() (Type, error) {
-	if p.peek().Kind == TkLParen {
-		return p.parseTupleType()
+	t, err := p.parseAtomType()
+	if err != nil {
+		return nil, err
 	}
-	// Pointer type: *T
+	if p.peek().Kind == TkArrow {
+		arrowTok := p.advance()
+		ret, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		return FunctionType{Pos: Pos{arrowTok.Line, arrowTok.Col}, Params: []Type{t}, Ret: ret}, nil
+	}
+	return t, nil
+}
+
+// parseAtomType parses a type without consuming a trailing arrow. The
+// arrow suffix is owned by parseType so that atoms like `(A, B)` inside
+// a fn-type param list do not greedily swallow the outer `->`.
+func (p *Parser) parseAtomType() (Type, error) {
+	if p.peek().Kind == TkLParen {
+		return p.parseTupleOrFnPrefix()
+	}
+	// Pointer type: *T — binds tighter than arrow.
 	if p.peek().Kind == TkStar {
 		p.advance()
-		inner, err := p.parseType()
+		inner, err := p.parseAtomType()
 		if err != nil {
 			return nil, err
 		}
@@ -546,6 +569,58 @@ func (p *Parser) parseType() (Type, error) {
 	}
 }
 
+// parseTupleOrFnPrefix handles `(` at the start of a type. The paren
+// content parses as a comma-separated type list; if `->` follows the
+// closing paren, it is a FunctionType param list (trailing comma
+// rejected). Otherwise it is a TupleType (trailing comma tolerated
+// per existing tuple syntax).
+func (p *Parser) parseTupleOrFnPrefix() (Type, error) {
+	types, trailingComma, err := p.parseParenTypeList()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().Kind == TkArrow {
+		arrowTok := p.advance()
+		if trailingComma {
+			return nil, fmt.Errorf("%d:%d: trailing comma not allowed in function-type parameter list", arrowTok.Line, arrowTok.Col)
+		}
+		ret, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		return FunctionType{Pos: Pos{arrowTok.Line, arrowTok.Col}, Params: types, Ret: ret}, nil
+	}
+	return TupleType{Elements: types}, nil
+}
+
+// parseParenTypeList consumes `(T1, T2, ...)` returning the elements and
+// whether the list ended with a trailing comma. The caller decides whether
+// trailing comma is acceptable — tuple types accept it, function types do not.
+func (p *Parser) parseParenTypeList() ([]Type, bool, error) {
+	p.advance() // '('
+	var types []Type
+	trailingComma := false
+	for p.peek().Kind != TkRParen {
+		t, err := p.parseType()
+		if err != nil {
+			return nil, false, err
+		}
+		types = append(types, t)
+		if p.peek().Kind == TkComma {
+			p.advance()
+			trailingComma = p.peek().Kind == TkRParen
+		} else {
+			break
+		}
+	}
+	if p.peek().Kind != TkRParen {
+		tok := p.peek()
+		return nil, false, fmt.Errorf("%d:%d: expected `)` in type list, got %s", tok.Line, tok.Col, tok)
+	}
+	p.advance() // ')'
+	return types, trailingComma, nil
+}
+
 func (p *Parser) tryParseConstraints() ([]Constraint, error) {
 	// Check if { follows and contains key: value pairs
 	if p.peek().Kind != TkLBrace {
@@ -583,23 +658,6 @@ func (p *Parser) parseConstraints() ([]Constraint, error) {
 	}
 	p.advance() // skip '}'
 	return constraints, nil
-}
-
-func (p *Parser) parseTupleType() (Type, error) {
-	p.advance() // skip '('
-	var elements []Type
-	for p.peek().Kind != TkRParen {
-		t, err := p.parseType()
-		if err != nil {
-			return nil, err
-		}
-		elements = append(elements, t)
-		if p.peek().Kind == TkComma {
-			p.advance()
-		}
-	}
-	p.advance() // skip ')'
-	return TupleType{Elements: elements}, nil
 }
 
 func (p *Parser) parseStaticMethodDecl(receiverType string) (FnDecl, error) {

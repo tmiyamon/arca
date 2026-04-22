@@ -1701,6 +1701,13 @@ func (l *Lowerer) checkTypeExists(t Type) {
 		for _, e := range tt.Elements {
 			l.checkTypeExists(e)
 		}
+	case FunctionType:
+		for _, p := range tt.Params {
+			l.checkTypeExists(p)
+		}
+		if tt.Ret != nil {
+			l.checkTypeExists(tt.Ret)
+		}
 	}
 }
 

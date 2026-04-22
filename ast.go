@@ -44,9 +44,20 @@ type TupleType struct {
 	Elements []Type
 }
 
+// FunctionType is a first-class function type expression. Parseable but
+// unwired at lower/emit in slice F1 of the 2026-04-22 design: lowerType
+// falls through to IRInterfaceType. Later slices add IRFnType and wire
+// emit.
+type FunctionType struct {
+	Pos    Pos // position of the `->` token
+	Params []Type
+	Ret    Type
+}
+
 func (NamedType) typeNode()    {}
 func (PointerType) typeNode()  {}
 func (TupleType) typeNode()    {}
+func (FunctionType) typeNode() {}
 
 // --- Expressions ---
 

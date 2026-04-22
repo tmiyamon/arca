@@ -162,6 +162,23 @@ func (f *Formatter) formatType(t Type) string {
 			elems[i] = f.formatType(e)
 		}
 		return "(" + strings.Join(elems, ", ") + ")"
+	case FunctionType:
+		// Single-param FunctionType formats bare (`A -> B`); a FunctionType
+		// in that position needs parens to survive right-associative re-parse
+		// as something other than `A -> (B -> C)`. Zero- and multi-param forms
+		// always use parens.
+		if len(tt.Params) == 1 {
+			p := f.formatType(tt.Params[0])
+			if _, isFn := tt.Params[0].(FunctionType); isFn {
+				p = "(" + p + ")"
+			}
+			return p + " -> " + f.formatType(tt.Ret)
+		}
+		parts := make([]string, len(tt.Params))
+		for i, p := range tt.Params {
+			parts[i] = f.formatType(p)
+		}
+		return "(" + strings.Join(parts, ", ") + ") -> " + f.formatType(tt.Ret)
 	default:
 		return "?"
 	}
