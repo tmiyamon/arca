@@ -240,7 +240,16 @@ func (s *InferScope) typeParamVar(name string) IRTypeVar {
 // Lowerer convenience methods that delegate to current InferScope.
 func (l *Lowerer) freshTypeVar() IRTypeVar   { return l.infer.freshTypeVar() }
 func (l *Lowerer) resolve(t IRType) IRType    { return l.infer.resolve(t) }
-func (l *Lowerer) resolveDeep(t IRType) IRType { return l.infer.resolveDeep(t) }
+func (l *Lowerer) resolveDeep(t IRType) IRType {
+	// After Lower() finishes l.infer is nil (withInferScope restores the saved
+	// nil). LSP-driven partial re-lowering calls resolveDeep outside a live
+	// infer scope; in that case the type is already concrete (nothing to
+	// substitute) so returning it unchanged is correct.
+	if l.infer == nil {
+		return t
+	}
+	return l.infer.resolveDeep(t)
+}
 func (l *Lowerer) typeParamVar(name string) IRTypeVar { return l.infer.typeParamVar(name) }
 
 // unify runs HM unification on two IR types and reports ErrTypeMismatch at
@@ -2746,6 +2755,41 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 	return "", "", false
 }
 
+// monadicMethodInfo is a prelude-provided method on Result or Option. The
+// slice below is the single source of truth for dispatch (tryDesugarMonadicMethod)
+// and LSP completion (monadic method completion branch in lsp.go). Drift
+// between the two paths is impossible because both read this table.
+type monadicMethodInfo struct {
+	Name      string
+	Signature string // user-facing signature for LSP detail
+	Build     func(recv Expr, args []Expr, pos Pos) Expr
+}
+
+var resultMonadicMethods = []monadicMethodInfo{
+	{"map", "(f: T -> U) -> Result[U, E]", buildResultMapDesugar},
+	{"flatMap", "(f: T -> Result[U, E]) -> Result[U, E]", buildResultFlatMapDesugar},
+	{"mapError", "(f: E -> F) -> Result[T, F]", buildResultMapErrorDesugar},
+}
+
+var optionMonadicMethods = []monadicMethodInfo{
+	{"map", "(f: T -> U) -> Option[U]", buildOptionMapDesugar},
+	{"flatMap", "(f: T -> Option[U]) -> Option[U]", buildOptionFlatMapDesugar},
+	{"okOr", "(err: E) -> Result[T, E]", buildOptionOkOrDesugar},
+	{"okOrElse", "(fn: () -> E) -> Result[T, E]", buildOptionOkOrElseDesugar},
+}
+
+// monadicMethodsFor returns the method table for a receiver IR type, or nil
+// if the type is not a monadic carrier.
+func monadicMethodsFor(t IRType) []monadicMethodInfo {
+	switch t.(type) {
+	case IRResultType:
+		return resultMonadicMethods
+	case IROptionType:
+		return optionMonadicMethods
+	}
+	return nil
+}
+
 // tryDesugarMonadicMethod detects monadic method calls on Result and Option
 // and returns an equivalent match-based AST expression. Returns nil for
 // non-monadic calls or unsupported methods.
@@ -2754,27 +2798,10 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 // Result/Option match lowering — no new IR nodes or emit code.
 func (l *Lowerer) tryDesugarMonadicMethod(fa FieldAccess, call FnCall) Expr {
 	recvIR := l.lowerExpr(fa.Expr)
-	recvType := l.resolveDeep(recvIR.irType())
-	switch recvType.(type) {
-	case IRResultType:
-		switch fa.Field {
-		case "map":
-			return buildResultMapDesugar(fa.Expr, call.Args, call.Pos)
-		case "flatMap":
-			return buildResultFlatMapDesugar(fa.Expr, call.Args, call.Pos)
-		case "mapError":
-			return buildResultMapErrorDesugar(fa.Expr, call.Args, call.Pos)
-		}
-	case IROptionType:
-		switch fa.Field {
-		case "map":
-			return buildOptionMapDesugar(fa.Expr, call.Args, call.Pos)
-		case "flatMap":
-			return buildOptionFlatMapDesugar(fa.Expr, call.Args, call.Pos)
-		case "okOr":
-			return buildOptionOkOrDesugar(fa.Expr, call.Args, call.Pos)
-		case "okOrElse":
-			return buildOptionOkOrElseDesugar(fa.Expr, call.Args, call.Pos)
+	methods := monadicMethodsFor(l.resolveDeep(recvIR.irType()))
+	for _, m := range methods {
+		if m.Name == fa.Field {
+			return m.Build(fa.Expr, call.Args, call.Pos)
 		}
 	}
 	return nil

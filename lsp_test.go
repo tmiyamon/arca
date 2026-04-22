@@ -162,6 +162,126 @@ fun main() {
 	}
 }
 
+// Prelude-provided monadic methods on Result should surface in completion
+// after a dot on a Result-typed receiver (`.map`, `.flatMap`, `.mapError`).
+// The lowerer's tryDesugarMonadicMethod dispatches from the same table, so
+// this test also locks down that drift between the two paths is impossible.
+func TestCompletionResultMonadicMethods(t *testing.T) {
+	t.Parallel()
+	source := `fun compute(r: Result[Int, Error]) -> Int {
+    r.
+}
+`
+	items := getCompletionItems(source, "/tmp/result_monadic_test.arca", 2, 7)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for r. where r: Result[Int, Error], got none")
+	}
+	want := map[string]bool{"map": false, "flatMap": false, "mapError": false}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+		if _, ok := want[item.Label]; ok {
+			want[item.Label] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("expected %q in completions, got %v", name, names)
+		}
+	}
+}
+
+// Result monadic completion must also fire when the receiver comes through
+// HM inference (let binding of a Result-returning call) rather than an
+// explicit param annotation. Without resolveDeep on the receiver type, the
+// IR can still carry a type variable at the completion site and the
+// IRResultType match in monadicMethodsFor silently misses.
+func TestCompletionResultMonadicMethodsInferred(t *testing.T) {
+	t.Parallel()
+	source := `fun produce() -> Result[Int, Error] {
+    Ok(1)
+}
+
+fun main() {
+    let r = produce()
+    r.
+}
+`
+	items := getCompletionItems(source, "/tmp/result_monadic_inferred_test.arca", 7, 7)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for r. where let r = produce(), got none")
+	}
+	want := map[string]bool{"map": false, "flatMap": false, "mapError": false}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+		if _, ok := want[item.Label]; ok {
+			want[item.Label] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("expected %q in completions, got %v", name, names)
+		}
+	}
+}
+
+// Method chain on a call site — `produce().` must surface the same monadic
+// completions as a let-bound receiver. The receiver here is a FnCall, not
+// an Ident, so this locks down the call-parse path.
+func TestCompletionResultMonadicMethodsOnCall(t *testing.T) {
+	t.Parallel()
+	source := `fun produce() -> Result[Int, Error] {
+    Ok(1)
+}
+
+fun main() {
+    produce().
+}
+`
+	items := getCompletionItems(source, "/tmp/result_monadic_call_test.arca", 6, 15)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for produce(). , got none")
+	}
+	found := false
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+		if item.Label == "map" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'map' in completions for produce()., got %v", names)
+	}
+}
+
+// Same contract for Option: `.map`, `.flatMap`, `.okOr`, `.okOrElse` surface.
+func TestCompletionOptionMonadicMethods(t *testing.T) {
+	t.Parallel()
+	source := `fun compute(o: Option[Int]) -> Int {
+    o.
+}
+`
+	items := getCompletionItems(source, "/tmp/option_monadic_test.arca", 2, 7)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for o. where o: Option[Int], got none")
+	}
+	want := map[string]bool{"map": false, "flatMap": false, "okOr": false, "okOrElse": false}
+	var names []string
+	for _, item := range items {
+		names = append(names, item.Label)
+		if _, ok := want[item.Label]; ok {
+			want[item.Label] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("expected %q in completions, got %v", name, names)
+		}
+	}
+}
+
 // Ref[T] should auto-deref at field/method access — completion on a Ref-typed
 // binding must surface the fields of the inner type (Arca auto-deref rule).
 func TestCompletionRefAutoDeref(t *testing.T) {

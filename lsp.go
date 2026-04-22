@@ -458,6 +458,21 @@ func getCompletionItems(source string, filePath string, line, col int) []protoco
 		}
 	}
 
+	// Prelude-provided monadic methods on Result / Option. resolveDeep strips
+	// any HM type-var indirection left on the receiver so `let r = foo()`
+	// where `foo() -> Result[...]` still matches IRResultType, mirroring the
+	// lowerer's tryDesugarMonadicMethod path.
+	if methods := monadicMethodsFor(lowerer.resolveDeep(curIRType)); methods != nil {
+		methodKind := protocol.CompletionItemKindMethod
+		for _, m := range methods {
+			items = append(items, protocol.CompletionItem{
+				Label:  m.Name,
+				Kind:   &methodKind,
+				Detail: strPtr(m.Signature),
+			})
+		}
+	}
+
 	return items
 }
 
@@ -501,9 +516,15 @@ func insertCompletionPlaceholder(source string, line, col int) string {
 		// Find trailing dots followed only by whitespace to end-of-line
 		trimmed := strings.TrimRight(lineText, " \t")
 		if strings.HasSuffix(trimmed, ".") {
-			// Check that the char before the dot is an identifier
-			if len(trimmed) >= 2 && isIdentChar(trimmed[len(trimmed)-2]) {
-				lines[i] = trimmed + placeholder + lineText[len(trimmed):]
+			// Accept the dot as the start of a member access when the
+			// preceding char is either an identifier (u.) or the close of
+			// a call / index expression (produce().). Other chars (e.g.
+			// an operator or float literal dot) are ignored.
+			if len(trimmed) >= 2 {
+				prev := trimmed[len(trimmed)-2]
+				if isIdentChar(prev) || prev == ')' || prev == ']' {
+					lines[i] = trimmed + placeholder + lineText[len(trimmed):]
+				}
 			}
 		}
 	}
@@ -538,16 +559,40 @@ func getReceiverBeforeDot(source string, line, col int) string {
 	if dotIdx < 0 {
 		return ""
 	}
-	// Walk back to find the full dotted expression (a.b.c)
+	// Walk back to find the full dotted expression. Handles plain dotted
+	// access (a.b.c), call-chain receivers (foo().bar, produce().), and
+	// bracket/generic suffixes on the walked segments. Inside a balanced
+	// `)…(` or `]…[` pair we accept any character; at depth 0 only ident
+	// characters / dots / the opening of a new balanced pair are accepted.
 	end := dotIdx
 	start := end
+	depth := 0
+walk:
 	for start > 0 {
 		c := lineText[start-1]
-		if isIdentChar(c) || c == '.' {
+		if depth > 0 {
 			start--
-		} else {
-			break
+			switch c {
+			case '(', '[':
+				depth--
+			case ')', ']':
+				depth++
+			}
+			continue
 		}
+		switch {
+		case c == ')' || c == ']':
+			depth++
+			start--
+		case isIdentChar(c) || c == '.':
+			start--
+		default:
+			break walk
+		}
+	}
+	// Unbalanced brackets → no valid receiver.
+	if depth != 0 {
+		return ""
 	}
 	if start == end {
 		return ""
