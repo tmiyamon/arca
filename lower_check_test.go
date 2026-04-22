@@ -330,7 +330,7 @@ func TestHMInferenceFromHint(t *testing.T) {
 		t.Parallel()
 		errs := validateSource(`
 fun main() {
-  let r: Result[Int, error] = Ok(42)
+  let r: Result[Int, Error] = Ok(42)
 }
 `)
 		if len(errs) > 0 {
@@ -342,7 +342,7 @@ fun main() {
 		t.Parallel()
 		errs := validateSource(`
 fun main() {
-  let r: Result[String, error] = Ok(42)
+  let r: Result[String, Error] = Ok(42)
 }
 `)
 		if !hasErrorCode(errs, ErrTypeMismatch) {
@@ -379,7 +379,7 @@ fun main() {
 		// The `e` binding in `Error(e)` takes the Result's Err type.
 		// Here Err = error, so passing `e` to a String param must mismatch.
 		errs := validateSource(`
-fun try() -> Result[Int, error] { Ok(1) }
+fun try() -> Result[Int, Error] { Ok(1) }
 
 fun greet(name: String) -> String { name }
 
@@ -536,7 +536,7 @@ func TestValidateConstraintCompatibility(t *testing.T) {
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
 fun greet(age: Age) -> String { "hello" }
-fun test() -> Result[String, error] {
+fun test() -> Result[String, Error] {
   let adult = AdultAge(25)?
   Ok(greet(adult))
 }
@@ -551,7 +551,7 @@ fun main() { let _ = test() }
 type Age = Int{min: 0, max: 150}
 type AdultAge = Int{min: 18, max: 150}
 fun drink(age: AdultAge) -> String { "cheers" }
-fun test() -> Result[String, error] {
+fun test() -> Result[String, Error] {
   let age = Age(10)?
   Ok(drink(age))
 }
@@ -740,7 +740,7 @@ func TestTryExpressionStatement(t *testing.T) {
 	// Try in expression statement should not produce errors
 	errs := validateSource(`
 import go "strconv"
-fun test() -> Result[Int, error] {
+fun test() -> Result[Int, Error] {
   let n = strconv.Atoi("42")?
   strconv.Atoi("99")?
   Ok(n)

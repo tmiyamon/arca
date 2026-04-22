@@ -59,7 +59,7 @@ fun handleUser(w: http.ResponseWriter, r: Ref[http.Request]) {
   }
 }
 
-fun parseId(s: String) -> Result[Int, error] {
+fun parseId(s: String) -> Result[Int, Error] {
   let n = strconv.Atoi(s)?
   Ok(n)
 }

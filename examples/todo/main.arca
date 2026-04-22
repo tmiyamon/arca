@@ -9,7 +9,7 @@ import stdlib
 type App (
   db: Option[Ref[sql.DB]]
 ) {
-  static fun create() -> Result[Self, error] {
+  static fun create() -> Result[Self, Error] {
     let db = sql.Open("sqlite3", "./todo.db")?
 
     db.Exec("""
@@ -38,7 +38,7 @@ type Todo (
   tags { json } 
 }
 
-fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
+fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
   let result = stdlib.QueryAs[Todo](app.db, "select * from todos order by id")
   match result {
     Ok(todos) => c.JSON(http.StatusOK, {"todos": todos})
@@ -46,7 +46,7 @@ fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
   }
 }
 
-fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
+fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
   let result = createTodo(app, c)
   match result {
     Ok(todo) => c.JSON(http.StatusOK, todo)
@@ -54,14 +54,14 @@ fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, error] {
   }
 }
 
-fun createTodo(app: App, c: Ref[echo.Context]) -> Result[Todo, error] {
+fun createTodo(app: App, c: Ref[echo.Context]) -> Result[Todo, Error] {
   let todo = Todo(0, "", None, None)?
   c.Bind(&todo)?
   app.db.Exec("insert into todos (body) values (?)", todo.body)?
   Ok(todo)
 }
 
-fun main() -> Result[Unit, error] {
+fun main() -> Result[Unit, Error] {
   let app = App.create()?
   defer app.finish()
 

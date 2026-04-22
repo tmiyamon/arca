@@ -11,7 +11,7 @@ type User {
   )
 }
 
-fun createUser() -> Result[User, error] {
+fun createUser() -> Result[User, Error] {
   let user = User(id: 1, name: "Alice", age: 30)?
   Ok(user)
 }

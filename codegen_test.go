@@ -310,7 +310,7 @@ fun main() {
 import go "database/sql"
 import stdlib
 
-fun test(db: *sql.DB) -> Result[Int, error] {
+fun test(db: *sql.DB) -> Result[Int, Error] {
   stdlib.QueryOneAs(db, "select 1")
 }
 `)
@@ -367,7 +367,7 @@ fun main() {
 import go "net/http"
 import stdlib
 
-fun handle(r: *http.Request) -> Result[Int, error] {
+fun handle(r: *http.Request) -> Result[Int, Error] {
   let todo = stdlib.BindJSON(r)?
   Ok(0)
 }
@@ -398,7 +398,7 @@ fun handle(r: *http.Request) -> Result[Int, error] {
 import go "net/http"
 import stdlib
 
-fun handle(r: *http.Request) -> Result[Int, error] {
+fun handle(r: *http.Request) -> Result[Int, Error] {
   let n = stdlib.BindJSON[Int](r)?
   Ok(n)
 }
@@ -431,7 +431,7 @@ fun main() {
 }
 
 // Go FFI functions returning multiple values are mapped to Arca wrapper types:
-// (T, error) → Result[T, error], (T, bool) → Option[T], 3+ → tuple. These
+// (T, error) → Result[T, Error], (T, bool) → Option[T], 3+ → tuple. These
 // tests lock down the mapping via end-to-end compilation — the generated Go
 // must compile, and match statements against the wrapper types must be valid.
 func TestGoFFIMultiReturn(t *testing.T) {
@@ -440,12 +440,12 @@ func TestGoFFIMultiReturn(t *testing.T) {
 	t.Run("T_error_becomes_result", func(t *testing.T) {
 		t.Parallel()
 		// strconv.Atoi: func(s string) (int, error). The let binding's
-		// inferred type must be Result[Int, error], so Ok/Error match arms
+		// inferred type must be Result[Int, Error], so Ok/Error match arms
 		// and the ? operator work without annotations.
 		result, err := transpileSource(`
 import go "strconv"
 
-fun parse(s: String) -> Result[Int, error] {
+fun parse(s: String) -> Result[Int, Error] {
   let n = strconv.Atoi(s)?
   Ok(n + 1)
 }
@@ -494,7 +494,7 @@ fun main() {
 import go "net/url"
 import go "fmt"
 
-fun parseURL(s: String) -> Result[String, error] {
+fun parseURL(s: String) -> Result[String, Error] {
   let opt = url.Parse(s)?
   let u = opt.okOr(fmt.Errorf("nil url"))?
   Ok(u.Host)

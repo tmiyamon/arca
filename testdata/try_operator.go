@@ -20,7 +20,21 @@ func main() {
 		n := result
 		fmt.Println(n)
 	} else {
-		err := result_err
+		err := __goError{inner: result_err}
 		fmt.Println(err)
 	}
+}
+
+type __goError struct{ inner error }
+
+func (e __goError) Message() string {
+	return e.inner.Error()
+}
+
+func (e __goError) Error() string {
+	return e.inner.Error()
+}
+
+func (e __goError) Unwrap() error {
+	return e.inner
 }

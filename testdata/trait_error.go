@@ -8,10 +8,6 @@ type NotFound struct {
 	Id int
 }
 
-type ArcaError interface {
-	Message() string
-}
-
 func (n NotFound) Message() string {
 	return fmt.Sprintf("not found: %v", n.Id)
 }

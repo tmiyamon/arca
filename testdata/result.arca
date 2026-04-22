@@ -1,7 +1,7 @@
 import go "fmt"
 import go "strconv"
 
-fun parseAndDouble(s: String) -> Result[Int, error] {
+fun parseAndDouble(s: String) -> Result[Int, Error] {
   let n = strconv.Atoi(s)?
   Ok(n + n)
 }

@@ -2,7 +2,7 @@ import go "strconv"
 import go "os"
 
 fun double(x: Int) -> Int { x * 2 }
-fun isPositive(x: Int) -> Result[Int, error] {
+fun isPositive(x: Int) -> Result[Int, Error] {
   if x > 0 { Ok(x) } else { Error(strconv.ErrRange) }
 }
 

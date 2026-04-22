@@ -233,7 +233,7 @@ type User {
     User(name: String)
 }
 
-fun process(r: Result[User, error]) -> String {
+fun process(r: Result[User, Error]) -> String {
     match r {
         Ok(u) => u.name
         Error(_) => "error"
@@ -245,11 +245,11 @@ fun main() {
     fmt.Println(process(r))
 }
 `
-	// Hover on r — should be Result[User, error]
+	// Hover on r — should be Result[User, Error]
 	got := getHoverInfo(source, "/tmp/hm_flow_test.arca", 16, 9)
 	t.Logf("hover on r: %q", got)
 	if !strings.Contains(got, "User") {
-		t.Errorf("expected r to be Result[User, error], got %q", got)
+		t.Errorf("expected r to be Result[User, Error], got %q", got)
 	}
 }
 
@@ -360,7 +360,7 @@ func TestMatchBindingUsedInMapLit(t *testing.T) {
 	t.Parallel()
 	source := `import go "fmt"
 
-fun process(r: Result[Int, error]) -> Map[String, error] {
+fun process(r: Result[Int, Error]) -> Map[String, Error] {
     match r {
         Ok(_) => {"status": fmt.Errorf("ok")}
         Error(e) => {"error": e}
@@ -390,7 +390,7 @@ func TestMatchBindingInMapLiteral(t *testing.T) {
 	source := `import go "net/http"
 
 fun main() {
-    let r: Result[Int, error] = Ok(42)
+    let r: Result[Int, Error] = Ok(42)
     match r {
         Ok(v) => http.StatusOK
         Error(e) => http.StatusInternalServerError

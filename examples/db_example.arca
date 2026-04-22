@@ -14,7 +14,7 @@ type User {
 
 // --- DB Operations ---
 
-fun run() -> Result[Bool, error] {
+fun run() -> Result[Bool, Error] {
   let db = sql.Open("sqlite", ":memory:")?
   defer db.Close()
   let _ = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")?

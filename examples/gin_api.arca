@@ -15,7 +15,7 @@ type User(id: Int, name: String, email: String) {
 
 // --- DB ---
 
-fun initDb() -> Result[Ref[sqlx.DB], error] {
+fun initDb() -> Result[Ref[sqlx.DB], Error] {
   let db = sqlx.Open("sqlite", ":memory:")?
   let _ = db.Exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)")?
   let _ = db.Exec("INSERT INTO users (name, email) VALUES ('Alice', 'alice@example.com')")?

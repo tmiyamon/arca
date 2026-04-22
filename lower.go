@@ -137,16 +137,25 @@ func (s *InferScope) unify(a, b IRType) bool {
 
 	switch at := a.(type) {
 	case IRNamedType:
-		bt, ok := b.(IRNamedType)
-		if !ok || at.GoName != bt.GoName || len(at.Params) != len(bt.Params) {
-			return false
-		}
-		for i := range at.Params {
-			if !s.unify(at.Params[i], bt.Params[i]) {
+		if bt, ok := b.(IRNamedType); ok {
+			if at.GoName != bt.GoName || len(at.Params) != len(bt.Params) {
 				return false
 			}
+			for i := range at.Params {
+				if !s.unify(at.Params[i], bt.Params[i]) {
+					return false
+				}
+			}
+			return true
 		}
-		return true
+		// Go stdlib `error` unifies with Arca's Error trait: same runtime
+		// representation in Go return positions.
+		if at.GoName == "error" {
+			if bt, ok := b.(IRTraitType); ok {
+				return bt.Name == "Error"
+			}
+		}
+		return false
 	case IRResultType:
 		bt, ok := b.(IRResultType)
 		if !ok {
@@ -202,8 +211,18 @@ func (s *InferScope) unify(a, b IRType) bool {
 		}
 		return false
 	case IRTraitType:
-		bt, ok := b.(IRTraitType)
-		return ok && at.Name == bt.Name
+		if bt, ok := b.(IRTraitType); ok {
+			return at.Name == bt.Name
+		}
+		// Arca trait Error and Go stdlib error (IRNamedType{"error"}) are
+		// interchangeable in IR: both emit as `error` in return positions
+		// and interop via auto-shim + __goError wrap.
+		if at.Name == "Error" {
+			if bt, ok := b.(IRNamedType); ok {
+				return bt.GoName == "error"
+			}
+		}
+		return false
 	}
 
 	return false
@@ -247,11 +266,33 @@ func (l *Lowerer) unify(a, b IRType, pos Pos) bool {
 	if l.traitImplCompatible(a, b) {
 		return true
 	}
+	if l.errorTraitCompatible(a, b) {
+		return true
+	}
 	l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
 		Expected: irTypeDisplayStr(l.resolveDeep(b)),
 		Actual:   irTypeDisplayStr(l.resolveDeep(a)),
 	})
 	return false
+}
+
+// errorTraitCompatible bridges Arca's Error trait and Go's stdlib `error`
+// interface at unify time. Both emit as `error` in Go return positions and
+// interop via the auto-generated shim plus __goError wrap, so internal IR
+// sites that still reference IRNamedType{"error"} (e.g., try hint defaults,
+// some ad-hoc result ctor paths) flow into user-declared Result[_, Error]
+// without rewriting every site.
+func (l *Lowerer) errorTraitCompatible(a, b IRType) bool {
+	isError := func(t IRType) bool {
+		switch tt := l.resolveDeep(t).(type) {
+		case IRNamedType:
+			return tt.GoName == "error"
+		case IRTraitType:
+			return tt.Name == "Error"
+		}
+		return false
+	}
+	return isError(a) && isError(b)
 }
 
 // traitImplCompatible reports whether a concrete type and a trait type pair
@@ -770,10 +811,11 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 		}
 	}
 
-	// Prelude Error trait: emit the Go interface only when the file uses it.
-	if l.builtins["error_trait"] {
-		types = append(types, l.lowerTraitDecl(l.traits["Error"]))
-	}
+	// Error is the one trait that maps to Go's stdlib `error` interface
+	// (see irTypeStr). No ArcaError interface is emitted — user code calls
+	// trait methods via __goError wrap at match bindings / method-call sites.
+	// The prelude-registered Error trait exists at the lowerer level only,
+	// for type checking; it never surfaces as a Go type declaration.
 
 	l.checkMethodCollisions()
 
@@ -1656,7 +1698,7 @@ func (l *Lowerer) checkTypeExists(t Type) {
 // isKnownTypeName checks if a name is a known type in the lowerer context.
 func (l *Lowerer) isKnownTypeName(name string) bool {
 	switch name {
-	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "error", "Self":
+	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "Self":
 		return true
 	}
 	if strings.Contains(name, ".") {
@@ -1825,6 +1867,9 @@ func irTypeEmitStr(t IRType) string {
 		}
 		return "interface{}"
 	case IRTraitType:
+		if tt.Name == "Error" {
+			return "error"
+		}
 		return traitGoName(tt.Name)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable falls back to interface{}
@@ -2549,7 +2594,7 @@ func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRTyp
 			// error-only: single Go return value, NOT multi-return.
 			// GoMultiReturn stays false — the Go call returns one `error`.
 			return goReturnInfo{
-				Type: IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRNamedType{GoName: "error"}},
+				Type: IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRTraitType{Name: "Error"}},
 			}
 		}
 		return goReturnInfo{Type: wrapPointerInOption(toIR(info.Results[0].Type))}
@@ -2557,7 +2602,7 @@ func (l *Lowerer) goFuncReturnTypeWithVars(info *FuncInfo, vars map[string]IRTyp
 	if len(info.Results) == 2 {
 		if info.Results[1].Type == "error" {
 			return goReturnInfo{
-				Type:          IRResultType{Ok: wrapPointerInOption(toIR(info.Results[0].Type)), Err: IRNamedType{GoName: "error"}},
+				Type:          IRResultType{Ok: wrapPointerInOption(toIR(info.Results[0].Type)), Err: IRTraitType{Name: "Error"}},
 				GoMultiReturn: true,
 			}
 		}

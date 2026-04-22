@@ -26,7 +26,7 @@ func main() {
 		__monadic_v := parsed
 		mapped, mapped_err = double(__monadic_v), nil
 	} else {
-		__monadic_e := parsed_err
+		__monadic_e := __goError{inner: parsed_err}
 		mapped, mapped_err = 0, __monadic_e
 	}
 	if mapped_err == nil {
@@ -42,14 +42,14 @@ func main() {
 		__monadic_v := parsed
 		chained, chained_err = isPositive(__monadic_v)
 	} else {
-		__monadic_e := parsed_err
+		__monadic_e := __goError{inner: parsed_err}
 		chained, chained_err = 0, __monadic_e
 	}
 	if chained_err == nil {
 		n := chained
 		fmt.Println(n)
 	} else {
-		e := chained_err
+		e := __goError{inner: chained_err}
 		fmt.Println(e)
 	}
 	home := __optFrom(os.LookupEnv("HOME"))
@@ -68,6 +68,20 @@ func main() {
 		e := required_err
 		fmt.Println(e)
 	}
+}
+
+type __goError struct{ inner error }
+
+func (e __goError) Message() string {
+	return e.inner.Error()
+}
+
+func (e __goError) Error() string {
+	return e.inner.Error()
+}
+
+func (e __goError) Unwrap() error {
+	return e.inner
 }
 
 func __ptrOf[T any](v T) *T {

@@ -1,4 +1,4 @@
-fun test() -> Result[Int, error] {
+fun test() -> Result[Int, Error] {
   Ok(42)
 }
 

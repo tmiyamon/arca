@@ -11,6 +11,10 @@ import (
 type Emitter struct {
 	w          *GoWriter
 	tmpCounter int
+	// usesGoError is set by emit sites that wrap a raw Go error value into
+	// __goError (currently: match Err bindings whose Arca Err type is the
+	// Error trait). When true, emitBuiltins outputs the helper definition.
+	usesGoError bool
 }
 
 // Emit is the main entry point. It produces a complete Go source file.
@@ -1043,9 +1047,26 @@ func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
 	if okVoid && errorVoid {
 		return
 	}
+	// Wrap Err binding in __goError when subject's Err is the Arca Error
+	// trait. The raw Go variable is `error`-typed, but the Arca-side binding
+	// expects ArcaError (for `.message()` and other trait methods). __goError
+	// satisfies both interfaces, making trait methods resolvable.
+	wrapErr := false
+	if rt, ok := m.Subject.irType().(IRResultType); ok {
+		if tt, ok := rt.Err.(IRTraitType); ok && tt.Name == "Error" {
+			wrapErr = true
+			em.usesGoError = true
+		}
+	}
 	// Helper: emit binding assignment from the resolved Source.
 	emitBinding := func(p interface{ GetBinding() *IRBinding }) {
 		if b := p.GetBinding(); b != nil && b.Source != "" {
+			if wrapErr {
+				if _, isErr := p.(IRResultErrorPattern); isErr {
+					w.Assign(b.GoName, fmt.Sprintf("__goError{inner: %s}", b.Source))
+					return
+				}
+			}
 			w.Assign(b.GoName, b.Source)
 		}
 	}
@@ -1363,6 +1384,23 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		set[b] = true
 	}
 
+	if em.usesGoError {
+		w.Line("type __goError struct{ inner error }")
+		w.Line("")
+		w.Method("e __goError", "Message", "", "string", func() {
+			w.Return("e.inner.Error()")
+		})
+		w.Line("")
+		w.Method("e __goError", "Error", "", "string", func() {
+			w.Return("e.inner.Error()")
+		})
+		w.Line("")
+		w.Method("e __goError", "Unwrap", "", "error", func() {
+			w.Return("e.inner")
+		})
+		w.Line("")
+	}
+
 	// Result stays as native Go multi-return. Option is uniformly
 	// pointer-backed: `*T` where nil = None. __ptrOf is the helper that
 	// wraps a value into a heap pointer — Go doesn't allow `&10` on literals
@@ -1476,6 +1514,12 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	case IRInterfaceType:
 		return "interface{}"
 	case IRTraitType:
+		// Error maps to Go's stdlib `error` interface for interop with FFI
+		// returns. Method calls on Error-typed values are wrapped at the
+		// call site (see emitMatchResult, emitMethodCallWithErrorWrap).
+		if tt.Name == "Error" {
+			return "error"
+		}
 		return traitGoName(tt.Name)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable
