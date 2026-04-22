@@ -271,7 +271,7 @@ Combined with the closed-universe sum type pattern (`type AppError { NotFound(..
 6. **4f** Migrate `examples/todo` to use Arca-typed errors.
 7. **4g** Docs sync — SPEC.md (trait section), DESIGN.md (trait rationale), this entry's status moved from "design" to "implemented".
 
-**Status:** Design only. All 18 decisions recorded. Implementation not started — slice 4a is the next step.
+**Status:** Slices 4a–4d2 landed 2026-04-22. Parser + AST, lower (IR + method resolution + unify + collision check), emit (trait → `Arca<Name>` interface, impl → exported Go method), prelude `trait Error` + auto `Error()` shim, lowercase `error` removed from the user surface, Go FFI `(T, error)` → `Result[T, Error]` via `__goError` wrap at match `Err` bindings. One deviation from the original design: `Error` emits as Go's stdlib `error` (not a distinct `ArcaError` interface) — the distinct-interface goal is achieved via `__goError` wrapping, which avoids pervasive signature churn across every Result-returning function. Remaining: 4e (stdlib `StringError` convenience type), 4f (`examples/todo` migration), 4g docs (landed 2026-04-22).
 
 ---
 

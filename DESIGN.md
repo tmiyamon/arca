@@ -337,6 +337,33 @@ type Greeting {
 - `Self` resolves to the enclosing type name inside methods and associated functions
 - Follows Swift's `static func` pattern — explicit, one keyword, no ambiguity between method and associated function
 
+## Traits
+
+Traits are the Phase 1 answer to "how do multiple types share a method set?". Sum types already express closed-set polymorphism; traits express open-set polymorphism.
+
+```arca
+trait Display { fun show() -> String }
+impl User: Display { fun show() -> String { self.name } }
+fun render(d: Display) -> String { d.show() }
+```
+
+- **Separate `impl` blocks** (`impl Type: Trait { ... }`), Swift-style `:`. Rejected alternatives: inline `type User: Trait { ... }` (would prevent future `impl ext.Type: LocalTrait`) and Rust's `impl Trait for User` (would introduce `for` just for this).
+- **Dynamic dispatch only** in Phase 1. Trait types are trait objects — they need a vtable, so the cost is paid regardless. A separate monomorphised path would double the implementation complexity for marginal gain.
+- **Go emit:** trait → `Arca<Name>` interface; impl methods → exported Go receiver methods on the concrete type. Structural interface satisfaction means no explicit registration (`is<Trait>()` marker not needed). Impl methods are force-emitted as exported Go so the interface method set is actually satisfied.
+- **Orphan rule.** Phase 1 requires the trait and type both local. Relaxation (allow impls for external traits on local types, á la Rust) is Phase 2.
+- **Method resolution order:** inherent methods on the concrete type → trait impl methods → the static trait's declared method set. Any collision is a compile error (no disambiguation syntax in Phase 1).
+- **Coercion** at hint-driven positions only. No explicit cast syntax. Go's structural interface satisfaction makes the coercion a no-op at emit.
+- **Forbidden in Phase 1:** default methods, trait inheritance (`trait Ord: Eq`), generic bounds, `Self`, `static fun` in trait/impl, inherent `impl`. Each was evaluated individually and deferred because (a) it requires infrastructure (object-safety analysis, monomorphisation) that isn't needed yet or (b) it duplicates functionality already in `type {}`.
+
+### The `Error` trait
+
+`Error` is a prelude-built-in (same status as `Option` / `Result`). Its Go-level representation is deliberately **Go's stdlib `error`**, not a distinct `ArcaError` interface. This departs from the earlier "distinct ArcaError" design decision after the implementation revealed that maintaining two interfaces across the FFI boundary required pervasive wrap/unwrap scaffolding; mapping `Error` to Go's `error` collapses the difference and keeps FFI interop cheap.
+
+- Impls of `Error` auto-generate a `func (X) Error() string { return X.Message() }` shim. The concrete type then satisfies both the Arca trait's method set (via `Message`) and Go's stdlib `error` (via `Error`).
+- Go FFI `(T, error)` returns map to `Result[T, Error]` at the IR level; in emitted Go they remain `(T, error)` so no signature changes are forced on callers or on Arca functions that return `Result[_, Error]`.
+- Match `Err` bindings whose subject type is `IRTraitType{Error}` wrap the raw Go error in an internal `__goError` adapter (`{Message, Error, Unwrap}`) so trait methods resolve on the binding regardless of whether the value originated from an Arca impl or a Go FFI call. Double-wrap is idempotent and rare; the overhead is one allocation per err-path.
+- Lowercase `error` is removed from the user-writable type surface. `Result[T, error]` is a compile error; users write `Result[T, Error]`.
+
 ## Go Runtime Primitives
 
 - `defer`, `context`, `goroutine`, `channel` — use Go transparently, don't abstract

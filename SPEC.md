@@ -200,10 +200,10 @@ for i in 0..10 {
 
 ### main() -> Result
 
-Arca allows `fun main() -> Result[Unit, error]` so `?` works at the top level without a wrapping `try {}`. On `Err`, the error is printed to stderr and the process exits with status 1. On `Ok`, the process exits normally.
+Arca allows `fun main() -> Result[Unit, Error]` so `?` works at the top level without a wrapping `try {}`. On `Err`, the error is printed to stderr and the process exits with status 1. On `Ok`, the process exits normally.
 
 ```
-fun main() -> Result[Unit, error] {
+fun main() -> Result[Unit, Error] {
   let n = strconv.Atoi("42")?
   println(n)
   Ok(())
@@ -250,7 +250,7 @@ fun main() {
 Example, converting a Go FFI pointer return into a `Result[T, E]` without the `?`-zigzag:
 
 ```
-fun parseHost(s: String) -> Result[String, error] {
+fun parseHost(s: String) -> Result[String, Error] {
   url.Parse(s)
     .flatMap(opt => opt.okOr(NotFound))
     .map(u => u.Host)
@@ -322,12 +322,12 @@ import go _ "modernc.org/sqlite"
 Arca uses HM-style type inference with type variables and unification. Types flow bottom-up (from values), top-down (from context), and forward (from usage).
 
 ```
-let r = Ok(42)                     // Result[Int, error] — error type defaults
+let r = Ok(42)                     // Result[Int, Error] — error type defaults
 let x = None                       // Option[T] — T resolved from later usage
 let items = []                     // []T — T resolved from later usage
 
-fun process(r: Result[Int, error]) { ... }
-process(r)                          // r's type variable resolved to Result[Int, error]
+fun process(r: Result[Int, Error]) { ... }
+process(r)                          // r's type variable resolved to Result[Int, Error]
 
 map(nums, x => x * 2)              // x type inferred from list element type
 sort.Slice(s, (i, j) => s[i] < s[j])  // i, j inferred from Go FFI signature
@@ -542,6 +542,48 @@ let user = User(name: "Alice", age: 30)
 user.greet("Hello")  // "Hello, Alice!"
 ```
 
+### Traits
+
+Traits declare a named method set; `impl` attaches that method set to a concrete type. Dispatch is dynamic — any value of the concrete type can be passed wherever the trait type is expected.
+
+```
+trait Display {
+  fun show() -> String
+}
+
+type User {
+  User(name: String)
+}
+
+impl User: Display {
+  fun show() -> String { self.name }
+}
+
+fun render(d: Display) -> String { d.show() }
+```
+
+- `trait Name { fun sig() -> T ... }` — method signatures, no body. `self` is implicit.
+- `impl Type: Trait { fun sig() -> T { body } ... }` — method implementations, `self` is implicit, signatures must match. Multiple trait impls per type allowed; inherent methods belong in `type { ... }` (no inherent `impl` form).
+- **Orphan rule:** Phase 1 requires both the type and the trait to be declared in the current module.
+- **Trait as type:** trait names are valid type expressions (`Result[T, Error]`, `fun f(e: Display)`, `List[Display]`).
+- **Coercion:** concrete values implicitly coerce to a trait type at hint-driven positions (function args, let annotations, return types, constructor fields).
+- **Match type pattern** narrows a trait object to a concrete type: `match e { id: NotFound => ..., _ => e.message() }`. No exhaustiveness — trait types are an open universe.
+- **Forbidden in Phase 1:** default methods, trait inheritance (`trait Ord: Eq`), generic bounds (`[T: Display]`), `Self` and `static fun` inside trait/impl, inherent `impl` blocks, disambiguation syntax for method collisions (any ambiguity is a compile error).
+
+#### The `Error` trait
+
+`Error` is a prelude-built-in trait available without import:
+
+```
+trait Error {
+  fun message() -> String
+}
+```
+
+- Impls get an auto-generated `Error() string` shim so they also satisfy Go's stdlib `error` interface: `NotFound{id: 1}` flows into both `Result[_, Error]` and Go APIs expecting `error`.
+- Go FFI `(T, error)` returns surface as `Result[T, Error]` on the Arca side. Match `Err` bindings are wrapped via an internal `__goError` adapter so trait methods (`.message()`) resolve on the bound value regardless of source.
+- Lowercase `error` is **not** a user-writable type name; always write `Error`.
+
 ### Associated Functions (static fun)
 
 ```
@@ -592,7 +634,7 @@ type User(id: Int, userName: String) {
 ### Defer
 
 ```
-fun run() -> Result[Unit, error] {
+fun run() -> Result[Unit, Error] {
   let db = sql.Open("sqlite", ":memory:")?
   defer db.Close()
   // db is automatically closed when function returns
