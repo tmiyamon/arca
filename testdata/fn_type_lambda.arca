@@ -1,0 +1,10 @@
+fun apply(f: Int -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fun main() {
+  let r1 = apply(n => n + 1, 41)
+  let double: Int -> Int = n => n * 2
+  println(r1)
+  println(double(21))
+}

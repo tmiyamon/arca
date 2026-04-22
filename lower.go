@@ -3215,12 +3215,14 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		}
 	}
 
-	// Lambda with missing parameter types: infer from call context
+	// Lambda with missing parameter types, Go FFI side: use the FuncInfo
+	// string path that predates IRFnType. Arca-side calls fall through to
+	// the hint-based path below, where lowerLambdaHint consumes IRFnType.
 	if lam, ok := expr.(Lambda); ok {
 		if paramTypes := l.resolveCallParamFuncType(call, argIndex); paramTypes != nil {
 			lam = l.inferLambdaParamTypes(lam, paramTypes)
+			return l.lowerLambda(lam)
 		}
-		return l.lowerLambda(lam)
 	}
 
 	// Resolve expected type for hint-based type checking and constructor type inference.
@@ -3774,7 +3776,27 @@ func (l *Lowerer) lowerTryBlock(tb TryBlockExpr) IRExpr {
 	}
 }
 
+// lowerLambdaHint propagates an IRFnType hint into an untyped lambda so its
+// body lowers against concrete param types (enabling type-dependent
+// resolution — method / field lookup, hover, completion). Typed params on
+// the AST lambda are respected; only nil slots are filled from the hint.
+// Non-fn-type hints fall through to plain lowerLambda.
 func (l *Lowerer) lowerLambdaHint(lam Lambda, hint IRType) IRExpr {
+	fnType, ok := l.resolveDeep(hint).(IRFnType)
+	if !ok {
+		return l.lowerLambda(lam)
+	}
+	updated := make([]LambdaParam, len(lam.Params))
+	copy(updated, lam.Params)
+	for i := range updated {
+		if updated[i].Type != nil || i >= len(fnType.Params) {
+			continue
+		}
+		if astType := l.irTypeToASTType(fnType.Params[i]); astType != nil {
+			updated[i].Type = astType
+		}
+	}
+	lam.Params = updated
 	return l.lowerLambda(lam)
 }
 
@@ -4851,15 +4873,75 @@ func (l *Lowerer) inferPreludeReturnType(name string, args []IRExpr) IRType {
 	return IRInterfaceType{}
 }
 
+// irTypeToASTType is a best-effort IR → AST projection used when a resolved
+// IR type needs to flow back into a site that later re-lowers from AST (e.g.
+// hint-driven lambda param typing). Returns nil when any leaf cannot be
+// projected so the caller skips that slot rather than producing an invalid
+// AST. Round-trips through lowerType are intentionally idempotent for the
+// shapes handled here.
 func (l *Lowerer) irTypeToASTType(t IRType) Type {
 	switch tt := t.(type) {
 	case IRNamedType:
-		return NamedType{Name: tt.GoName}
+		var params []Type
+		if len(tt.Params) > 0 {
+			params = make([]Type, 0, len(tt.Params))
+			for _, p := range tt.Params {
+				pa := l.irTypeToASTType(p)
+				if pa == nil {
+					return nil
+				}
+				params = append(params, pa)
+			}
+		}
+		return NamedType{Name: tt.GoName, Params: params}
 	case IRListType:
 		inner := l.irTypeToASTType(tt.Elem)
 		if inner != nil {
 			return NamedType{Name: "List", Params: []Type{inner}}
 		}
+	case IRMapType:
+		k := l.irTypeToASTType(tt.Key)
+		v := l.irTypeToASTType(tt.Value)
+		if k != nil && v != nil {
+			return NamedType{Name: "Map", Params: []Type{k, v}}
+		}
+	case IRRefType:
+		inner := l.irTypeToASTType(tt.Inner)
+		if inner != nil {
+			return NamedType{Name: "Ref", Params: []Type{inner}}
+		}
+	case IROptionType:
+		inner := l.irTypeToASTType(tt.Inner)
+		if inner != nil {
+			return NamedType{Name: "Option", Params: []Type{inner}}
+		}
+	case IRResultType:
+		ok := l.irTypeToASTType(tt.Ok)
+		er := l.irTypeToASTType(tt.Err)
+		if ok != nil && er != nil {
+			return NamedType{Name: "Result", Params: []Type{ok, er}}
+		}
+	case IRTraitType:
+		return NamedType{Name: tt.Name}
+	case IRInterfaceType:
+		return NamedType{Name: "Any"}
+	case IRFnType:
+		params := make([]Type, len(tt.Params))
+		for i, p := range tt.Params {
+			ap := l.irTypeToASTType(p)
+			if ap == nil {
+				return nil
+			}
+			params[i] = ap
+		}
+		var ret Type
+		if tt.Ret != nil {
+			ret = l.irTypeToASTType(tt.Ret)
+			if ret == nil {
+				return nil
+			}
+		}
+		return FunctionType{Params: params, Ret: ret}
 	}
 	return nil
 }

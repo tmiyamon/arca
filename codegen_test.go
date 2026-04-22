@@ -252,6 +252,10 @@ func TestE2EFnTypeBasic(t *testing.T) {
 	runE2E(t, "testdata/fn_type_basic.arca", "42\n")
 }
 
+func TestE2EFnTypeLambda(t *testing.T) {
+	runE2E(t, "testdata/fn_type_lambda.arca", "42\n42\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 
