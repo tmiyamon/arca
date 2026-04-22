@@ -112,7 +112,55 @@ Removes three parallel paths:
 7. **F7** LSP: hover and completion display IRFnType as `A -> B` (Arca surface syntax). Completion on a lambda-typed value surfaces the callable shape in Detail; go-to-definition on the fn-typed binding jumps to its declaration as usual.
 8. **F8** Docs: SPEC.md (Types section gets a Function Types subsection), DESIGN.md (rationale for n-ary over curried, for no function equality), `CLAUDE.md` Key Design Decisions bullet.
 
-**Status:** Design only. No parser / IR / lower / emit changes yet. Unlocks `examples/todo` migration without ad-hoc registries, and surfaces higher-order functions as a genuine language feature rather than an FFI-only artifact.
+**Status:** F1–F3 landed 2026-04-22. F1 (AST/parser), F2 (IRFnType + lower/unify/emit), F3 (hint-driven `lowerLambdaHint`). F4 attempted and reverted: adding `LamArgType` to the monadic table and hint-typing the lambda arg got the AST-level typing working, but surfaced a structural gap that blocks completion and emit for inline-lambda monadic calls. See the 2026-04-22 "Callable IR unification" entry — unification is a prerequisite for F4–F8.
+
+---
+
+## 2026-04-22: Callable IR unification — one IR for method / lambda / function (design)
+
+**Context:** F4 work (routing monadic method desugar through the hint channel) surfaced three entangled bugs that all trace back to the same root: Arca's IR has three separate representations for semantically identical things (named function, method, lambda) and a string `IRFnCall.Func` that cannot carry a function-valued expression. Specifically: `IRFnCall{Fn: Lambda, Args: ...}` falls through `lowerFnCall`'s "complex call" branch which never lowers Fn (so the lambda's param scope is never registered), and emits `/* complex call */` (so the generated Go is broken). The monadic `.map(lambda)` pattern has therefore never worked end-to-end; existing tests exercised only `.map(namedFn)` which stays in the Ident path. `lambdaBody`'s non-Block case returns `Pos{}` from `bodyPos`, so the scope's range can't contain any cursor and LSP lookups miss. All three are symptoms of the split, not independent bugs.
+
+**Decision:** Unify named functions, methods, and lambdas into one IR structure before continuing the function-types migration. F4–F8 re-order: unification becomes F4, the former F4 (monadic hint) becomes trivial on top.
+
+```go
+type IRFn struct {
+    GoName   string       // "" for anonymous (lambda literal)
+    Receiver *IRReceiver  // nil for free functions / lambdas
+    Params   []IRParamDecl
+    Ret      IRType
+    Body     IRExpr
+}
+```
+
+- Declaration position: `GoName` set, emitted as `func Name(...) ret { body }`.
+- Expression position: `GoName` empty, emitted as `func(...) ret { body }` (Go function literal).
+- `IRFnCall.Fn IRExpr` replaces / supplements `Func string`. lowerExpr walks Fn uniformly: Ident lookup for named refs, IRFn for inline lambdas, FieldAccess for methods. Emit renders as `<fn>(args)`; when `<fn>` is an IRFn expression, it comes out as `(func(...) ret { body })(args)` naturally.
+- Scope registration happens once, inside a single `lowerFn` entry point, regardless of decl vs expr. `bodyPos` no longer needs special Block casing — the lambda's body position is taken from the AST's `exprPos` fallback.
+
+### What it fixes
+
+- **Bug 1 (scope):** lowerFnCall always lowers Fn → lambda params always register in the scope tree → LSP completion inside `.map(u => u.)` resolves `u` to its hinted type.
+- **Bug 2 (body position):** `lowerFn` uses the body expr's `exprPos` whenever the body isn't a Block; the lambda's scope range covers the body instead of collapsing to `Pos{}`.
+- **Bug 3 (emit):** `(lambda)(args)` is valid Go and is what the unified emit produces. The `/* complex call */` placeholder retires.
+
+F5 (prelude) and F6 (Go FFI) become much cleaner — both migrate to IRFnType signatures on top of the unified IRFnCall path. No separate "named vs inline" dispatch on either side.
+
+### Out of scope for this slice
+
+- Closure semantics beyond what lambdas already do (no change to capture rules).
+- First-class equality or serialization of function values.
+- Method / trait-method dispatch changes (they keep their existing resolution path; only the call-site representation unifies).
+
+### Implementation sub-slices
+
+- **U1** Introduce `IRFn` struct, keep IRFuncDecl / IRLambda as aliases pointing to it so the diff is non-breaking at type check. `IRFnCall` gains `Fn IRExpr` alongside `Func string` (populated at new creation sites; old sites keep Func).
+- **U2** Migrate lambda creation to produce `IRFn` (anonymous). `lowerFnCall` consumes Fn when present, falls back to Func when not.
+- **U3** Migrate named-call creation sites to populate `Fn = IRIdent{...}` and drop `Func string`. Deletes the "complex call" fallthrough.
+- **U4** Unify emit: one `emitFn(IRFn)` renders decls and literals; `emitFnCall` always renders `<emitExpr(Fn)>(args)`.
+- **U5** Retire `IRLambda` alias entirely (all uses now go through `IRFn`).
+- **U6** Redo F4 on the unified base: monadic method table's `LamArgType` feeds into the hint channel, IRFnCall.Fn is the lambda IRFn, emit renders `(lambda)(args)` inline. `.map(u => u.)` completion test passes.
+
+**Status:** Design only, drafted 2026-04-22 after reverting the partial F4. F4 work is fully reverted on disk; F1–F3 commits stand.
 
 ---
 
