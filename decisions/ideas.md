@@ -4,6 +4,118 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-22: Function types as first-class — higher-order functions across the language (design)
+
+**Context:** `examples/todo/main.arca` migration (Phase 1 slice 4f) surfaced that `.map(db => db.Exec(...))`-style lambdas do not complete through LSP. Investigation exposed a structural gap: Arca has lambda *values* (`x => ...`) but no lambda *type* — the language has no `A -> B` syntax, no `IRFnType` IR node, and no AST `FunctionType`. Function types exist only implicitly, and only in narrow FFI-adjacent contexts:
+
+- Go FFI methods get lambda-param inference via `resolveCallParamFuncType` (parses Go's `func(T) U` string into `FuncInfo`) and `inferLambdaParamTypes`.
+- Prelude `map` / `filter` / `fold` get lambda-param inference via a hand-rolled switch in `lowerPreludeArgs`.
+- Monadic methods (`.map` / `.flatMap` on Result/Option) get nothing — the AST desugar to `match` produces a FnCall with an untyped lambda, and the lambda body is lowered without any param type.
+- User-declared Arca functions / methods cannot declare function-typed parameters at all. `fun apply(f: Int -> Int) -> Int { f(1) }` does not parse.
+- `lowerLambdaHint(lam, hint) = lowerLambda(lam)` — the bidirectional hint pipeline is wired through, but the terminal handler ignores the hint. This is a structural stub, not a bug in any one call site.
+
+The immediate symptom (monadic lambda completion) could be patched with another per-case registry (an enum field on `monadicMethodInfo` that says "lambda param comes from Ok side / Err side / nowhere"), but that adds a fourth ad-hoc path alongside Go FFI + prelude + monadic. Each future method shape (trait default methods with fn params, user-defined `fun apply(f: A -> B)`, callbacks passed to stdlib handlers) would add another. The real abstraction that already exists conceptually — "function with signature, lambda arg's param types come from the signature" — is just not reified in the type system.
+
+**Decision:** Add function types as a first-class part of Arca's type system. Concretely: AST `FunctionType`, IR `IRFnType`, and enough surrounding infrastructure for every currently-ad-hoc lambda-typing path to flow through a single mechanism (hint-driven `lowerLambdaHint`). Higher-order functions become a usable language feature — `fun apply(f: Int -> Int) -> Int`, `let h: (A, B) -> C = ...`, `type Handler { Handler(fn: Ctx -> Result[Unit, Error]) }` all work.
+
+### Syntax
+
+**Decision:** `A -> B` in type position is a function type. Multi-arg uses parenthesised tuple-shaped form `(A, B) -> C`. Zero-arg is `() -> C`. Right-associative so `A -> B -> C` parses as `A -> (B -> C)`.
+
+```arca
+let f: Int -> Int = x => x + 1
+fun apply(g: Int -> Int, x: Int) -> Int { g(x) }
+fun compose(f: Int -> Int, g: Int -> Int) -> (Int -> Int) { x => g(f(x)) }
+fun handler(h: (Request, Response) -> Unit) { ... }
+```
+
+- `->` is already used as the return-type separator (`fun f(x: A) -> B`). Type position `->` is strictly inside a `Type` production, disambiguated by context. The parser is already in type-parsing mode when it encounters it.
+- `fun f() -> A -> B { ... }` resolves to `fun f() -> (A -> B)` via right-associative greedy parse. Explicit paren `fun f() -> (A -> B)` is accepted and considered the clearer form; the formatter may rewrite to the parens form.
+- Curried alternative (`A -> B -> C` as single-arg returning single-arg) rejected: Arca's existing multi-arg functions are not curried, and forcing `(A, B) -> C` to round-trip through a curried representation would create a gap between how functions are called and how their types are written.
+
+### First-class scope
+
+**Decision:** Function types are usable in every type position, without restrictions.
+
+- `let` bindings: `let f: Int -> Int = x => x + 1`
+- Function params: `fun apply(f: Int -> Int, x: Int) -> Int`
+- Function returns: `fun make() -> (Int -> Int) { x => x + 1 }`
+- Struct / sum fields: `type Handler { Handler(fn: Request -> Response) }`
+- Generic params: `List[Int -> Int]`, `Option[Ctx -> Bool]`
+- Nested: `(A -> B) -> (C -> D)`
+
+No partial restrictions — once the type exists, consumption sites are uniform.
+
+### Arity model
+
+**Decision:** n-ary, not curried. `(A, B) -> C` has two parameters. Emits as Go `func(A, B) C`.
+
+- Matches Go's function shape for cheap FFI interop — no need to introduce curry wrappers at the boundary.
+- Matches the way Arca already declares multi-arg functions.
+- Curried form can be expressed explicitly as `A -> (B -> C)` if someone wants it, but `(A, B) -> C` is the idiomatic form.
+
+### Type inference
+
+**Decision:** HM infers function types like any other type. Lambdas without annotation get fresh type vars per param and a fresh return var; these unify against the surrounding context.
+
+- `let f = x => x + 1` resolves to `f: Int -> Int` when the body constrains `x` to `Int` via the `+` operator.
+- `let f = x => x` is ambiguous (`$T -> $T` for any `$T`); treated the same way any HM-ambiguous let is handled today (accept but unresolved until a use site, or report based on existing ambiguity rules). Exact behaviour inherits from `InferScope`; no new rule needed.
+- Lambda inside a call arg with a known signature — the hint-driven path handles it.
+
+### Unification rules
+
+**Decision:** Structural, invariant. `IRFnType{Params: P1, Ret: R1}` unifies with `IRFnType{Params: P2, Ret: R2}` iff `len(P1) == len(P2)` and each `P1[i] ~ P2[i]` and `R1 ~ R2`.
+
+- No variance — Arca has no subtyping today, and function-type subtyping (contravariant params + covariant return) is a separate decision that can be added later without breaking existing code.
+- Trait-impl compatibility (`traitImplCompatible`) already runs as a fallback in `Lowerer.unify`; it remains a fallback, not something that applies across function type boundaries in Phase 1.
+
+### Go FFI interop
+
+**Decision:** Go `func(A) B` ↔ IRFnType directly, no intermediate `FuncInfo`. Named Go function types (e.g. `echo.HandlerFunc`) surface as `IRFnType` after `ResolveUnderlying` expansion; the source-level alias is preserved for hover / emit only when it matches the user's declaration.
+
+- Current path: `parseFuncType(goType) *FuncInfo` → `inferLambdaParamTypes(lam, funcType)` → AST-level mutation. Moves to: `goTypeToIR(goType) IRType` returns `IRFnType` directly; `resolveCallParamFuncType` returns an `IRType` (or is retired in favour of generic hint propagation).
+- `FuncInfo` stays as a Go-type-system descriptor in the `TypeResolver` layer (Go signatures carry variadic, generics, etc. that aren't worth reifying in IR), but callers convert to IRFnType at the boundary.
+
+### `lowerLambdaHint` upgrade
+
+**Decision:** `lowerLambdaHint(lam, hint IRType)` uses the hint when it is an `IRFnType` to fill in missing `lam.Params[i].Type` via `irTypeToASTType` (or a direct IR-typed equivalent), then falls through to `lowerLambda`. No new entry point — this is where every lambda-as-expression already lands.
+
+Removes three parallel paths:
+- `lowerPreludeArgs` special-case for `map` / `filter` / `fold` (once these prelude fns have IRFnType signatures).
+- `inferLambdaParamTypes` (subsumed by hint-driven lowering).
+- Manual lambda-param AST mutation in `tryDesugarMonadicMethod` and any future monadic / desugar-driven site.
+
+### Equality and nil
+
+**Decision:** Function values cannot be compared with `==`. `nil` is not a valid value of a function type (use `Option[A -> B]` to express "no function"). Go's behaviour for function values (`==` is a compile error except against `nil`) is inherited only implicitly via the emit — Arca simply does not expose `==` on function-typed operands in the first place.
+
+### Deferred
+
+- Variadic function types (`(A, ...B) -> C`). Arca has no user-facing varargs today; when it arrives, function types extend at the same time.
+- Default parameter values in function types. Same reasoning.
+- Function-type subtyping (variance). Needs a coherent story about where subtyping applies across the language; not a local function-type question.
+- Named parameters in function types (`(from: Int, to: Int) -> Int` as a declared signature). Arca functions support named call-sites already, but reifying names into the type is a separate decision.
+- Row-polymorphic / effect-polymorphic function types. Out of scope entirely.
+
+### Error positions
+
+**Decision:** `FunctionType` AST node carries `NodePos` pointing at the `->` token. Mismatches on param count / return unify failures use this position. Unification errors *between* two function types report at the call site (the position where the incompatible value was supplied), matching the existing unify error convention.
+
+### Implementation slices
+
+1. **F1** AST `FunctionType{Pos, Params []Type, Ret Type}`. Parser extends `parseType` to recognise arrow in type position (right-associative). Emit-layer and lower-layer untouched — just a parseable-but-unused AST node. Tests: parser accepts all forms in the "Syntax" section; formatter round-trips them.
+2. **F2** IR `IRFnType{Params []IRType, Ret IRType}`. `lowerType(FunctionType)` → `IRFnType`. `InferScope.unify` / `Lowerer.unify` gain structural IRFnType case. `resolveDeep` recurses. `irTypeStr` / `irTypeEmitStr` render as `func(A, B) C`. Tests: a user function with `fun apply(f: Int -> Int, x: Int) -> Int { f(x) }` lowers, emits, and passes `go vet`.
+3. **F3** `lowerLambdaHint` consumes `IRFnType` hint. No other caller changes; lambdas used in let-annotation or function-return position now get param types from the annotation without any per-site code.
+4. **F4** Migrate `tryDesugarMonadicMethod`: the monadic method table holds an IRFnType-producing `Signature(recv IRType) IRFnType`. Dispatch unchanged; lambda typing now flows via `lowerExprHint(lam, sig.Params[0])` before the desugar AST is built. The `LamParam` enum never lands.
+5. **F5** Migrate `lowerPreludeArgs`: prelude fns (`map`, `filter`, `fold`, `take`, `takeWhile`) gain IRFnType signatures in the prelude registry. `lowerPreludeArgs` retires; arg lowering goes through the same hint path as any other call.
+6. **F6** Migrate Go FFI path: `goTypeToIR` for `func(…)` returns `IRFnType` directly. `parseFuncType` + `inferLambdaParamTypes` retire (or shrink to an `IRFnType`-returning shape). `resolveCallParamFuncType` becomes `resolveCallParamIRType` returning `IRType`, callable uniformly.
+7. **F7** LSP: hover and completion display IRFnType as `A -> B` (Arca surface syntax). Completion on a lambda-typed value surfaces the callable shape in Detail; go-to-definition on the fn-typed binding jumps to its declaration as usual.
+8. **F8** Docs: SPEC.md (Types section gets a Function Types subsection), DESIGN.md (rationale for n-ary over curried, for no function equality), `CLAUDE.md` Key Design Decisions bullet.
+
+**Status:** Design only. No parser / IR / lower / emit changes yet. Unlocks `examples/todo` migration without ad-hoc registries, and surfaces higher-order functions as a genuine language feature rather than an FFI-only artifact.
+
+---
+
 ## 2026-04-21: Trait system Phase 1 — minimum viable traits for Error (design)
 
 **Context:** 2026-04-19 "Error trait interface shape" fixed the Error trait's method surface (`fun message() -> String`), but left the underlying trait system unbuilt. `examples/todo` cannot construct Arca-side errors because there is no way to declare a type satisfies `Error`. 2026-04-11 "Trait system design" laid out the shape but explicitly deferred implementation until needed. That time has arrived — Phase 1 Layer 1 item 4 (todo demo) is blocked on having a real `Error` trait. This entry defines the minimum viable trait system that unblocks Error; richer features (default methods, trait inheritance, generic bounds) remain future work.
