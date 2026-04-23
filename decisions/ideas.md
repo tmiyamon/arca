@@ -4,6 +4,16 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-23: Parser error recovery for LSP (idea)
+
+**Context:** `insertCompletionPlaceholder` patches one partial-input case (dangling dots) so the LSP can parse mid-keystroke. Each new partial-input shape — unclosed `(` during lambda typing, half-typed match arm, incomplete type annotation, dangling `fun` decl — would need another source-patch heuristic, and the patches compound in ways that are hard to audit as the grammar grows. Production tooling (TypeScript, rust-analyzer) solves this in the parser itself: a tolerant parser produces a partial AST with error nodes for any input, and every downstream consumer (LSP, build, tests) benefits uniformly. The `.map(db => db.` case (`)` not yet typed) is the first time the LSP-patch approach noticeably stretches — too-local a fix for a pattern that will keep recurring.
+
+**Decision:** Move error recovery into `parser.go`. Every `parseX` gains a synchronisation point (skip until a known delimiter); unmatched bracket groups close at the next outer sync token and produce an error node in place of the missing expression / statement. Position data is preserved on the surrounding AST so LSP scope lookups still hit the right ranges. `insertCompletionPlaceholder` shrinks to the trailing-dot case — where placeholder insertion changes *semantics* (what is being accessed), not just recovery. Larger than a single slice; decomposes into a parser restructuring slice plus per-construct recovery slices.
+
+**Status:** Idea only. No owner, no scheduled slice. Trigger to start: the next LSP partial-input pain point that worsens the ad-hoc patch approach.
+
+---
+
 ## 2026-04-22: Formal EBNF grammar in SPEC.md (idea)
 
 **Context:** Arca's grammar lives only in `parser.go`'s hand-written recursive descent. SPEC.md documents syntax through examples and prose; precedence / associativity decisions (today's `*` binds tighter than `->`, arrow right-associative, trailing-comma rejected in fn type param lists) land in commit messages and decision logs rather than one cross-checkable place. Fine for a prototype — the parser is the only consumer. It becomes friction once third-party tools (syntax highlighters, alternate parsers, grammar-driven tests, formatters written against a spec) enter the picture.
