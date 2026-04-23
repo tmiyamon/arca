@@ -143,6 +143,33 @@ x => x + 1
 (x, y) => x + y
 ```
 
+### Function Types
+
+```
+// Single parameter (bare form)
+Int -> Int
+
+// Multiple parameters (parenthesised)
+(Int, String) -> Bool
+
+// Zero parameters
+() -> Unit
+
+// Higher order (right-associative: A -> B -> C = A -> (B -> C))
+(Int -> Int) -> Int
+```
+
+Function types are first-class and usable in any type position:
+
+```
+fun apply(f: Int -> Int, x: Int) -> Int { f(x) }
+let h: (Int, Int) -> Int = (a, b) => a + b
+type Handler { Handler(fn: Ctx -> Result[Unit, Error]) }
+```
+
+Param type inference flows through the type annotation: `apply(n => n + 1, 42)`
+gets `n: Int` from `f: Int -> Int` — no explicit annotation needed at the lambda.
+
 ### If Expression
 
 ```
@@ -368,6 +395,7 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | Result[T, E] | Ok(T) / Error(E) |
 | Any | unknown-typed (maps to Go `interface{}`) |
 | (A, B, ...) | Tuple |
+| A -> B, (A, B) -> C | Function types |
 
 ### Map
 

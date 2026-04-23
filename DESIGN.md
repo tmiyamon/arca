@@ -157,6 +157,29 @@ Design rationale: Two types with `Error(message: String)` would collide without 
 - Sum types (interface-based): **not yet supported** with generics due to Go's interface + generics limitations
 - Type parameters are checked by name against TypeDecl.Params, not by single-letter convention
 
+## Function Types
+
+Function types (`A -> B`, `(A, B) -> C`) are first-class and structurally typed: `IRFnType{Params, Ret}` unifies by pointwise unify of params + ret, not by name. Usable anywhere a type is expected — param declarations, let annotations, generic args, constructor fields, return types.
+
+### n-ary over curried
+
+`(A, B) -> C` is its own shape, not sugar for `A -> (B -> C)`. Arca emits to Go's `func(A, B) C` which is n-ary, and most FFI callback shapes (`http.HandlerFunc`, echo handlers, goroutines) are n-ary. Currying would force a wrapper closure at every FFI boundary with no payoff.
+
+### No function equality
+
+Function values cannot be compared with `==` or matched against a fixed value. Arca mirrors Go here — structural function equality is undecidable and reference equality across lambda allocations is footgun-prone. Pattern matching on fn-typed subjects is therefore restricted to bindings.
+
+### Single hint channel
+
+Lambda param type inference flows through one mechanism: `lowerLambdaHint` consumes an `IRFnType` hint and fills untyped `lam.Params[i].Type`. Every lambda-accepting call shape produces that hint:
+
+- Arca user fn params (`fun apply(f: Int -> Int, ...)`) — `l.functions` lookup.
+- Go FFI (`http.HandleFunc`, `e.GET(...)`) — `goTypeToIR` parses Go `func(...)` and `ResolveUnderlying` peels aliases like `echo.HandlerFunc`.
+- Prelude (`map` / `filter` / `fold`) — `BuiltinDef.Signature` produces a fresh-typevar `IRFnType` per call.
+- Monadic methods (`.map(u => u.x)`) — `monadicMethodInfo.LamArg` returns the param type from the receiver's Ok / Inner.
+
+Adding a new lambda-accepting surface is a signature, not a parser or lowerer branch.
+
 ## Module System
 
 - 1 file = 1 module
