@@ -16,7 +16,11 @@ const lspName = "arca-lsp"
 
 var (
 	lspHandler protocol.Handler
-	lspVersion = version
+	// lspVersion is what the LSP reports in ServerInfo. buildVersion()
+	// augments the static string with the commit hash + dirty flag when
+	// the binary was built with VCS info embedded, so an editor popup can
+	// show which build of arca is running.
+	lspVersion = buildVersion()
 )
 
 // fileStore keeps in-memory file contents for open documents.
