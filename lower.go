@@ -2441,20 +2441,43 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		default:
 			// Check prelude builtins
 			if def, ok := prelude[ident.Name]; ok {
-				args := l.lowerPreludeArgs(ident.Name, e.Args)
 				if def.Import != "" {
 					l.builtins[def.Import] = true
 				}
 				if def.Builtin != "" {
 					l.builtins[def.Builtin] = true
 				}
+				if def.Signature != nil {
+					sig := def.Signature(l)
+					args := make([]IRExpr, len(e.Args))
+					for i, a := range e.Args {
+						var hint IRType
+						if i < len(sig.Params) {
+							hint = sig.Params[i]
+						}
+						args[i] = l.lowerExprHint(a, hint)
+					}
+					return IRFnCall{
+						Fn:     IRIdent{GoName: def.GoFunc},
+						Args:   args,
+						Type:   l.resolveDeep(sig.Ret),
+						Source: SourceInfo{Pos: e.Pos},
+					}
+				}
+				args := l.lowerExprs(e.Args)
 				if def.Lower != nil {
 					if result := def.Lower(args); result != nil {
 						return result
 					}
-				} else {
-					retType := l.inferPreludeReturnType(ident.Name, args)
-					return IRFnCall{Fn: IRIdent{GoName: def.GoFunc}, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
+				}
+				// Plain GoFunc builtins (println, print): emit a direct
+				// untyped call — variadic `fmt.Println` etc. have no
+				// useful return type to check.
+				return IRFnCall{
+					Fn:     IRIdent{GoName: def.GoFunc},
+					Args:   args,
+					Type:   IRInterfaceType{},
+					Source: SourceInfo{Pos: e.Pos},
 				}
 			}
 		}
@@ -4920,75 +4943,6 @@ func (l *Lowerer) lowerExprs(exprs []Expr) []IRExpr {
 		result[i] = l.lowerExpr(e)
 	}
 	return result
-}
-
-// lowerPreludeArgs lowers arguments for prelude functions (map, filter, fold),
-// inferring lambda parameter types from the list element type.
-func (l *Lowerer) lowerPreludeArgs(fnName string, args []Expr) []IRExpr {
-	// For map/filter/takeWhile: first arg is list, second is lambda
-	if (fnName == "map" || fnName == "filter" || fnName == "takeWhile") && len(args) == 2 {
-		listArg := l.lowerExpr(args[0])
-		if lam, ok := args[1].(Lambda); ok {
-			if lt, ok := listArg.irType().(IRListType); ok {
-				// Set lambda param type from list element type
-				for i := range lam.Params {
-					if lam.Params[i].Type == nil {
-						lam.Params[i].Type = l.irTypeToASTType(lt.Elem)
-					}
-				}
-			}
-			return []IRExpr{listArg, l.lowerLambda(lam)}
-		}
-		return []IRExpr{listArg, l.lowerExpr(args[1])}
-	}
-	// For fold: first arg is list, second is init, third is lambda
-	if fnName == "fold" && len(args) == 3 {
-		listArg := l.lowerExpr(args[0])
-		initArg := l.lowerExpr(args[1])
-		if lam, ok := args[2].(Lambda); ok {
-			if lt, ok := listArg.irType().(IRListType); ok {
-				// fold lambda: (acc, elem) -> acc
-				if len(lam.Params) >= 1 && lam.Params[0].Type == nil {
-					lam.Params[0].Type = l.irTypeToASTType(initArg.irType())
-				}
-				if len(lam.Params) >= 2 && lam.Params[1].Type == nil {
-					lam.Params[1].Type = l.irTypeToASTType(lt.Elem)
-				}
-			}
-			return []IRExpr{listArg, initArg, l.lowerLambda(lam)}
-		}
-		return []IRExpr{listArg, initArg, l.lowerExpr(args[2])}
-	}
-	return l.lowerExprs(args)
-}
-
-// irTypeToASTType converts an IRType back to an AST Type for lambda param inference.
-// inferPreludeReturnType infers the return type of prelude functions from their arguments.
-func (l *Lowerer) inferPreludeReturnType(name string, args []IRExpr) IRType {
-	switch name {
-	case "map":
-		// map(list, f) → []U where U is f's return type
-		if len(args) == 2 {
-			if lam, ok := args[1].(IRFn); ok && lam.Ret != nil {
-				return IRListType{Elem: lam.Ret}
-			}
-			// Fallback: same element type as input list
-			if lt, ok := args[0].irType().(IRListType); ok {
-				return lt
-			}
-		}
-	case "filter", "take", "takeWhile":
-		// filter/take/takeWhile(list, ...) → same list type
-		if len(args) >= 1 {
-			return args[0].irType()
-		}
-	case "fold":
-		// fold(list, init, f) → type of init
-		if len(args) == 3 {
-			return args[1].irType()
-		}
-	}
-	return IRInterfaceType{}
 }
 
 // irTypeToASTType is a best-effort IR → AST projection used when a resolved
