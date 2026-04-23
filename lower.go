@@ -2300,6 +2300,11 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 	// Dotted names: Type.method or Go FFI like fmt.Println
 	if strings.Contains(e.Name, ".") {
 		parts := strings.SplitN(e.Name, ".", 2)
+		// `Self.staticFun` resolves against the enclosing type so `static fun`
+		// calls inside methods don't have to repeat the type name.
+		if parts[0] == "Self" && l.currentTypeName != "" {
+			parts[0] = l.currentTypeName
+		}
 		if td, ok := l.types[parts[0]]; ok {
 			for _, m := range td.Methods {
 				if m.Name == parts[1] && m.Static {
@@ -2888,7 +2893,15 @@ func goFuncTypeToIR(goType string, vars map[string]IRType) (IRType, bool) {
 	}
 	var ret IRType
 	if resultStr != "" {
-		ret = goTypeToIRWithVars(resultStr, vars)
+		if resultStr == "error" {
+			// Error-only return at the Go surface corresponds to Arca's
+			// Result[Unit, Error]. Matches goFuncReturnType's mapping so a
+			// lambda body returning `Result[Unit, Error]` unifies with a
+			// Go callback typed `func(...) error`.
+			ret = IRResultType{Ok: IRNamedType{GoName: "struct{}"}, Err: IRTraitType{Name: "Error"}}
+		} else {
+			ret = goTypeToIRWithVars(resultStr, vars)
+		}
 	}
 	return IRFnType{Params: params, Ret: ret}, true
 }
@@ -2910,25 +2923,10 @@ func goTypeToIRName(goType string) string {
 
 // resolveReceiverGoType extracts the Go package and type name from an IR expression's type.
 func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) {
-	irType := expr.irType()
-	if irType == nil {
+	if expr == nil {
 		return "", "", false
 	}
-	named, isNamed := irType.(IRNamedType)
-	if !isNamed {
-		if ptr, isPtr := irType.(IRPointerType); isPtr {
-			if inner, isInner := ptr.Inner.(IRNamedType); isInner {
-				named = inner
-				isNamed = true
-			}
-		}
-		if ref, isRef := irType.(IRRefType); isRef {
-			if inner, isInner := ref.Inner.(IRNamedType); isInner {
-				named = inner
-				isNamed = true
-			}
-		}
-	}
+	named, isNamed := peelToGoNamedType(expr.irType())
 	if !isNamed || !strings.Contains(named.GoName, ".") {
 		return "", "", false
 	}
@@ -2937,6 +2935,28 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 		return goPkg.FullPath, parts[1], true
 	}
 	return "", "", false
+}
+
+// peelToGoNamedType strips the common wrapper layers (Option, Ref, Pointer)
+// off a receiver type to find the underlying IRNamedType. Go emit auto-derefs
+// pointer method receivers, and Arca's Option/Ref add no runtime presence over
+// `*T`, so method lookup and hint propagation through these wrappers matches
+// what the generated Go actually does.
+func peelToGoNamedType(t IRType) (IRNamedType, bool) {
+	for {
+		switch tt := t.(type) {
+		case IRNamedType:
+			return tt, true
+		case IRPointerType:
+			t = tt.Inner
+		case IRRefType:
+			t = tt.Inner
+		case IROptionType:
+			t = tt.Inner
+		default:
+			return IRNamedType{}, false
+		}
+	}
 }
 
 // monadicMethodInfo is a prelude-provided method on Result or Option. The
@@ -4387,7 +4407,30 @@ func (l *Lowerer) lowerMatchExpr(me MatchExpr) IRExpr {
 	if l.isEnumMatch(me) {
 		return l.lowerEnumMatch(me)
 	}
+	if l.isStructMatch(me) {
+		return l.lowerStructMatch(me)
+	}
 	return l.lowerSumTypeMatch(me)
+}
+
+// isStructMatch detects a match whose subject is a single-variant sum type —
+// `type AppError { DBInitError(e) }` lowers to a Go struct, not an interface,
+// so the match has one always-taken arm and no type switch. Dispatches to
+// `lowerStructMatch` before the generic sum type path.
+func (l *Lowerer) isStructMatch(me MatchExpr) bool {
+	if len(me.Arms) == 0 {
+		return false
+	}
+	pat, ok := me.Arms[0].Pattern.(ConstructorPattern)
+	if !ok {
+		return false
+	}
+	typeName := l.findTypeName(pat.Name)
+	td, ok := l.types[typeName]
+	if !ok {
+		return false
+	}
+	return !isEnum(td) && len(td.Constructors) == 1
 }
 
 // isTypeMatch recognizes `match v { id: T => ..., _ => ... }` — narrowing
@@ -4838,6 +4881,66 @@ func (l *Lowerer) lowerEnumMatch(me MatchExpr) IRExpr {
 	return l.buildMatch(subject, arms, me.Pos)
 }
 
+// lowerStructMatch lowers a match on a single-variant sum type (emitted as
+// struct). The one arm is always taken, so the generated Go is the body
+// prefixed with let-bindings for the pattern's fields — no switch.
+// Wildcard / bind arms that accept the whole subject skip the field pull and
+// emit the body directly (with the subject bound when a BindPattern names it).
+func (l *Lowerer) lowerStructMatch(me MatchExpr) IRExpr {
+	subject := l.lowerExpr(me.Subject)
+	arm := me.Arms[0]
+	switch pat := arm.Pattern.(type) {
+	case ConstructorPattern:
+		typeName := l.findTypeName(pat.Name)
+		var ctorFields []Field
+		if td, ok := l.types[typeName]; ok {
+			ctorFields = td.Constructors[0].Fields
+		}
+		var armSymbols []SymbolRegInfo
+		var stmts []IRStmt
+		for i, fp := range pat.Fields {
+			if i >= len(ctorFields) {
+				continue
+			}
+			fieldType := ctorFields[i].Type
+			irFieldType := l.lowerType(fieldType)
+			armSymbols = append(armSymbols, SymbolRegInfo{
+				Name:     fp.Binding,
+				ArcaType: fieldType,
+				IRType:   irFieldType,
+				Kind:     SymVariable,
+			})
+			goFieldName := capitalize(ctorFields[i].Name)
+			stmts = append(stmts, IRLetStmt{
+				GoName: snakeToCamel(fp.Binding),
+				Value:  IRFieldAccess{Expr: subject, Field: goFieldName, Type: irFieldType},
+				Type:   irFieldType,
+			})
+		}
+		body := l.lowerArmBody(arm, armSymbols)
+		if len(stmts) == 0 {
+			return body
+		}
+		return IRBlock{Stmts: stmts, Expr: body, Type: body.irType()}
+	case BindPattern:
+		armSymbols := []SymbolRegInfo{{
+			Name:   pat.Name,
+			IRType: subject.irType(),
+			Kind:   SymVariable,
+		}}
+		body := l.lowerArmBody(arm, armSymbols)
+		return IRBlock{
+			Stmts: []IRStmt{IRLetStmt{GoName: snakeToCamel(pat.Name), Value: subject, Type: subject.irType()}},
+			Expr:  body,
+			Type:  body.irType(),
+		}
+	case WildcardPattern:
+		return l.lowerArmBody(arm, nil)
+	}
+	// Unexpected pattern — fall back to sum type path for diagnostic parity.
+	return l.lowerSumTypeMatch(me)
+}
+
 func (l *Lowerer) lowerSumTypeMatch(me MatchExpr) IRExpr {
 	subject := l.lowerExpr(me.Subject)
 	var arms []IRMatchArm
@@ -4966,6 +5069,11 @@ func (l *Lowerer) irTypeToASTType(t IRType) Type {
 			}
 		}
 		return NamedType{Name: tt.GoName, Params: params}
+	case IRPointerType:
+		inner := l.irTypeToASTType(tt.Inner)
+		if inner != nil {
+			return PointerType{Inner: inner}
+		}
 	case IRListType:
 		inner := l.irTypeToASTType(tt.Elem)
 		if inner != nil {

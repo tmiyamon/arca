@@ -6,11 +6,23 @@ import go _ "github.com/mattn/go-sqlite3"
 
 import stdlib
 
+type AppError {
+  DBInitError(e: Option[Error])
+}
+
+impl AppError: Error {
+  fun message() -> String {
+    match self {
+      DBInitError(e) => "failed to initialize sql.DB: ${e}"
+    }
+  }
+}
+
 type App (
-  db: Option[Ref[sql.DB]]
+  db: Ref[sql.DB]
 ) {
   static fun create() -> Result[Self, Error] {
-    let db = sql.Open("sqlite3", "./todo.db")?
+    let db = Self.createDB()?
 
     db.Exec("""
       create table if not exists todos (
@@ -22,6 +34,14 @@ type App (
     """)?
 
     Ok(App(db))
+  }
+
+  static fun createDB() -> Result[Ref[sql.DB], Error] {
+    let db = sql.Open("sqlite3", "./todo.db")?
+    match db {
+      Some(db) => Ok(db)
+      None => Error(AppError.DBInitError(None))
+    }
   }
 
   fun finish() {
@@ -71,6 +91,7 @@ fun main() -> Result[Unit, Error] {
   e.POST("/", c => postTodo(app, c))
 
   e.Start(":8080")?
+  print("started")
   Ok(())
 }
 
