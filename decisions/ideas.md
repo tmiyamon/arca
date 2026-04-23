@@ -170,7 +170,7 @@ F5 (prelude) and F6 (Go FFI) become much cleaner — both migrate to IRFnType si
 - **U5** Retire `IRLambda` alias entirely (all uses now go through `IRFn`).
 - **U6** Redo F4 on the unified base: monadic method table's `LamArgType` feeds into the hint channel, IRFnCall.Fn is the lambda IRFn, emit renders `(lambda)(args)` inline. `.map(u => u.)` completion test passes.
 
-**Status:** Design only, drafted 2026-04-22 after reverting the partial F4. F4 work is fully reverted on disk; F1–F3 commits stand.
+**Status:** U1–U5 landed 2026-04-23. `IRFn{GoName, Receiver, Params, Ret, Body, Source}` is the single callable representation; `IRFuncDecl` is a type alias; `IRLambda` is removed; `IRFnCall.Fn IRExpr` replaces the former `Func string`. `/* complex call */` fallthrough is deleted — inline lambdas as callees now flow through `Fn`. Emit renders decls via `emitFn` and literals via `emitLambda`; both take `IRFn`. U6 (F4 redo on the unified base) is the next slice.
 
 ---
 

@@ -18,7 +18,7 @@ var prelude = map[string]BuiltinDef{
 		Lower: func(args []IRExpr) IRExpr {
 			if len(args) == 1 {
 				return IRFnCall{
-					Func: "[]byte",
+					Fn:   IRIdent{GoName: "[]byte"},
 					Args: args,
 					Type: IRListType{Elem: IRNamedType{GoName: "byte"}},
 				}
@@ -35,7 +35,7 @@ var prelude = map[string]BuiltinDef{
 		GoFunc: "len",
 		Lower: func(args []IRExpr) IRExpr {
 			if len(args) == 1 {
-				return IRFnCall{Func: "len", Args: args, Type: IRNamedType{GoName: "int"}}
+				return IRFnCall{Fn: IRIdent{GoName: "len"}, Args: args, Type: IRNamedType{GoName: "int"}}
 			}
 			return nil
 		},

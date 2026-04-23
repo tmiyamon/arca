@@ -28,7 +28,7 @@ func (em *Emitter) Emit(prog IRProgram) string {
 		em.w.Line("")
 	}
 	for _, fd := range prog.Funcs {
-		em.emitFuncDecl(fd)
+		em.emitFn(fd)
 		em.w.Line("")
 	}
 	em.emitBuiltins(prog.Builtins)
@@ -300,7 +300,7 @@ func (em *Emitter) emitValidatorAlias(v *IRValidator, typeName, zeroVal, goBase 
 
 // --- Function Declarations ---
 
-func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
+func (em *Emitter) emitFn(fd IRFn) {
 	w := em.w
 	// Params are already expanded by expandFuncParams in lower.go.
 	params := make([]string, len(fd.Params))
@@ -309,12 +309,12 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 	}
 
 	retType := ""
-	if fd.ReturnType != nil {
-		retType = em.irReturnTypeStr(fd.ReturnType)
+	if fd.Ret != nil {
+		retType = em.irReturnTypeStr(fd.Ret)
 	}
 
 	body := func() {
-		if fd.ReturnType != nil {
+		if fd.Ret != nil {
 			em.emitReturnExpr(fd.Body)
 		} else {
 			em.emitVoidBody(fd.Body)
@@ -326,7 +326,7 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 	// so `?` works at the top level. Wrap the Result-valued body in an IIFE,
 	// exit non-zero on Err. Mirrors Rust's `fn main() -> Result<(), Error>`.
 	if fd.GoName == "main" && fd.Receiver == nil {
-		if rt, ok := fd.ReturnType.(IRResultType); ok {
+		if rt, ok := fd.Ret.(IRResultType); ok {
 			em.emitResultMainWrapper(fd, rt)
 			return
 		}
@@ -344,7 +344,7 @@ func (em *Emitter) emitFuncDecl(fd IRFuncDecl) {
 // an inner IIFE returning the Result-shaped multi-return, then exits
 // with the error printed to stderr when the inner returned Err. Ok
 // returns normally.
-func (em *Emitter) emitResultMainWrapper(fd IRFuncDecl, rt IRResultType) {
+func (em *Emitter) emitResultMainWrapper(fd IRFn, rt IRResultType) {
 	w := em.w
 	// Imports needed by the wrapper (fmt.Fprintln, os.Stderr, os.Exit) are
 	// registered on the Lowerer at the point the main-Result shape is
@@ -420,7 +420,7 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		}
 		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, args)
 	case IRFnCall:
-		raw := fmt.Sprintf("%s%s(%s)", expr.Func, expr.TypeArgs, em.emitArgs(expr.Args))
+		raw := fmt.Sprintf("%s%s(%s)", em.emitExpr(expr.Fn), expr.TypeArgs, em.emitArgs(expr.Args))
 		return em.wrapGoMultiReturnOption(raw, expr.GoMultiReturn, expr.Type)
 	case IRMethodCall:
 		raw := fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
@@ -452,7 +452,7 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 			return fmt.Sprintf("(*%s)(nil)", em.noneInnerGoType(expr))
 		}
 		return "nil"
-	case IRLambda:
+	case IRFn:
 		return em.emitLambda(expr)
 	case IRBinaryExpr:
 		return fmt.Sprintf("%s %s %s", em.emitExpr(expr.Left), expr.Op, em.emitExpr(expr.Right))
@@ -493,7 +493,7 @@ func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
 	return fmt.Sprintf("%s%s{%s}", cc.GoName, cc.TypeArgs, strings.Join(fields, ", "))
 }
 
-func (em *Emitter) emitLambda(l IRLambda) string {
+func (em *Emitter) emitLambda(l IRFn) string {
 	// Params are already expanded by the expandResultOption post-pass.
 	params := make([]string, len(l.Params))
 	for i, p := range l.Params {
@@ -504,10 +504,10 @@ func (em *Emitter) emitLambda(l IRLambda) string {
 		}
 	}
 	retType := ""
-	if l.ReturnType != nil {
-		retType = " " + em.irReturnTypeStr(l.ReturnType)
+	if l.Ret != nil {
+		retType = " " + em.irReturnTypeStr(l.Ret)
 	}
-	if l.ReturnType != nil {
+	if l.Ret != nil {
 		// Use emitReturnExpr for proper multi-return handling
 		w := em.w
 		bodyWriter := NewGoWriter()

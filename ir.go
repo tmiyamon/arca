@@ -190,14 +190,21 @@ type SourceInfo struct {
 
 // --- Function Declarations ---
 
-type IRFuncDecl struct {
-	GoName     string
-	Receiver   *IRReceiver // nil for free functions and associated functions
-	Params     []IRParamDecl
-	ReturnType IRType // nil for void
-	Body       IRExpr
-	Source     SourceInfo
+// IRFn is the unified representation for a function in any position:
+// top-level declaration (GoName set, emitted as `func Name(...) { ... }`),
+// method (Receiver set), or inline lambda literal (GoName empty, emitted
+// as `func(...) { ... }`). IRFuncDecl is retained as an alias for readability
+// in declaration contexts; both names denote the same type.
+type IRFn struct {
+	GoName   string       // "" for anonymous (lambda literal)
+	Receiver *IRReceiver  // nil for free functions and lambdas
+	Params   []IRParamDecl
+	Ret      IRType       // nil for void
+	Body     IRExpr
+	Source   SourceInfo
 }
+
+type IRFuncDecl = IRFn
 
 type IRReceiver struct {
 	GoName string // "u"
@@ -255,9 +262,15 @@ type IRStringInterp struct {
 	Type   IRType
 }
 
-// Function call
+// Function call.
+//
+// Fn carries the callee as an expression: IRIdent for a named ref
+// ("fmt.Println", "userFrom"), IRFn for an inline lambda, or any other
+// function-valued IR expression. Emit always renders via
+// `emitExpr(Fn)(args)`, so no special-casing is needed on the consumer
+// side.
 type IRFnCall struct {
-	Func          string   // "fmt.Println", "message", "userFrom", etc.
+	Fn            IRExpr
 	Args          []IRExpr
 	Type          IRType
 	TypeArgs      string   // "[User]" for explicit Go generic type args, empty if inferred
@@ -352,14 +365,6 @@ type IRNoneExpr struct {
 	TypeArg        string // "[string]" etc.
 	Type           IRType
 	ExpandedValues []IRExpr // e.g. [zero, false] — populated by post-pass
-}
-
-// Lambda
-type IRLambda struct {
-	Params     []IRParamDecl
-	ReturnType IRType // nil if not annotated
-	Body       IRExpr
-	Type       IRType
 }
 
 // Binary expression
@@ -611,8 +616,14 @@ func (e IRSomeCall) irExprNode()        {}
 func (e IRSomeCall) irType() IRType     { return e.Type }
 func (e IRNoneExpr) irExprNode()        {}
 func (e IRNoneExpr) irType() IRType     { return e.Type }
-func (e IRLambda) irExprNode()          {}
-func (e IRLambda) irType() IRType       { return e.Type }
+func (e IRFn) irExprNode()              {}
+func (e IRFn) irType() IRType {
+	params := make([]IRType, len(e.Params))
+	for i, p := range e.Params {
+		params[i] = p.Type
+	}
+	return IRFnType{Params: params, Ret: e.Ret}
+}
 func (e IRBinaryExpr) irExprNode()      {}
 func (e IRBinaryExpr) irType() IRType   { return e.Type }
 func (e IRListLit) irExprNode()         {}

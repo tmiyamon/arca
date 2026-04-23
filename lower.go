@@ -453,7 +453,7 @@ func (l *Lowerer) resolveExprTypes(e IRExpr) IRExpr {
 		expr.Right = l.resolveExprTypes(expr.Right)
 		expr.Type = l.resolveDeep(expr.Type)
 		return expr
-	case IRLambda:
+	case IRFn:
 		expr.Body = l.resolveExprTypes(expr.Body)
 		return expr
 	case IRTryBlock:
@@ -573,7 +573,10 @@ func containsUnresolvedTypeVar(t IRType) bool {
 func callFuncName(e IRExpr) string {
 	switch expr := e.(type) {
 	case IRFnCall:
-		return expr.Func
+		if ident, ok := expr.Fn.(IRIdent); ok {
+			return ident.GoName
+		}
+		return "<call>"
 	case IRMethodCall:
 		return expr.Method
 	}
@@ -856,7 +859,7 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	for i := range funcs {
 		ctx := newExpandCtx()
 		expandFuncParams(&funcs[i], ctx)
-		funcs[i].Body = expandWithCtx(funcs[i].Body, funcs[i].ReturnType, ctx)
+		funcs[i].Body = expandWithCtx(funcs[i].Body, funcs[i].Ret, ctx)
 	}
 
 	// Report unused imports (skip side-effect imports, which are intentional,
@@ -1246,11 +1249,11 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 	}
 
 	return IRFuncDecl{
-		GoName:     name,
-		Params:     lf.params,
-		ReturnType: lf.retType,
-		Body:       lf.body,
-		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
+		GoName: name,
+		Params: lf.params,
+		Ret:    lf.retType,
+		Body:   lf.body,
+		Source: SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -1401,10 +1404,10 @@ func (l *Lowerer) lowerMethod(td TypeDecl, fd FnDecl) []IRFuncDecl {
 			GoName: receiver,
 			Type:   td.Name,
 		},
-		Params:     lf.params,
-		ReturnType: lf.retType,
-		Body:       lf.body,
-		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
+		Params: lf.params,
+		Ret:    lf.retType,
+		Body:   lf.body,
+		Source: SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}}
 }
 
@@ -1478,12 +1481,12 @@ func (l *Lowerer) expandMatchSelf(fn IRFuncDecl, td TypeDecl, m *IRMatch) []IRFu
 			body = arm.Body
 		}
 		funcs = append(funcs, IRFuncDecl{
-			GoName:     fn.GoName,
-			Receiver:   &IRReceiver{GoName: fn.Receiver.GoName, Type: p.GoType},
-			Params:     fn.Params,
-			ReturnType: fn.ReturnType,
-			Body:       body,
-			Source:     fn.Source,
+			GoName:   fn.GoName,
+			Receiver: &IRReceiver{GoName: fn.Receiver.GoName, Type: p.GoType},
+			Params:   fn.Params,
+			Ret:      fn.Ret,
+			Body:     body,
+			Source:   fn.Source,
 		})
 	}
 	return funcs
@@ -1495,12 +1498,12 @@ func (l *Lowerer) duplicateForVariants(fn IRFuncDecl, td TypeDecl) []IRFuncDecl 
 	for _, ctor := range td.Constructors {
 		variantName := td.Name + ctor.Name
 		funcs = append(funcs, IRFuncDecl{
-			GoName:     fn.GoName,
-			Receiver:   &IRReceiver{GoName: fn.Receiver.GoName, Type: variantName},
-			Params:     fn.Params,
-			ReturnType: fn.ReturnType,
-			Body:       fn.Body,
-			Source:     fn.Source,
+			GoName:   fn.GoName,
+			Receiver: &IRReceiver{GoName: fn.Receiver.GoName, Type: variantName},
+			Params:   fn.Params,
+			Ret:      fn.Ret,
+			Body:     fn.Body,
+			Source:   fn.Source,
 		})
 	}
 	return funcs
@@ -1515,11 +1518,11 @@ func (l *Lowerer) lowerAssociatedFunc(td TypeDecl, fd FnDecl) IRFuncDecl {
 	lf := l.lowerFnCommon(fd, td.Name, "")
 
 	return IRFuncDecl{
-		GoName:     funcName,
-		Params:     lf.params,
-		ReturnType: lf.retType,
-		Body:       lf.body,
-		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
+		GoName: funcName,
+		Params: lf.params,
+		Ret:    lf.retType,
+		Body:   lf.body,
+		Source: SourceInfo{Pos: fd.Pos, Name: fd.Name, TypeName: td.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -2208,7 +2211,7 @@ func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 	case RangeExpr:
 		// RangeExpr as standalone expression (not inside for) — shouldn't happen often
 		return IRFnCall{
-			Func: "__range",
+			Fn:   IRIdent{GoName: "__range"},
 			Args: []IRExpr{l.lowerExpr(e.Start), l.lowerExpr(e.End)},
 			Type: IRListType{Elem: IRNamedType{GoName: "int"}},
 		}
@@ -2407,7 +2410,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 					}
 				} else {
 					retType := l.inferPreludeReturnType(ident.Name, args)
-					return IRFnCall{Func: def.GoFunc, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
+					return IRFnCall{Fn: IRIdent{GoName: def.GoFunc}, Args: args, Type: retType, Source: SourceInfo{Pos: e.Pos}}
 				}
 			}
 		}
@@ -2431,7 +2434,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 					l.infer.unify(ret.Type, hint)
 				}
 				typeArgsStr := l.buildGoTypeArgsStr(ret.TypeVars, e.TypeArgs)
-				return IRFnCall{Func: goCallName, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: typeArgsStr, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
+				return IRFnCall{Fn: IRIdent{GoName: goCallName}, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: typeArgsStr, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
 		// Arca module-qualified call
@@ -2443,13 +2446,13 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 			args := l.lowerCallArgs(e)
 			if l.goModule != "" {
 				return IRFnCall{
-					Func:   ident.Name + "." + fnName,
+					Fn:     IRIdent{GoName: ident.Name + "." + fnName},
 					Args:   args,
 					Type:   IRInterfaceType{},
 					Source: SourceInfo{Pos: e.Pos, Name: fa.Field},
 				}
 			}
-			return IRFnCall{Func: fnName, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos, Name: fa.Field}}
+			return IRFnCall{Fn: IRIdent{GoName: fnName}, Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos, Name: fa.Field}}
 		}
 		// Monadic methods on Result/Option desugar to try-block expressions.
 		// Handled before regular method dispatch so emit stays unchanged.
@@ -2510,10 +2513,18 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 			}
 		}
 		typeArgsStr := l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
-		return IRFnCall{Func: ident.GoName, Args: args, Type: l.resolveDeep(fnType), TypeArgs: typeArgsStr, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
+		return IRFnCall{Fn: ident, Args: args, Type: l.resolveDeep(fnType), TypeArgs: typeArgsStr, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
-	// Lambda call or other complex expression
-	return IRFnCall{Func: "/* complex call */", Args: args, Type: IRInterfaceType{}, Source: SourceInfo{Pos: e.Pos}}
+	// Function-valued expression as callee: inline lambda (`(x => ...)(v)`,
+	// or a desugar-built `FnCall{Fn: Lambda}` from monadic methods), or any
+	// other IR expression that evaluates to a Go function. Fn carries the
+	// callee verbatim; emit renders via emitExpr so `func(...) { ... }(args)`
+	// falls out naturally. For inline IRFn, Type is the lambda's return type.
+	var callType IRType = IRInterfaceType{}
+	if fn, ok := fnExpr.(IRFn); ok && fn.Ret != nil {
+		callType = fn.Ret
+	}
+	return IRFnCall{Fn: fnExpr, Args: args, Type: callType, Source: SourceInfo{Pos: e.Pos}}
 }
 
 // resolveGoCall validates a Go FFI function call and returns the resolved return info.
@@ -3206,7 +3217,7 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 						}
 					}
 					return IRFnCall{
-						Func: pnt.Name,
+						Fn:   IRIdent{GoName: pnt.Name},
 						Args: []IRExpr{inner},
 						Type: IRNamedType{GoName: pnt.Name},
 					}
@@ -3828,11 +3839,10 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 	if retType == nil {
 		retType = body.irType()
 	}
-	return IRLambda{
-		Params:     params,
-		ReturnType: retType,
-		Body:       body,
-		Type:       IRInterfaceType{}, // lambda type is opaque to Go FFI arg checking
+	return IRFn{
+		Params: params,
+		Ret:    retType,
+		Body:   body,
 	}
 }
 
@@ -4851,8 +4861,8 @@ func (l *Lowerer) inferPreludeReturnType(name string, args []IRExpr) IRType {
 	case "map":
 		// map(list, f) → []U where U is f's return type
 		if len(args) == 2 {
-			if lam, ok := args[1].(IRLambda); ok && lam.ReturnType != nil {
-				return IRListType{Elem: lam.ReturnType}
+			if lam, ok := args[1].(IRFn); ok && lam.Ret != nil {
+				return IRListType{Elem: lam.Ret}
 			}
 			// Fallback: same element type as input list
 			if lt, ok := args[0].irType().(IRListType); ok {
@@ -5056,9 +5066,9 @@ func (l *Lowerer) exprToString(expr Expr) string {
 
 // --- Result/Option IR Expansion ---
 
-// expandLambdaParams is the IRLambda equivalent of expandFuncParams.
+// expandLambdaParams is the IRFn equivalent of expandFuncParams for lambdas.
 // Only Result params are split; Option stays as a single pointer param.
-func expandLambdaParams(lam *IRLambda, ctx *expandCtx) {
+func expandLambdaParams(lam *IRFn, ctx *expandCtx) {
 	var expanded []IRParamDecl
 	for _, p := range lam.Params {
 		switch pt := p.Type.(type) {
@@ -5178,12 +5188,12 @@ func expandWithCtx(e IRExpr, returnType IRType, ctx *expandCtx) IRExpr {
 		expr.Then = expandWithCtx(expr.Then, returnType, ctx)
 		expr.Else = expandWithCtx(expr.Else, returnType, ctx)
 		return expr
-	case IRLambda:
-		// Lambda is an inner function — expand its params and body
-		// with its own return type context.
+	case IRFn:
+		// Lambda / anonymous IRFn is an inner function — expand its params
+		// and body with its own return type context.
 		lamCtx := newExpandCtx()
 		expandLambdaParams(&expr, lamCtx)
-		expr.Body = expandWithCtx(expr.Body, expr.ReturnType, lamCtx)
+		expr.Body = expandWithCtx(expr.Body, expr.Ret, lamCtx)
 		return expr
 	case IROkCall:
 		return populateOkExpanded(expr)
@@ -5295,6 +5305,7 @@ func collectExprRefs(e IRExpr, refs map[string]bool) {
 	case IRIdent:
 		refs[expr.GoName] = true
 	case IRFnCall:
+		collectExprRefs(expr.Fn, refs)
 		for _, a := range expr.Args { collectExprRefs(a, refs) }
 	case IRMethodCall:
 		collectExprRefs(expr.Receiver, refs)
@@ -5316,7 +5327,7 @@ func collectExprRefs(e IRExpr, refs map[string]bool) {
 		collectExprRefs(expr.Right, refs)
 	case IRStringInterp:
 		for _, a := range expr.Args { collectExprRefs(a, refs) }
-	case IRLambda:
+	case IRFn:
 		collectExprRefs(expr.Body, refs)
 	case IRIndexAccess:
 		collectExprRefs(expr.Expr, refs)
