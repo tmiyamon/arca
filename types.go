@@ -28,6 +28,9 @@ const (
 	ErrCannotInferTypeParam
 	ErrTryOutsideResultContext
 	ErrTraitMethodCollision
+	ErrParseExpected
+	ErrParseUnsupported
+	ErrParseInvalidSyntax
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -207,6 +210,49 @@ type MessageData struct {
 
 func (d MessageData) Message() string {
 	return d.Text
+}
+
+// ParseExpectedData covers the common "expected X, got Y" parser error.
+// What describes what the parser was looking for in Arca-surface terms
+// ("fn after pub", "field name", "string path after 'import go'"); Got is
+// the offending token's rendering.
+type ParseExpectedData struct {
+	What string
+	Got  string
+}
+
+func (d ParseExpectedData) Message() string {
+	if d.Got == "" {
+		return fmt.Sprintf("expected %s", d.What)
+	}
+	return fmt.Sprintf("expected %s, got %s", d.What, d.Got)
+}
+
+// ParseUnsupportedData is used for feature gates that the parser rejects up
+// front — e.g. `static fun` inside `trait` / `impl` during Phase 1, or
+// inherent `impl` blocks. Feature is what's disallowed, Context is where
+// (including the phase marker if applicable).
+type ParseUnsupportedData struct {
+	Feature string
+	Context string
+}
+
+func (d ParseUnsupportedData) Message() string {
+	if d.Context == "" {
+		return fmt.Sprintf("%s is not supported", d.Feature)
+	}
+	return fmt.Sprintf("%s is not supported in %s", d.Feature, d.Context)
+}
+
+// ParseInvalidSyntaxData covers one-off syntactic rejections that don't fit
+// the "expected X" shape — e.g. "trailing comma not allowed in function-type
+// parameter list".
+type ParseInvalidSyntaxData struct {
+	Reason string
+}
+
+func (d ParseInvalidSyntaxData) Message() string {
+	return d.Reason
 }
 
 // --- Constraint Dimensions ---

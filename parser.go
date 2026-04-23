@@ -31,9 +31,43 @@ func (p *Parser) advance() Token {
 func (p *Parser) expect(kind TokenKind) (Token, error) {
 	tok := p.advance()
 	if tok.Kind != kind {
-		return tok, fmt.Errorf("%d:%d: expected %s, got %s", tok.Line, tok.Col, tokenNames[kind], tok)
+		return tok, p.errExpected(tok, tokenNames[kind], tok.String())
 	}
 	return tok, nil
+}
+
+// errExpected constructs a structured "expected X, got Y" parse error at the
+// offending token's position. `what` describes the expected form in
+// Arca-surface terms; `got` is the actual token rendering.
+func (p *Parser) errExpected(tok Token, what, got string) error {
+	return CompileError{
+		Code:  ErrParseExpected,
+		Pos:   Pos{Line: tok.Line, Col: tok.Col},
+		Phase: "parse",
+		Data:  ParseExpectedData{What: what, Got: got},
+	}
+}
+
+// errUnsupported constructs a structured feature-gate rejection at tok's
+// position — e.g. `static fun is not supported in trait (Phase 1)`.
+func (p *Parser) errUnsupported(tok Token, feature, context string) error {
+	return CompileError{
+		Code:  ErrParseUnsupported,
+		Pos:   Pos{Line: tok.Line, Col: tok.Col},
+		Phase: "parse",
+		Data:  ParseUnsupportedData{Feature: feature, Context: context},
+	}
+}
+
+// errInvalidSyntax is the catch-all for syntactic rejections that don't fit
+// the "expected X" or "unsupported Y" shapes. Reason is the full message.
+func (p *Parser) errInvalidSyntax(tok Token, reason string) error {
+	return CompileError{
+		Code:  ErrParseInvalidSyntax,
+		Pos:   Pos{Line: tok.Line, Col: tok.Col},
+		Phase: "parse",
+		Data:  ParseInvalidSyntaxData{Reason: reason},
+	}
 }
 
 func (p *Parser) ParseProgram() (*Program, error) {
@@ -65,9 +99,11 @@ func (p *Parser) parseDecl() (Decl, error) {
 		if p.peek().Kind == TkFn {
 			return p.parseFnDecl(true)
 		}
-		return nil, fmt.Errorf("%d:%d: expected fn after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
+		tok := p.peek()
+		return nil, p.errExpected(tok, "fn after pub", tok.String())
 	default:
-		return nil, fmt.Errorf("%d:%d: expected import, type, trait, impl, pub, or fn, got %s", p.peek().Line, p.peek().Col, p.peek())
+		tok := p.peek()
+		return nil, p.errExpected(tok, "import, type, trait, impl, pub, or fn", tok.String())
 	}
 }
 
@@ -86,14 +122,15 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		}
 		pathTok, err := p.expect(TkString)
 		if err != nil {
-			return nil, fmt.Errorf("%d:%d: expected string path after 'import go', got %s", p.peek().Line, p.peek().Col, p.peek())
+			peek := p.peek()
+			return nil, p.errExpected(peek, "string path after 'import go'", peek.String())
 		}
 		return ImportDecl{Pos: importPos, Path: "go/" + pathTok.Lit, SideEffect: sideEffect}, nil
 	}
 
 	// Arca module: import user, import user.{find, create}, import user as u
 	if tok.Kind != TkIdent && tok.Kind != TkUpperIdent {
-		return nil, fmt.Errorf("%d:%d: expected module path, got %s", tok.Line, tok.Col, tok)
+		return nil, p.errExpected(tok, "module path", tok.String())
 	}
 	p.advance()
 	path := tok.Lit
@@ -106,7 +143,7 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 			for p.peek().Kind != TkRBrace {
 				name := p.advance()
 				if name.Kind != TkIdent && name.Kind != TkUpperIdent {
-					return nil, fmt.Errorf("%d:%d: expected name in selective import, got %s", name.Line, name.Col, name)
+					return nil, p.errExpected(name, "name in selective import", name.String())
 				}
 				names = append(names, name.Lit)
 				if p.peek().Kind == TkComma {
@@ -119,7 +156,7 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		p.advance() // skip '.'
 		next := p.advance()
 		if next.Kind != TkIdent && next.Kind != TkUpperIdent {
-			return nil, fmt.Errorf("%d:%d: expected identifier in import path, got %s", next.Line, next.Col, next)
+			return nil, p.errExpected(next, "identifier in import path", next.String())
 		}
 		path += "." + next.Lit
 	}
@@ -129,7 +166,7 @@ func (p *Parser) parseImportDecl() (Decl, error) {
 		p.advance() // skip 'as'
 		alias := p.advance()
 		if alias.Kind != TkIdent {
-			return nil, fmt.Errorf("%d:%d: expected alias name, got %s", alias.Line, alias.Col, alias)
+			return nil, p.errExpected(alias, "alias name", alias.String())
 		}
 		return ImportDecl{Pos: importPos, Path: path, Alias: alias.Lit}, nil
 	}
@@ -151,7 +188,7 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		for p.peek().Kind != TkRBracket {
 			tok := p.advance()
 			if tok.Kind != TkUpperIdent && tok.Kind != TkIdent {
-				return nil, fmt.Errorf("%d:%d: expected type parameter, got %s", tok.Line, tok.Col, tok)
+				return nil, p.errExpected(tok, "type parameter", tok.String())
 			}
 			params = append(params, tok.Lit)
 			if p.peek().Kind == TkComma {
@@ -227,7 +264,8 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 						methods = append(methods, method)
 					}
 				} else {
-					return nil, fmt.Errorf("%d:%d: expected tags, fun, or }, got %s", p.peek().Line, p.peek().Col, p.peek())
+					tok := p.peek()
+				return nil, p.errExpected(tok, "tags, fun, or }", tok.String())
 				}
 			}
 			p.advance() // skip '}'
@@ -280,7 +318,8 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 				}
 				methods = append(methods, method)
 			} else {
-				return nil, fmt.Errorf("%d:%d: expected fn or static after pub, got %s", p.peek().Line, p.peek().Col, p.peek())
+				tok := p.peek()
+			return nil, p.errExpected(tok, "fn or static after pub", tok.String())
 			}
 		} else {
 			// Constructor
@@ -309,12 +348,11 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 	var methods []FnDecl
 	for p.peek().Kind != TkRBrace {
 		if p.peek().Kind == TkStatic {
-			tok := p.peek()
-			return nil, fmt.Errorf("%d:%d: static fun is not supported in trait (Phase 1)", tok.Line, tok.Col)
+			return nil, p.errUnsupported(p.peek(), "static fun", "trait (Phase 1)")
 		}
 		if p.peek().Kind != TkFn {
 			tok := p.peek()
-			return nil, fmt.Errorf("%d:%d: expected fun or }, got %s", tok.Line, tok.Col, tok)
+			return nil, p.errExpected(tok, "fun or }", tok.String())
 		}
 		sig, err := p.parseTraitMethodSig(name.Lit)
 		if err != nil {
@@ -368,8 +406,7 @@ func (p *Parser) parseImplDecl() (Decl, error) {
 		return nil, err
 	}
 	if p.peek().Kind != TkColon {
-		tok := p.peek()
-		return nil, fmt.Errorf("%d:%d: expected ':' after impl type (inherent impl is not supported; define methods in `type %s { fun ... }`)", tok.Line, tok.Col, typeName.Lit)
+		return nil, p.errUnsupported(p.peek(), "inherent impl", fmt.Sprintf("Arca (define methods in `type %s { fun ... }` instead)", typeName.Lit))
 	}
 	p.advance() // skip ':'
 	traitName, err := p.expect(TkUpperIdent)
@@ -382,12 +419,11 @@ func (p *Parser) parseImplDecl() (Decl, error) {
 	var methods []FnDecl
 	for p.peek().Kind != TkRBrace {
 		if p.peek().Kind == TkStatic {
-			tok := p.peek()
-			return nil, fmt.Errorf("%d:%d: static fun is not supported in impl (Phase 1)", tok.Line, tok.Col)
+			return nil, p.errUnsupported(p.peek(), "static fun", "impl (Phase 1)")
 		}
 		if p.peek().Kind != TkFn {
 			tok := p.peek()
-			return nil, fmt.Errorf("%d:%d: expected fun or }, got %s", tok.Line, tok.Col, tok)
+			return nil, p.errExpected(tok, "fun or }", tok.String())
 		}
 		method, err := p.parseMethodDecl(typeName.Lit, false)
 		if err != nil {
@@ -408,7 +444,7 @@ func (p *Parser) parseTagsBlock() ([]TagRule, error) {
 	for p.peek().Kind != TkRBrace {
 		nameTok := p.advance()
 		if nameTok.Kind != TkIdent {
-			return nil, fmt.Errorf("%d:%d: expected tag name, got %s", nameTok.Line, nameTok.Col, nameTok)
+			return nil, p.errExpected(nameTok, "tag name", nameTok.String())
 		}
 		rule := TagRule{Name: nameTok.Lit, Overrides: map[string]string{}}
 
@@ -565,7 +601,7 @@ func (p *Parser) parseAtomType() (Type, error) {
 		}
 		return NamedType{Pos: pos, Name: name, Constraints: constraints}, nil
 	default:
-		return nil, fmt.Errorf("%d:%d: expected type, got %s", tok.Line, tok.Col, tok)
+		return nil, p.errExpected(tok, "type", tok.String())
 	}
 }
 
@@ -582,7 +618,7 @@ func (p *Parser) parseTupleOrFnPrefix() (Type, error) {
 	if p.peek().Kind == TkArrow {
 		arrowTok := p.advance()
 		if trailingComma {
-			return nil, fmt.Errorf("%d:%d: trailing comma not allowed in function-type parameter list", arrowTok.Line, arrowTok.Col)
+			return nil, p.errInvalidSyntax(arrowTok, "trailing comma not allowed in function-type parameter list")
 		}
 		ret, err := p.parseType()
 		if err != nil {
@@ -615,7 +651,7 @@ func (p *Parser) parseParenTypeList() ([]Type, bool, error) {
 	}
 	if p.peek().Kind != TkRParen {
 		tok := p.peek()
-		return nil, false, fmt.Errorf("%d:%d: expected `)` in type list, got %s", tok.Line, tok.Col, tok)
+		return nil, false, p.errExpected(tok, "`)` in type list", tok.String())
 	}
 	p.advance() // ')'
 	return types, trailingComma, nil
@@ -1090,7 +1126,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			p.advance()
 			field := p.advance()
 			if field.Kind != TkIdent && field.Kind != TkUpperIdent {
-				return nil, fmt.Errorf("%d:%d: expected field name, got %s", field.Line, field.Col, field)
+				return nil, p.errExpected(field, "field name", field.String())
 			}
 			expr = FieldAccess{Expr: expr, Field: field.Lit}
 			if p.peek().Kind == TkLParen {
@@ -1163,7 +1199,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 				p.advance()
 				field := p.advance()
 				if field.Kind != TkIdent && field.Kind != TkUpperIdent {
-					return nil, fmt.Errorf("%d:%d: expected field name, got %s", field.Line, field.Col, field)
+					return nil, p.errExpected(field, "field name", field.String())
 				}
 				expr = FieldAccess{Expr: expr, Field: field.Lit}
 			} else if p.peek().Kind == TkLBracket {
@@ -1213,7 +1249,8 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 					return nil, err
 				}
 				if p.peek().Kind != TkRBracket {
-					return nil, fmt.Errorf("%d:%d: expected ']', got %s", p.peek().Line, p.peek().Col, p.peek())
+					peek := p.peek()
+					return nil, p.errExpected(peek, "']'", peek.String())
 				}
 				p.advance()
 				expr = IndexAccess{NodePos: AtTok(tok), Expr: expr, Index: index}
@@ -1233,7 +1270,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 		return p.parseBlockExpr()
 
 	default:
-		return nil, fmt.Errorf("%d:%d: expected expression, got %s", tok.Line, tok.Col, tok)
+		return nil, p.errExpected(tok, "expression", tok.String())
 	}
 }
 
@@ -1339,7 +1376,7 @@ func (p *Parser) parseIfExpr() (Expr, error) {
 		return nil, err
 	}
 	if p.peek().Kind != TkLBrace {
-		return nil, fmt.Errorf("%d:%d: expected '{' after if condition", p.peek().Line, p.peek().Col)
+		return nil, p.errExpected(p.peek(), "'{' after if condition", "")
 	}
 	then, err := p.parseBlockExpr()
 	if err != nil {
@@ -1360,7 +1397,7 @@ func (p *Parser) parseIfExpr() (Expr, error) {
 				return nil, err
 			}
 		} else {
-			return nil, fmt.Errorf("%d:%d: expected '{' or 'if' after else", p.peek().Line, p.peek().Col)
+			return nil, p.errExpected(p.peek(), "'{' or 'if' after else", "")
 		}
 	}
 	return IfExpr{NodePos: AtTok(tok), Cond: cond, Then: then, Else: elseBody}, nil
@@ -1717,7 +1754,7 @@ func (p *Parser) parsePattern() (Pattern, error) {
 		val, _ := strconv.ParseInt(tok.Lit, 10, 64)
 		return LitPattern{Expr: IntLit{Value: val, NodePos: AtTok(tok)}}, nil
 	default:
-		return nil, fmt.Errorf("%d:%d: expected pattern, got %s", tok.Line, tok.Col, tok)
+		return nil, p.errExpected(tok, "pattern", tok.String())
 	}
 }
 

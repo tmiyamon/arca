@@ -102,7 +102,7 @@ impl User {
 		t.Fatal("expected error for inherent impl, got nil")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "expected ':'") || !strings.Contains(msg, "type User") {
+	if !strings.Contains(msg, "inherent impl") || !strings.Contains(msg, "type User") {
 		t.Errorf("error should point to `type User { fun ... }`; got: %s", msg)
 	}
 }
