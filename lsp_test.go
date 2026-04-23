@@ -282,6 +282,45 @@ func TestCompletionOptionMonadicMethods(t *testing.T) {
 	}
 }
 
+// Monadic lambda param must carry the receiver's inner type into the lambda
+// body so completion inside `.map(u => u.)` resolves `u`'s fields. The monadic
+// method table's LamArg signature feeds the hint through applyLambdaHint into
+// the AST lambda params before desugar, so lowerLambda registers `u: User` on
+// the scope tree.
+func TestCompletionResultMapLambdaParam(t *testing.T) {
+	t.Parallel()
+	source := `type User {
+    User(name: String, age: Int)
+}
+
+fun process(r: Result[User, Error]) -> Result[String, Error] {
+    r.map(u => u.)
+}
+`
+	// Line 6: `    r.map(u => u.)` — the `.` is at col 17, cursor at col 18.
+	// Unlike end-of-line-dot cases, the real LSP completion fires mid-line
+	// here (dot is followed by `)`), so insertCompletionPlaceholder must
+	// patch the cursor position, not just trailing-dot lines.
+	items := getCompletionItems(source, "/tmp/map_lambda_param_test.arca", 6, 18)
+	if len(items) == 0 {
+		t.Fatalf("expected completion items for u. inside r.map(u => u.), got none")
+	}
+	var names []string
+	hasName, hasAge := false, false
+	for _, item := range items {
+		names = append(names, item.Label)
+		if item.Label == "name" {
+			hasName = true
+		}
+		if item.Label == "age" {
+			hasAge = true
+		}
+	}
+	if !hasName || !hasAge {
+		t.Errorf("expected name and age on User inside map lambda, got %v", names)
+	}
+}
+
 // Ref[T] should auto-deref at field/method access — completion on a Ref-typed
 // binding must surface the fields of the inner type (Arca auto-deref rule).
 func TestCompletionRefAutoDeref(t *testing.T) {

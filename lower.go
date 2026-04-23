@@ -1949,11 +1949,55 @@ func irTypeEmitStr(t IRType) string {
 }
 
 // bodyPos extracts start/end position from a function body expression.
+//
+// Blocks carry explicit start/end positions. For non-Block bodies (e.g. a
+// shorthand lambda body `u => u.field`), AST nodes don't track end positions
+// uniformly — a few constructors (FieldAccess, FnCall-with-postfix) are
+// built without NodePos, so the body's own exprPos may be zero even though
+// an inner node like the receiver Ident has a valid position. exprFirstPos
+// walks the body to find the first usable position, and we pad a generous
+// one-line span for the end so cursor lookups inside single-line expression
+// bodies succeed. Multi-line non-Block bodies stay as a known gap.
 func bodyPos(body Expr) (Pos, Pos) {
+	if body == nil {
+		return Pos{}, Pos{}
+	}
 	if b, ok := body.(Block); ok {
 		return b.Pos, b.EndPos
 	}
-	return Pos{}, Pos{}
+	sp := exprFirstPos(body)
+	if sp == (Pos{}) {
+		return Pos{}, Pos{}
+	}
+	return sp, Pos{Line: sp.Line, Col: sp.Col + 10000}
+}
+
+// exprFirstPos walks an AST expression to find the first non-zero source
+// position. Parser-built nodes like FieldAccess and some FnCall chains
+// don't set NodePos, so a direct exprPos can return zero even when inner
+// operands (idents, literals) have valid positions. Used by bodyPos to
+// anchor non-Block lambda scopes.
+func exprFirstPos(e Expr) Pos {
+	if e == nil {
+		return Pos{}
+	}
+	if p := e.exprPos(); p != (Pos{}) {
+		return p
+	}
+	switch ex := e.(type) {
+	case FieldAccess:
+		return exprFirstPos(ex.Expr)
+	case FnCall:
+		return exprFirstPos(ex.Fn)
+	case BinaryExpr:
+		if p := exprFirstPos(ex.Left); p != (Pos{}) {
+			return p
+		}
+		return exprFirstPos(ex.Right)
+	case RefExpr:
+		return exprFirstPos(ex.Expr)
+	}
+	return Pos{}
 }
 
 // --- Variable Scoping ---
@@ -2838,23 +2882,66 @@ func (l *Lowerer) resolveReceiverGoType(expr IRExpr) (pkg, typ string, ok bool) 
 // slice below is the single source of truth for dispatch (tryDesugarMonadicMethod)
 // and LSP completion (monadic method completion branch in lsp.go). Drift
 // between the two paths is impossible because both read this table.
+//
+// LamArg returns the function-type hint for the method's lambda argument as
+// a function of the receiver's resolved IR type (e.g. `.map` on Result[T, E]
+// returns IRFnType{Params: [T]}). nil when the arg is not a lambda
+// (e.g. okOr's `err: E`). Ret is left nil — the lambda body infers its own
+// return type; only the param side needs hint propagation for inside-body
+// completion / hover to work.
 type monadicMethodInfo struct {
 	Name      string
 	Signature string // user-facing signature for LSP detail
 	Build     func(recv Expr, args []Expr, pos Pos) Expr
+	LamArg    func(recv IRType) IRType
 }
 
 var resultMonadicMethods = []monadicMethodInfo{
-	{"map", "(f: T -> U) -> Result[U, E]", buildResultMapDesugar},
-	{"flatMap", "(f: T -> Result[U, E]) -> Result[U, E]", buildResultFlatMapDesugar},
-	{"mapError", "(f: E -> F) -> Result[T, F]", buildResultMapErrorDesugar},
+	{"map", "(f: T -> U) -> Result[U, E]", buildResultMapDesugar, resultLamArgOk},
+	{"flatMap", "(f: T -> Result[U, E]) -> Result[U, E]", buildResultFlatMapDesugar, resultLamArgOk},
+	{"mapError", "(f: E -> F) -> Result[T, F]", buildResultMapErrorDesugar, resultLamArgErr},
 }
 
 var optionMonadicMethods = []monadicMethodInfo{
-	{"map", "(f: T -> U) -> Option[U]", buildOptionMapDesugar},
-	{"flatMap", "(f: T -> Option[U]) -> Option[U]", buildOptionFlatMapDesugar},
-	{"okOr", "(err: E) -> Result[T, E]", buildOptionOkOrDesugar},
-	{"okOrElse", "(fn: () -> E) -> Result[T, E]", buildOptionOkOrElseDesugar},
+	{"map", "(f: T -> U) -> Option[U]", buildOptionMapDesugar, optionLamArgInner},
+	{"flatMap", "(f: T -> Option[U]) -> Option[U]", buildOptionFlatMapDesugar, optionLamArgInner},
+	{"okOr", "(err: E) -> Result[T, E]", buildOptionOkOrDesugar, nil},
+	{"okOrElse", "(fn: () -> E) -> Result[T, E]", buildOptionOkOrElseDesugar, optionLamArgNullary},
+}
+
+// resultLamArgOk yields the lambda-arg signature whose single param is the
+// Result's Ok type (used by .map / .flatMap).
+func resultLamArgOk(recv IRType) IRType {
+	rt, ok := recv.(IRResultType)
+	if !ok {
+		return nil
+	}
+	return IRFnType{Params: []IRType{rt.Ok}}
+}
+
+// resultLamArgErr yields the lambda-arg signature whose single param is the
+// Result's Err type (used by .mapError).
+func resultLamArgErr(recv IRType) IRType {
+	rt, ok := recv.(IRResultType)
+	if !ok {
+		return nil
+	}
+	return IRFnType{Params: []IRType{rt.Err}}
+}
+
+// optionLamArgInner yields the lambda-arg signature whose single param is the
+// Option's inner type (used by .map / .flatMap).
+func optionLamArgInner(recv IRType) IRType {
+	ot, ok := recv.(IROptionType)
+	if !ok {
+		return nil
+	}
+	return IRFnType{Params: []IRType{ot.Inner}}
+}
+
+// optionLamArgNullary yields the no-arg lambda signature used by .okOrElse.
+func optionLamArgNullary(recv IRType) IRType {
+	return IRFnType{}
 }
 
 // monadicMethodsFor returns the method table for a receiver IR type, or nil
@@ -2877,11 +2964,43 @@ func monadicMethodsFor(t IRType) []monadicMethodInfo {
 // Result/Option match lowering — no new IR nodes or emit code.
 func (l *Lowerer) tryDesugarMonadicMethod(fa FieldAccess, call FnCall) Expr {
 	recvIR := l.lowerExpr(fa.Expr)
-	methods := monadicMethodsFor(l.resolveDeep(recvIR.irType()))
+	recvType := l.resolveDeep(recvIR.irType())
+	methods := monadicMethodsFor(recvType)
 	for _, m := range methods {
-		if m.Name == fa.Field {
-			return m.Build(fa.Expr, call.Args, call.Pos)
+		if m.Name != fa.Field {
+			continue
 		}
+		// Pre-type the lambda arg from the method's LamArg signature so its
+		// body lowers against the concrete param type. Without this the
+		// lambda flows into Build as plain AST and is later re-lowered with
+		// a nil hint — untyped params → no scope IRType → LSP completion
+		// inside `.map(x => x.)` misses the field list.
+		args := call.Args
+		if len(args) >= 1 && m.LamArg != nil {
+			if lam, ok := args[0].(Lambda); ok {
+				if hint := m.LamArg(recvType); hint != nil {
+					args = append([]Expr(nil), args...)
+					args[0] = l.applyLambdaHint(lam, hint)
+				}
+			}
+		}
+		desugared := m.Build(fa.Expr, args, call.Pos)
+		// Synthetic monadic arms have no user-visible EndPos; give each a
+		// generous line-local span so the arm scope registered by lowerMatch
+		// actually contains any cursor inside the lambda body. Without this,
+		// FindScopeAt cannot descend from the function scope into the Ok
+		// arm's lambda scope and completion inside `.map(u => u.)` misses
+		// `u`'s fields.
+		if me, ok := desugared.(MatchExpr); ok {
+			endPos := Pos{Line: call.Pos.Line + 100, Col: 10000}
+			for i := range me.Arms {
+				if me.Arms[i].EndPos == (Pos{}) {
+					me.Arms[i].EndPos = endPos
+				}
+			}
+			desugared = me
+		}
+		return desugared
 	}
 	return nil
 }
@@ -3793,9 +3912,18 @@ func (l *Lowerer) lowerTryBlock(tb TryBlockExpr) IRExpr {
 // the AST lambda are respected; only nil slots are filled from the hint.
 // Non-fn-type hints fall through to plain lowerLambda.
 func (l *Lowerer) lowerLambdaHint(lam Lambda, hint IRType) IRExpr {
+	return l.lowerLambda(l.applyLambdaHint(lam, hint))
+}
+
+// applyLambdaHint returns lam with missing param types filled from hint when
+// hint resolves to an IRFnType. Already-typed params are preserved; non-fn
+// hints leave lam unchanged. Shared by lowerLambdaHint and the monadic
+// method desugar (see tryDesugarMonadicMethod) so both sites route lambda
+// param inference through the single irTypeToASTType conversion.
+func (l *Lowerer) applyLambdaHint(lam Lambda, hint IRType) Lambda {
 	fnType, ok := l.resolveDeep(hint).(IRFnType)
 	if !ok {
-		return l.lowerLambda(lam)
+		return lam
 	}
 	updated := make([]LambdaParam, len(lam.Params))
 	copy(updated, lam.Params)
@@ -3808,7 +3936,7 @@ func (l *Lowerer) lowerLambdaHint(lam Lambda, hint IRType) IRExpr {
 		}
 	}
 	lam.Params = updated
-	return l.lowerLambda(lam)
+	return lam
 }
 
 func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
@@ -3821,9 +3949,10 @@ func (l *Lowerer) lowerLambda(lam Lambda) IRExpr {
 		}
 		params[i] = IRParamDecl{GoName: p.Name, Type: typ}
 		lamSymbols = append(lamSymbols, SymbolRegInfo{
-			Name:   p.Name,
-			IRType: typ,
-			Kind:   SymParameter,
+			Name:     p.Name,
+			ArcaType: p.Type,
+			IRType:   typ,
+			Kind:     SymParameter,
 		})
 	}
 	var retType IRType

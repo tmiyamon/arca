@@ -507,13 +507,18 @@ func completionKindPtr(k protocol.CompletionItemKind) *protocol.CompletionItemKi
 
 // insertCompletionPlaceholder inserts dummy identifiers after any dangling
 // dots in the source so incomplete expressions like `u.` or `fmt.` parse.
-// This handles the case where the user is actively typing in one place
-// while another line already has a trailing dot.
+// Two cases are handled:
+//
+//  1. Trailing dots on any line (`u.`, `fmt.`) — the user is typing in one
+//     place while another line already has a trailing dot.
+//  2. A dot at the cursor position, even mid-line (`.map(u => u.)` with the
+//     cursor between `.` and `)`). Needed for inline-lambda completion where
+//     the dot is followed by call-closing tokens.
 func insertCompletionPlaceholder(source string, line, col int) string {
 	const placeholder = "_arca_completion_placeholder_"
 	lines := strings.Split(source, "\n")
+	// Case 1: trailing-dot lines.
 	for i, lineText := range lines {
-		// Find trailing dots followed only by whitespace to end-of-line
 		trimmed := strings.TrimRight(lineText, " \t")
 		if strings.HasSuffix(trimmed, ".") {
 			// Accept the dot as the start of a member access when the
@@ -524,6 +529,25 @@ func insertCompletionPlaceholder(source string, line, col int) string {
 				prev := trimmed[len(trimmed)-2]
 				if isIdentChar(prev) || prev == ')' || prev == ']' {
 					lines[i] = trimmed + placeholder + lineText[len(trimmed):]
+				}
+			}
+		}
+	}
+	// Case 2: cursor sits immediately after a dot elsewhere in its line.
+	if line >= 1 && line <= len(lines) {
+		lineText := lines[line-1]
+		pos := col - 1 // 0-based char offset of the cursor
+		if pos >= 1 && pos <= len(lineText) && lineText[pos-1] == '.' {
+			// Same member-access gate as case 1: the dot must follow an ident,
+			// `)`, or `]`.
+			if pos >= 2 {
+				prev := lineText[pos-2]
+				if isIdentChar(prev) || prev == ')' || prev == ']' {
+					// Skip when case 1 has already inserted the placeholder
+					// immediately after this dot (trailing-dot line).
+					if !strings.HasPrefix(lineText[pos:], placeholder) {
+						lines[line-1] = lineText[:pos] + placeholder + lineText[pos:]
+					}
 				}
 			}
 		}
