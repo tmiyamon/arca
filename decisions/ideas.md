@@ -4,6 +4,16 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-22: Formal EBNF grammar in SPEC.md (idea)
+
+**Context:** Arca's grammar lives only in `parser.go`'s hand-written recursive descent. SPEC.md documents syntax through examples and prose; precedence / associativity decisions (today's `*` binds tighter than `->`, arrow right-associative, trailing-comma rejected in fn type param lists) land in commit messages and decision logs rather than one cross-checkable place. Fine for a prototype — the parser is the only consumer. It becomes friction once third-party tools (syntax highlighters, alternate parsers, grammar-driven tests, formatters written against a spec) enter the picture.
+
+**Decision:** Add a Grammar section to SPEC.md in EBNF (or close variant). Cover the parser's surface: top-level decls, types (including the function-type arrow with right-associativity and `*` tightness), expressions, patterns, statements. Readability over completeness — lexical rules can stay informal if the section would balloon. Keep it in SPEC.md, not a separate GRAMMAR.md, so the spec stays single-entry.
+
+**Status:** Idea only. No owner, no scheduled slice. Good fit for a low-context session — the parser already encodes the grammar, so transcribing is mostly mechanical.
+
+---
+
 ## 2026-04-22: Function types as first-class — higher-order functions across the language (design)
 
 **Context:** `examples/todo/main.arca` migration (Phase 1 slice 4f) surfaced that `.map(db => db.Exec(...))`-style lambdas do not complete through LSP. Investigation exposed a structural gap: Arca has lambda *values* (`x => ...`) but no lambda *type* — the language has no `A -> B` syntax, no `IRFnType` IR node, and no AST `FunctionType`. Function types exist only implicitly, and only in narrow FFI-adjacent contexts:
