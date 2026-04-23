@@ -4,6 +4,16 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-04-23: Reject unknown bare type names (idea)
+
+**Context:** Writing `int` (lowercase, Go primitive) or a typo'd name like `Usre` in Arca source position silently lowers to an opaque `IRNamedType`. `lowerNamedType`'s default branch accepts any identifier that isn't one of the built-in aliases (Int, String, List, etc.), a type parameter, a trait, or a dotted Go FFI qualifier — so typos never surface until `go vet` or runtime. Contrast: `func f(x: int)` in the user's head reads as "I wrote the Arca `Int`"; the compiler reads it as "some opaque user-defined type named int" and doesn't complain.
+
+**Decision:** Reject bare (no-dot) identifiers that don't resolve to one of: Arca built-in types, `l.types`, `l.typeAliases`, type parameters in scope, traits, or constrained-field targets. Go primitives (int, string, bool, float64, byte) get a specific "did you mean Int / String / Bool / Float / Byte" hint so the typo case is obvious. Dotted names stay as FFI opaque types (no change). Error surfaces at the declaration site, not at call sites, so the message points at where the typo was written.
+
+**Status:** Idea only. No owner, no scheduled slice. Low-risk; mostly a validation-tightening slice once F-series lands.
+
+---
+
 ## 2026-04-23: Parser error recovery for LSP (idea)
 
 **Context:** `insertCompletionPlaceholder` patches one partial-input case (dangling dots) so the LSP can parse mid-keystroke. Each new partial-input shape — unclosed `(` during lambda typing, half-typed match arm, incomplete type annotation, dangling `fun` decl — would need another source-patch heuristic, and the patches compound in ways that are hard to audit as the grammar grows. Production tooling (TypeScript, rust-analyzer) solves this in the parser itself: a tolerant parser produces a partial AST with error nodes for any input, and every downstream consumer (LSP, build, tests) benefits uniformly. The `.map(db => db.` case (`)` not yet typed) is the first time the LSP-patch approach noticeably stretches — too-local a fix for a pattern that will keep recurring.
