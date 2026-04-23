@@ -2817,6 +2817,11 @@ func goTypeToIRWithVars(goType string, vars map[string]IRType) IRType {
 	if strings.HasPrefix(goType, "[]") {
 		return IRListType{Elem: goTypeToIRWithVars(goType[2:], vars)}
 	}
+	if strings.HasPrefix(goType, "func(") {
+		if fn, ok := goFuncTypeToIR(goType, vars); ok {
+			return fn
+		}
+	}
 	if vars != nil {
 		if v, ok := vars[goType]; ok {
 			return v
@@ -2830,6 +2835,39 @@ func goTypeToIRWithVars(goType string, vars map[string]IRType) IRType {
 		return IRInterfaceType{}
 	}
 	return IRNamedType{GoName: goTypeToIRName(goType)}
+}
+
+// goFuncTypeToIR parses a Go `func(...) ...` type string into an IRFnType.
+// Single-return-value shapes only (matches the legacy parseFuncType); nested
+// function types inside params are not split and fall through as named types
+// at the inner boundary. Returns (nil, false) when the string is malformed so
+// the caller can fall through to the catch-all IRNamedType emission.
+func goFuncTypeToIR(goType string, vars map[string]IRType) (IRType, bool) {
+	inner := goType[len("func("):]
+	parenEnd := strings.Index(inner, ")")
+	if parenEnd < 0 {
+		return nil, false
+	}
+	paramStr := inner[:parenEnd]
+	resultStr := strings.TrimSpace(inner[parenEnd+1:])
+
+	var params []IRType
+	if paramStr != "" {
+		for _, p := range strings.Split(paramStr, ", ") {
+			p = strings.TrimSpace(p)
+			// Named params surface as "name type" from go/types; the type is
+			// always the last whitespace-delimited token.
+			if spaceIdx := strings.LastIndex(p, " "); spaceIdx >= 0 {
+				p = p[spaceIdx+1:]
+			}
+			params = append(params, goTypeToIRWithVars(p, vars))
+		}
+	}
+	var ret IRType
+	if resultStr != "" {
+		ret = goTypeToIRWithVars(resultStr, vars)
+	}
+	return IRFnType{Params: params, Ret: ret}, true
 }
 
 // goTypeToIRName converts a go/types type string to a short Go type name.
@@ -3345,41 +3383,74 @@ func (l *Lowerer) lowerArgWithContext(expr Expr, call FnCall, argIndex int) IREx
 		}
 	}
 
-	// Lambda with missing parameter types, Go FFI side: use the FuncInfo
-	// string path that predates IRFnType. Arca-side calls fall through to
-	// the hint-based path below, where lowerLambdaHint consumes IRFnType.
-	if lam, ok := expr.(Lambda); ok {
-		if paramTypes := l.resolveCallParamFuncType(call, argIndex); paramTypes != nil {
-			lam = l.inferLambdaParamTypes(lam, paramTypes)
-			return l.lowerLambda(lam)
-		}
-	}
+	// Resolve the expected IR type of this arg. Covers Arca functions
+	// (l.functions), Go FFI package-level calls (typeResolver.ResolveFunc),
+	// and Go methods on a receiver (typeResolver.ResolveMethod). Lambdas in
+	// any of those positions get their param types from the resulting
+	// IRFnType via lowerLambdaHint — no per-call site special-casing.
+	hint := l.resolveCallParamIRType(call, argIndex)
+	return l.lowerExprHint(expr, hint)
+}
 
-	// Resolve expected type for hint-based type checking and constructor type inference.
-	// Covers Arca functions (l.functions) and Go FFI calls (resolved via TypeResolver).
-	// Go pointer params auto-wrap to Option<Ref<T>> so auto-Some lifts `&v` → `Some(&v)`.
-	var hint IRType
+// resolveCallParamIRType returns the IR type expected at argIndex of call,
+// driving hint-based arg lowering. Supports three call shapes:
+//   - Arca user function (call.Fn is a name in l.functions)
+//   - Go FFI package-level function (call.Fn is `pkg.Func`)
+//   - Go method on a receiver (call.Fn is `expr.method` on a non-package receiver)
+//
+// Go param types surface as IR types: pointer params wrap to Option[Ref[T]]
+// and `func(...)` params — including type aliases that resolve to a func
+// signature, e.g. echo.HandlerFunc — surface as IRFnType so lambda args
+// get hint-driven param inference uniformly.
+func (l *Lowerer) resolveCallParamIRType(call FnCall, argIndex int) IRType {
 	if fnIdent, ok := call.Fn.(Ident); ok {
 		if fn, ok := l.functions[fnIdent.Name]; ok && argIndex < len(fn.Params) {
-			hint = l.lowerType(fn.Params[argIndex].Type)
+			return l.lowerType(fn.Params[argIndex].Type)
 		}
 	}
-	if hint == nil {
-		if fa, ok := call.Fn.(FieldAccess); ok {
-			if ident, ok := fa.Expr.(Ident); ok {
-				if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
-					if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
-						paramGoType := resolveGoParamGoType(info, argIndex)
-						if paramGoType != "" {
-							hint = wrapPointerInOption(goTypeToIR(paramGoType))
-						}
-					}
-				}
+	fa, ok := call.Fn.(FieldAccess)
+	if !ok {
+		return nil
+	}
+	if ident, ok := fa.Expr.(Ident); ok {
+		// Arca submodule-qualified call (`math.add(...)`) resolves through its
+		// own dispatch; no FFI hint is available and lowering the module name
+		// as an expression would raise a spurious "undefined variable".
+		if l.moduleNames[ident.Name] {
+			return nil
+		}
+		if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
+			if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
+				return l.goParamTypeHint(resolveGoParamGoType(info, argIndex))
 			}
+			return nil
 		}
 	}
-	result := l.lowerExprHint(expr, hint)
-	return result
+	receiver := l.lowerExpr(fa.Expr)
+	pkg, typ, ok := l.resolveReceiverGoType(receiver)
+	if !ok {
+		return nil
+	}
+	if info := l.typeResolver.ResolveMethod(pkg, typ, fa.Field); info != nil {
+		return l.goParamTypeHint(resolveGoParamGoType(info, argIndex))
+	}
+	return nil
+}
+
+// goParamTypeHint converts a Go param type string to an IR hint, resolving
+// type aliases whose underlying type is `func(...)` (e.g. echo.HandlerFunc)
+// so the alias stops at IRFnType and lambda param inference sees the real
+// signature. Non-func types stay as they are.
+func (l *Lowerer) goParamTypeHint(goType string) IRType {
+	if goType == "" {
+		return nil
+	}
+	if !strings.HasPrefix(goType, "func(") {
+		if resolved := l.typeResolver.ResolveUnderlying(goType); strings.HasPrefix(resolved, "func(") {
+			goType = resolved
+		}
+	}
+	return wrapPointerInOption(goTypeToIR(goType))
 }
 
 // resolveGoParamGoType returns the effective Go type string for the arg at
@@ -3405,98 +3476,6 @@ func resolveGoParamGoType(info *FuncInfo, argIndex int) string {
 		return ""
 	}
 	return raw
-}
-
-// resolveCallParamFuncType resolves the Go function type for a parameter at argIndex.
-// Returns the FuncInfo if the parameter is a function type, nil otherwise.
-func (l *Lowerer) resolveCallParamFuncType(call FnCall, argIndex int) *FuncInfo {
-	if fa, ok := call.Fn.(FieldAccess); ok {
-		// Method call: resolve receiver type → method signature → param type
-		if ident, ok := fa.Expr.(Ident); ok {
-			if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
-				if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
-					if argIndex < len(info.Params) {
-						return l.parseFuncType(info.Params[argIndex].Type)
-					}
-				}
-				return nil
-			}
-		}
-		// Method on receiver
-		receiver := l.lowerExpr(fa.Expr)
-		pkg, typ, ok := l.resolveReceiverGoType(receiver)
-		if ok {
-			if info := l.typeResolver.ResolveMethod(pkg, typ, fa.Field); info != nil {
-				if argIndex < len(info.Params) {
-					return l.parseFuncType(info.Params[argIndex].Type)
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// parseFuncType parses a Go type string like "func(echo.Context) error" into FuncInfo.
-// Also resolves type aliases (e.g. echo.HandlerFunc → func(Context) error).
-func (l *Lowerer) parseFuncType(goType string) *FuncInfo {
-	if !strings.HasPrefix(goType, "func(") {
-		// Try resolving as a type alias with underlying func type
-		resolved := l.typeResolver.ResolveUnderlying(goType)
-		if resolved != "" && strings.HasPrefix(resolved, "func(") {
-			goType = resolved
-		} else {
-			return nil
-		}
-	}
-	// Use TypeResolver to get detailed function signature
-	// For now, extract param types from the string
-	// "func(echo.Context) error" → params: ["echo.Context"], results: ["error"]
-	inner := goType[5:] // strip "func("
-	parenEnd := strings.Index(inner, ")")
-	if parenEnd < 0 {
-		return nil
-	}
-	paramStr := inner[:parenEnd]
-	resultStr := strings.TrimSpace(inner[parenEnd+1:])
-
-	info := &FuncInfo{}
-	if paramStr != "" {
-		for _, p := range strings.Split(paramStr, ", ") {
-			p = strings.TrimSpace(p)
-			// Named params: "c *echo.Context" → type is "*echo.Context"
-			if spaceIdx := strings.LastIndex(p, " "); spaceIdx >= 0 {
-				p = p[spaceIdx+1:]
-			}
-			info.Params = append(info.Params, ParamInfo{Type: p})
-		}
-	}
-	if resultStr != "" {
-		info.Results = append(info.Results, ParamInfo{Type: resultStr})
-	}
-	return info
-}
-
-// inferLambdaParamTypes fills in missing parameter types from a Go function signature.
-func (l *Lowerer) inferLambdaParamTypes(lam Lambda, funcType *FuncInfo) Lambda {
-	for i := range lam.Params {
-		if lam.Params[i].Type == nil && i < len(funcType.Params) {
-			goType := funcType.Params[i].Type
-			lam.Params[i].Type = l.goTypeToArcaType(goType)
-		}
-	}
-	return lam
-}
-
-// goTypeToArcaType converts a Go type string to an Arca AST type.
-func (l *Lowerer) goTypeToArcaType(goType string) Type {
-	if strings.HasPrefix(goType, "*") {
-		inner := l.goTypeToArcaType(goType[1:])
-		if inner != nil {
-			return PointerType{Inner: inner}
-		}
-		return nil
-	}
-	return NamedType{Name: goTypeToIRName(goType)}
 }
 
 func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {

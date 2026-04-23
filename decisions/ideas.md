@@ -132,7 +132,7 @@ Removes three parallel paths:
 7. **F7** LSP: hover and completion display IRFnType as `A -> B` (Arca surface syntax). Completion on a lambda-typed value surfaces the callable shape in Detail; go-to-definition on the fn-typed binding jumps to its declaration as usual.
 8. **F8** Docs: SPEC.md (Types section gets a Function Types subsection), DESIGN.md (rationale for n-ary over curried, for no function equality), `CLAUDE.md` Key Design Decisions bullet.
 
-**Status:** F1–F3 landed 2026-04-22. F1 (AST/parser), F2 (IRFnType + lower/unify/emit), F3 (hint-driven `lowerLambdaHint`). F4 attempted and reverted: adding `LamArgType` to the monadic table and hint-typing the lambda arg got the AST-level typing working, but surfaced a structural gap that blocks completion and emit for inline-lambda monadic calls. See the 2026-04-22 "Callable IR unification" entry — unification is a prerequisite for F4–F8.
+**Status:** F1–F4 and F6 landed. F1 (AST/parser), F2 (IRFnType + lower/unify/emit), F3 (hint-driven `lowerLambdaHint`) landed 2026-04-22. F4 redone on the unified callable-IR base as slice U6 (see 2026-04-22 "Callable IR unification" entry). F6 landed 2026-04-23: `goTypeToIR` recognises `func(...)` and returns `IRFnType`; `resolveCallParamIRType` unifies the Arca-fn / Go-FFI / Go-method hint paths; `parseFuncType`, `inferLambdaParamTypes`, `goTypeToArcaType`, `resolveCallParamFuncType` retired. F5 (prelude signatures), F7 (LSP fn type display), F8 (docs) remain.
 
 ---
 
