@@ -31,6 +31,9 @@ const (
 	ErrParseExpected
 	ErrParseUnsupported
 	ErrParseInvalidSyntax
+	ErrLexUnexpectedChar
+	ErrLexUnterminatedString
+	ErrLexInvalidInterpolation
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -253,6 +256,36 @@ type ParseInvalidSyntaxData struct {
 
 func (d ParseInvalidSyntaxData) Message() string {
 	return d.Reason
+}
+
+// LexUnexpectedCharData is the lexer's "unexpected character" rejection —
+// a character that doesn't start any known token. Char is kept as a string
+// so multi-byte runes (and cases like the bare `|`) render as the source
+// wrote them.
+type LexUnexpectedCharData struct {
+	Char string
+}
+
+func (d LexUnexpectedCharData) Message() string {
+	return fmt.Sprintf("unexpected character %q", d.Char)
+}
+
+// LexUnterminatedStringData is raised when a `"..."` string literal reaches
+// end-of-line or end-of-input without a closing quote. The hint to use
+// `"""` for multiline strings stays inside the message as the common fix.
+type LexUnterminatedStringData struct{}
+
+func (d LexUnterminatedStringData) Message() string {
+	return `unterminated string (use """ for multiline)`
+}
+
+// LexInvalidInterpolationData is raised when a `${...}` interpolation
+// contains something the lexer can't consume — currently only identifiers
+// and field-access chains are supported inside interpolations.
+type LexInvalidInterpolationData struct{}
+
+func (d LexInvalidInterpolationData) Message() string {
+	return "unsupported expression in string interpolation"
 }
 
 // --- Constraint Dimensions ---

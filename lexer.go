@@ -162,6 +162,36 @@ func (l *Lexer) advance() rune {
 	return ch
 }
 
+// errUnexpectedChar is the lexer's "character that doesn't start any known
+// token" rejection. Rendered via CompileError so downstream consumers can
+// filter on ErrLexUnexpectedChar.
+func (l *Lexer) errUnexpectedChar(line, col int, ch string) error {
+	return CompileError{
+		Code:  ErrLexUnexpectedChar,
+		Pos:   Pos{Line: line, Col: col},
+		Phase: "lex",
+		Data:  LexUnexpectedCharData{Char: ch},
+	}
+}
+
+func (l *Lexer) errUnterminatedString(line, col int) error {
+	return CompileError{
+		Code:  ErrLexUnterminatedString,
+		Pos:   Pos{Line: line, Col: col},
+		Phase: "lex",
+		Data:  LexUnterminatedStringData{},
+	}
+}
+
+func (l *Lexer) errInvalidInterp(line, col int) error {
+	return CompileError{
+		Code:  ErrLexInvalidInterpolation,
+		Pos:   Pos{Line: line, Col: col},
+		Phase: "lex",
+		Data:  LexInvalidInterpolationData{},
+	}
+}
+
 func (l *Lexer) skipWhitespaceAndComments() {
 	for l.pos < len(l.input) {
 		ch := l.peek()
@@ -298,7 +328,7 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 				l.advance()
 				tokens = append(tokens, Token{TkOr, "||", line, col})
 			} else {
-				return nil, fmt.Errorf("%d:%d: unexpected '|'", line, col)
+				return nil, l.errUnexpectedChar(line, col, "|")
 			}
 		case ch == '_' && (l.pos+1 >= len(l.input) || !unicode.IsLetter(l.input[l.pos+1])):
 			l.advance()
@@ -324,7 +354,7 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			tok.Col = col
 			tokens = append(tokens, tok)
 		default:
-			return nil, fmt.Errorf("%d:%d: unexpected character '%c'", line, col, ch)
+			return nil, l.errUnexpectedChar(line, col, string(ch))
 		}
 	}
 }
@@ -379,7 +409,7 @@ func (l *Lexer) readStringOrInterp() ([]Token, error) {
 						tokens = append(tokens, tok)
 					}
 				} else {
-					return nil, fmt.Errorf("unsupported expression in string interpolation")
+					return nil, l.errInvalidInterp(l.line, l.col)
 				}
 			}
 		} else if ch == '\\' && l.pos+1 < len(l.input) {
@@ -403,7 +433,7 @@ func (l *Lexer) readStringOrInterp() ([]Token, error) {
 		}
 	}
 	if l.pos >= len(l.input) || l.peek() == '\n' {
-		return nil, fmt.Errorf("%d:%d: unterminated string (use \"\"\" for multiline)", l.line, l.col)
+		return nil, l.errUnterminatedString(l.line, l.col)
 	}
 	l.advance() // skip closing "
 
@@ -471,7 +501,7 @@ func (l *Lexer) readMultilineString() ([]Token, error) {
 						tokens = append(tokens, tok)
 					}
 				} else {
-					return nil, fmt.Errorf("unsupported expression in string interpolation")
+					return nil, l.errInvalidInterp(l.line, l.col)
 				}
 			}
 		} else {
