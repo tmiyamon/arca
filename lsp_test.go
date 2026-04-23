@@ -816,6 +816,46 @@ func diagMessages(diags []protocol.Diagnostic) []string {
 	return out
 }
 
+// Fn-typed bindings surface `A -> B` (Arca surface syntax) on hover so
+// the user sees the same form they wrote. Covers param position (f in
+// `fun apply(f: Int -> Int, ...)`) and a let-annotated position; both
+// should render identically via irTypeDisplayStr's IRFnType branch.
+// Go-to-definition on a fn-typed use also jumps to its declaration.
+func TestHoverFunctionType(t *testing.T) {
+	t.Parallel()
+	source := `fun apply(f: Int -> Int, x: Int) -> Int {
+  f(x)
+}
+
+fun main() {
+  let g: Int -> Int = n => n + 1
+  apply(g, 42)
+}
+`
+	hoverCases := []struct {
+		desc      string
+		line, col int
+		want      string
+	}{
+		{"fn-typed param f at decl", 1, 11, "Int -> Int"},
+		{"let g at decl", 6, 7, "Int -> Int"},
+		{"fn-typed g at call site", 7, 9, "Int -> Int"},
+	}
+	for _, tc := range hoverCases {
+		t.Run("hover/"+tc.desc, func(t *testing.T) {
+			got := getHoverInfo(source, "/tmp/hover_fn_type.arca", tc.line, tc.col)
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("hover at %d:%d want substring %q, got %q", tc.line, tc.col, tc.want, got)
+			}
+		})
+	}
+	// go-to-def: `g` at the apply call site jumps to the `let g` binding.
+	defPos := getDefinitionPos(source, "/tmp/hover_fn_type.arca", 7, 9)
+	if defPos.Line != 6 {
+		t.Errorf("go-to-def for fn-typed g want line 6, got %v", defPos)
+	}
+}
+
 // Test that hover returns non-empty for common cases.
 func TestHoverBasic(t *testing.T) {
 	t.Parallel()
