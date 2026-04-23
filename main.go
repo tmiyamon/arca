@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -31,7 +32,7 @@ func main() {
 	cmd := os.Args[1]
 	switch cmd {
 	case "version", "--version", "-v":
-		fmt.Printf("arca %s\n", version)
+		fmt.Printf("arca %s\n", buildVersion())
 		os.Exit(0)
 	case "run":
 		arg := "."
@@ -735,9 +736,42 @@ fun main() {
 
 const version = "v0.1.0"
 
+// buildVersion augments the static version string with the VCS revision and
+// dirty flag that Go embeds via debug.ReadBuildInfo (go build / go install
+// record these automatically from the enclosing git repo). A clean build from
+// commit abc1234 reads as `v0.1.0 (abc1234)`; a build with uncommitted
+// changes reads as `v0.1.0 (abc1234-dirty)`. Falls back to the bare version
+// string when no VCS info is embedded (e.g. `go run`).
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	var rev string
+	dirty := false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return version
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if dirty {
+		return fmt.Sprintf("%s (%s-dirty)", version, rev)
+	}
+	return fmt.Sprintf("%s (%s)", version, rev)
+}
+
 func healthCmd() int {
 	arcaPath, _ := os.Executable()
-	fmt.Printf("  arca: %s (%s)\n", version, arcaPath)
+	fmt.Printf("  arca: %s (%s)\n", buildVersion(), arcaPath)
 	ok := true
 
 	// Check Go
