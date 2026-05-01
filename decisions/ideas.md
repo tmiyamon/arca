@@ -4,6 +4,131 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-05-02: Two-stage IR completion — Stage 2 IR mirrors Go structure, emit is a pretty-printer (design)
+
+**Context:** A "match on call expression" bug — `match sql.Open(...) { Ok(db) => ... }` emits broken Go like `sql.Open(...)_err == nil` — surfaced an underlying structural defect rather than a one-off oversight. `emitMatchResult` reads `subject := em.emitExpr(m.Subject)` and string-concatenates `subject + "_err"` to fabricate the discriminator name; the whole pattern works only when the subject happens to be an `IRIdent` whose split names were registered in `expandCtx.splits` by a preceding `IRLetStmt`. A survey of `emit.go` found 12 sites where emit is reconstructing dispatch / wrapping / type information that lower already knew but did not encode in IR:
+
+- **IRMatch dispatch by Pattern scan** — `emitMatch` walks `arms[0].Pattern` to decide Result vs Option vs Enum vs Sum vs List vs Literal vs Type. The IR doesn't carry the match kind.
+- **Result/Option subject expression assumptions** — `emitMatchResult` / `emitMatchOption` synthesise discriminator and binding sources from the subject string. Non-IRIdent subjects produce broken Go (Result) or double-evaluated calls (Option, where `subject + " != nil"` and `*subject` each emit the call once).
+- **`IRLetStmt` overload** — the same node is used for plain assignment, multi-return receive (`SplitNames` populated), control-flow value assignment (`isControlFlowValue(Value) && SplitNames`), and try-let (`IRTryLetStmt`, three split fields). `emitLetStmt` branches four ways on field combinations.
+- **Constructor emit-time wrapping** — `IRSomeCall` chooses `__ptrOf(v)` vs pass-through via `isCollapsibleSomeValue` at emit time. `IRNoneExpr` chooses `(*Inner)(nil)` vs `nil` via `TypeArg != ""`. `IRFnCall` / `IRMethodCall` wrap with `__optFrom(...)` via `wrapGoMultiReturnOption(GoMultiReturn, Type)` at emit time. All three are decisions lower already had the inputs to make.
+- **`ExpandedValues` runtime spread** — `returnLeaf` / `assignMultiLeaf` runtime-check whether the leaf is `IROkCall` / `IRErrorCall` and spread `ExpandedValues`. The same expansion is encoded as a sideband field rather than a node shape.
+- **Default-arm completion** — `emitMatchEnum` / `emitMatchSumType` insert `default: Unreachable()` based on `mode.valueCtx && !hasWildcard(m)`. Lower's exhaustiveness check already determined this; emit re-derives.
+- **Error-only Result special case** — `emitMatchResult` checks `isUnitType(rt.Ok)` to decide whether `errVar` is `subject + "_err"` or `subject` itself. Lower knows `Result[Unit, _]` at construction time.
+
+The shared root: `lower.go`'s `expandResultOption` post-pass annotates IR (populates `ExpandedValues`, `SplitNames`, arm `Source` placeholders) but does not transform IR shapes. Emit is left to reconstruct dispatch and wrap form by reading the annotations plus the original subject expression by name. Any subject that isn't an `IRIdent`, any leaf that isn't a recognised `Ok`/`Error`/`Some`/`None`, any `IRLetStmt` whose flag combination falls outside the four expected shapes — emit's heuristic recovery produces malformed Go silently.
+
+The `match call(...)` bug is one consequence. The Option-subject double-eval (`if f() != nil { v := f() }`) is another. Future bugs of the same shape (any new match kind, any new constructor with a wrap rule, any new let-intent) will keep surfacing as long as emit reads sideband state.
+
+**Decision:** Complete the **two-stage IR** vision sketched in the 2026-04-19 entry (`Two-stage IR and Option as pointer-backed uniformly`). Slices 1 and 2 of that entry made Option pointer-backed and applied the wrap at FFI boundaries; Slice 3 (full Stage 2 formalisation for Result and the rest of the IR) was deferred and never landed. This entry is the formalisation of Slice 3 as a complete project — not just for Result, but for every emit-side decision listed above.
+
+Concretely: introduce a **second IR layer** whose nodes mirror Go's syntactic structure (`GoIfElse`, `GoSwitch`, `GoTypeSwitch`, `GoMultiAssign`, `GoVarDecl`, `GoReturn`, `GoIIFE`, `GoBlock`, …). The current expand pass becomes a real lowering — `stage2Lower` — that rewrites Stage 1 (Arca-semantic) IR into Stage 2 (Go-near) IR. After `stage2Lower`, no Stage 1 control-flow / let / Result-Option-constructor nodes remain. Emit becomes a pretty-printer over Stage 2 — every emit function corresponds 1:1 with a Stage 2 node, no string-concat reconstruction, no sideband lookup, no Pattern-scan dispatch, no `bodyMode` threading.
+
+The rule that emerges: **any decision the lowerer can make about Go output shape, the lowerer makes** — and reifies as a Stage 2 node. Emit is the smallest mechanical projection.
+
+### Pipeline
+
+```
+Source (.arca)
+  → Parse (AST)
+  → lower (AST → Stage 1 IR — Arca-semantic)
+  → stage2Lower (Stage 1 → Stage 2 IR — Go-structure-near)
+  → emit (Stage 2 → Go text — pretty-printer)
+```
+
+Today the boundary between "Stage 1" and "Stage 2" exists conceptually but the IR types are the same — `expandResultOption` annotates rather than rewrites. The change here is to make the boundary structural: distinct node types for Stage 1 and Stage 2, and `stage2Lower` is the only place that crosses.
+
+### Stage 2 node inventory
+
+Stage 2 nodes mirror Go's syntactic constructs. New types live in a new file `go_ir.go` (separate from `ir.go` to keep the boundary visible). Roughly:
+
+```go
+// Statements
+type GoIfElse        struct { Init GoStmt; Cond GoExpr; Then, Else GoBlock; Pos NodePos }   // if [Init;] Cond { Then } else { Else }
+type GoSwitch        struct { Subject GoExpr; Cases []GoSwitchCase; Default *GoBlock; Pos NodePos }
+type GoTypeSwitch    struct { Subject GoExpr; BindVar string; Cases []GoTypeCase; Default *GoBlock; Pos NodePos }
+type GoSwitchCase    struct { Vals []GoExpr; Body GoBlock }
+type GoTypeCase      struct { Type IRType; Body GoBlock }
+type GoVarDecl       struct { Name string; Type IRType; Init GoExpr; Pos NodePos }   // var Name Type [= Init]; Init nil → zero-value var
+type GoMultiAssign   struct { Names []string; Types []IRType; Value GoExpr; Pos NodePos } // n1, n2 := Value or var-pre-declared then n1, n2 = Value
+type GoReassign      struct { Targets []string; Values []GoExpr; Pos NodePos }       // existing names; supports n1, n2 = a, b
+type GoReturn        struct { Values []GoExpr; Pos NodePos }
+type GoExprStmt      struct { Expr GoExpr; Pos NodePos }
+type GoBlock         struct { Stmts []GoStmt }
+type GoForRange      struct { KeyVar, ValVar string; Iter GoExpr; Body GoBlock; Pos NodePos }
+type GoForCStyle     struct { Init GoStmt; Cond GoExpr; Post GoStmt; Body GoBlock; Pos NodePos }
+
+// Expressions
+type GoIIFE          struct { RetType IRType; Body GoBlock; Pos NodePos }   // func() T { ... }()  — for try-block, value-position match
+type GoUnreachable   struct {}                                              // panic("unreachable")
+type GoPtrOf         struct { Inner GoExpr; Pos NodePos }                   // __ptrOf(Inner) — Some-wrap helper call
+type GoOptFromCall   struct { Call GoExpr; Pos NodePos }                    // __optFrom(Call) — wraps (T, bool) Go call into *T
+type GoTypedNil      struct { GoType string; Pos NodePos }                  // (*int)(nil) — typed None
+type GoErrorWrap     struct { Inner GoExpr; Pos NodePos }                   // __goError{inner: Inner} — Error trait wrap
+```
+
+**Shared with Stage 1** (already Go-shaped, no rewrite needed):
+
+`IRBinaryExpr`, `IRIdent`, `IRIntLit`, `IRFloatLit`, `IRStringLit`, `IRBoolLit`, `IRStringInterp`, `IRFnCall`, `IRMethodCall`, `IRFieldAccess`, `IRIndexAccess`, `IRListLit`, `IRMapLit`, `IRTupleLit`, `IRRefExpr`, `IRConstructorCall`, all top-level decls (`IRTypeDecl`, `IRFnDecl`, `IRStructDecl`, …). These cross the stage2Lower boundary unchanged.
+
+**Stage 1 nodes that disappear after stage2Lower:**
+
+`IRMatch`, `IRMatchArm`, all `IRMatchPattern` types, `IRLetStmt` (overloaded form — replaced by `GoVarDecl` / `GoMultiAssign` / `GoReassign`), `IRTryLetStmt`, `IRTryBlock`, `IRIfExpr` (control-flow value form — replaced by `GoVarDecl` + `GoIfElse` block, or by `GoIIFE`), `IRBlock` (body form — replaced by `GoBlock`), `IROkCall`, `IRErrorCall`, `IRSomeCall`, `IRNoneExpr`. All converted by stage2Lower.
+
+### What stage2Lower decides
+
+Every emit-side decision listed in **Context** moves into `stage2Lower`:
+
+- **Match dispatch** — Stage 1 `IRMatch` becomes `GoIfElse` (Result/Option), `GoSwitch` (Enum/Literal), `GoTypeSwitch` (Sum/Type), or nested `GoIfElse` (List). Subject hoisting (synthetic let for non-IRIdent Result/Option subjects) happens here. Default-arm completion (`GoUnreachable` when no wildcard and value-context) happens here.
+- **Result/Option subject form** — call-subject Result becomes `GoIfElse{Init: GoMultiAssign{...}, Cond: ErrVar+" != nil", ...}` (Go's idiomatic `if v, err := f(); err != nil` form). Let-bound subject becomes `GoIfElse{Init: nil, Cond: ErrVar+" != nil", ...}` (no Init; references prior decl). Option call-subject becomes `GoIfElse{Init: GoVarDecl{Name: hoist, Init: <call>}, Cond: hoist+" != nil", ...}` — single evaluation by construction.
+- **Let intent** — Stage 1 `IRLetStmt` with `SplitNames` becomes `GoMultiAssign`. Stage 1 `IRLetStmt` with control-flow value becomes `GoVarDecl{Init: nil}` followed by stage2-lowered control-flow whose leaves become `GoReassign`. Plain `IRLetStmt` becomes `GoVarDecl`.
+- **Constructor wraps** — `IRSomeCall` becomes `GoPtrOf` (or its inner expression on collapse). `IRNoneExpr` becomes `GoTypedNil` (or bare `nil` GoExpr in untyped position). `IRFnCall.GoMultiReturn` for `(T, bool)` Option positions becomes `GoOptFromCall`.
+- **Return-pair expansion** — Tail-position `IROkCall` / `IRErrorCall` becomes `GoReturn{Values: [val, err]}`. Mid-tree (non-tail) `IROkCall` doesn't exist (Result has no Go literal — Ok/Error must be at a tail). The `ExpandedValues` field is deleted.
+- **`__goError` wrap** — When match's subject Err is `IRTraitType{Error}`, the binding source in Stage 1 becomes `GoErrorWrap{Inner: ErrVar}` in Stage 2. emit just renders the wrap.
+- **`isUnitType(rt.Ok)` Result-only-error** — Stage 2 `GoIfElse` simply uses the err var directly; if Result Ok is Unit, stage2Lower skips emitting a value var (the multi-assign has 1 slot, named like the err). emit doesn't re-derive.
+- **`bodyMode` retired** — Stage 2 nodes encode position. `GoBlock` ending in a value-yielding leaf has the leaf wrapped explicitly: `GoReturn{...}` (return position), `GoReassign{Targets: [name], Values: [...]}` (assign position), or `GoExprStmt{...}` (void position). The wrap happens once during stage2Lower, not at every emit walk.
+
+### Anti-goals
+
+- **AST and Stage 1 IR stay.** The main lowering path (`lower.go`) is unchanged. Stage 1 IR remains the AST-near, Arca-semantic representation. Only the post-expand stage and emit are refactored.
+- **TypeResolver / Go FFI layer.** No change. The Go-typed boundary stays where it is.
+- **Snapshot regeneration.** Produced Go output must remain byte-identical. If a test fails because output changed, that's a regression in the rewrite, not an expected drift.
+- **Replacing `go_ir.go` with `go/ast`.** Tempting (free `go/printer` formatting), but mixing Arca's IR types with `go/ast`'s parser-shaped nodes adds friction (positions, comments, parser-only fields). Stay with our own types and our existing `GoWriter` printer. Revisit later as a separate decision.
+
+### Implementation slices
+
+Each slice ships independently; tests stay green throughout. Snapshots remain byte-identical except where Stage 2 produces *cleaner* Go (e.g., call-subject Result match becomes valid Go for the first time — those tests are currently failing or absent).
+
+1. **S1 — Stage 2 node definitions.** New file `go_ir.go` defines the Stage 2 types listed above. No lower/emit wiring yet. Tests: `go build ./...` passes. Foundation for everything else.
+
+2. **S2 — stage2Lower for Result/Option matches + `IRLetStmt` overloads.** `stage2Lower` produces `GoIfElse` / `GoMultiAssign` / `GoVarDecl` / `GoReturn` for the Result and Option cases (matches + let bindings + tail-position Ok/Error/Some/None). `emit.go` gains handlers for the new Stage 2 nodes. Stage 1 `IRMatch` (Result/Option arms) and `IRLetStmt` (with `SplitNames`) no longer reach emit. Other Stage 1 node paths in emit retained for now. Tests: snapshots unchanged except call-subject Result match (gains a passing test) and Option call-subject (no longer double-evaluates).
+
+3. **S3 — stage2Lower for Enum/Sum/List/Literal/Type matches + `IRIfExpr` + `IRBlock`.** The remaining match kinds become `GoSwitch` / `GoTypeSwitch` / nested `GoIfElse`. `IRIfExpr` becomes either a `GoIfElse` statement (when in stmt position) or `GoVarDecl + GoIfElse + GoReassign` (value position). `IRBlock` becomes `GoBlock`. Default-arm `GoUnreachable` synthesised here. `bodyMode` machinery retires — leaf wrapping is now in stage2Lower. Tests: snapshots unchanged.
+
+4. **S4 — stage2Lower for constructor wraps + `IRTryBlock`.** `IRSomeCall`, `IRNoneExpr`, `IRFnCall.GoMultiReturn` become `GoPtrOf` / `GoTypedNil` / `GoOptFromCall`. `IRTryBlock` becomes `GoIIFE`. `IRTryLetStmt` becomes appropriate Stage 2 form (`GoIfElse{Init: GoMultiAssign, Then: GoReturn{val, err}, Else: GoVarDecl{val}}`-ish). The `ExpandedValues` field on Stage 1 nodes is deleted. emit's `wrapGoMultiReturnOption`, `isCollapsibleSomeValue`, `noneInnerGoType`, `expandedValues()`, `splitVarTypes` retire.
+
+5. **S5 — Stage 1 emit retirement + docs.** Verify no Stage 1 control-flow / let / Result-Option-constructor nodes reach emit (assert at the entry of every Stage-1-only emit handler that the input is unreachable). Delete `emitMatch`, `emitMatchResult`, `emitMatchOption`, `emitMatchEnum`, `emitMatchSumType`, `emitMatchList`, `emitMatchLiteral`, `emitMatchType`, `emitLetStmt`'s overloaded branches, `emitTryLetStmt`, `emitTryBlockExpr`, `emitIfExpr`, `emitBody`, `returnLeaf`, `voidLeaf`, `assignLeaf`, `assignMultiLeaf`, `bodyMode`, all four mode constructors, `expandResultOption` (replaced by `stage2Lower`), `expandCtx`, `resolveMatchBindings`, `markUnusedSplits`, `flattenArgs`, `expandedValues`. SPEC.md / DESIGN.md / CLAUDE.md updated to describe the two-stage IR. `decisions/transpiler.md` gets a decision-log entry summarising the landed shape.
+
+### Estimated code-size impact
+
+| File | Before | After | Delta |
+|---|---|---|---|
+| `ir.go` | ~700 | ~700 | 0 (Stage 1 unchanged) |
+| `go_ir.go` | 0 | ~250 | +250 |
+| `lower.go` (main lowering) | ~5500 | ~5500 | 0 |
+| `lower.go` (`expandResultOption` + helpers) | ~500 | ~0 | -500 |
+| `stage2.go` (new — `stage2Lower`) | 0 | ~900 | +900 |
+| `emit.go` | ~1610 | ~700 | -900 |
+| **Total** | **~8310** | **~8050** | **-260** |
+
+Net code reduction is small, but the structural clarity is significant. Each line in `stage2Lower` says "here is how this Arca shape becomes that Go shape" — uniformly.
+
+### Status
+
+Slice plan approved 2026-05-02. S1 starts next. The earlier 2026-04-19 entry's deferred Slice 3 is subsumed by this work; that entry stays as the historical origin of the direction.
+
+---
+
 ## 2026-04-23: Reject unknown bare type names (idea)
 
 **Context:** Writing `int` (lowercase, Go primitive) or a typo'd name like `Usre` in Arca source position silently lowers to an opaque `IRNamedType`. `lowerNamedType`'s default branch accepts any identifier that isn't one of the built-in aliases (Int, String, List, etc.), a type parameter, a trait, or a dotted Go FFI qualifier — so typos never surface until `go vet` or runtime. Contrast: `func f(x: int)` in the user's head reads as "I wrote the Arca `Int`"; the compiler reads it as "some opaque user-defined type named int" and doesn't complain.
@@ -575,6 +700,8 @@ Auto-Some (2026-04-19 companion entry) produces `IRSomeCall` at the logical IR l
 **Progress (2026-04-19):** Slice 1 (Option pointer-backed + auto-Some) implemented. Option-specific split machinery removed; `match opt` uniformly `if subject != nil`; FFI `(T, bool)` wrapped via `__optFrom`; `Some(v)` via `__ptrOf(v)` with Ref/Ptr collapse; `None` as typed nil. Known bugs from the session handoff (`let x: Option<T> = None`, `Some(v)` in let position) auto-resolved.
 
 **Progress (2026-04-19, continued):** Slice 2 (FFI param/field/generic-inner wrap) implemented. `wrapPointerInOption` now applied at Go FFI param types in `instantiateGeneric`, struct field resolution in `resolveFieldType`, and recursively through generic inners. Go FFI call arg lowering propagates the wrapped param type as a hint so auto-Some lifts `&v` → `Some(&v)` at the call site — no user ceremony needed. Slice 3 (Result stage-2 formalization with `IRMultiSlotType`) still deferred.
+
+**Progress (2026-05-02):** Slice 3 expanded into the broader project of formalising Stage 2 IR end-to-end (every emit-side decision retired, not only Result). Tracked separately under the 2026-05-02 entry "Two-stage IR completion — Stage 2 IR mirrors Go structure, emit is a pretty-printer". This entry stays as the historical origin of the direction; the 2026-05-02 entry is the implementation plan.
 
 ---
 
