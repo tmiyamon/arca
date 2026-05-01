@@ -525,17 +525,19 @@ func (em *Emitter) emitLambda(l IRFn) string {
 	if l.Ret != nil {
 		retType = " " + em.irReturnTypeStr(l.Ret)
 	}
+	// Body has been stage2-lowered (walkLambdasInExpr) into an IRBlock
+	// of Stage 2 stmts; emit just walks the list. emitFnBody handles
+	// both return-typed and void lambdas uniformly.
+	w := em.w
+	bodyWriter := NewGoWriter()
+	em.w = bodyWriter
+	em.emitFnBody(l.Body)
+	bodyStr := em.w.String()
+	em.w = w
 	if l.Ret != nil {
-		// Use emitReturnExpr for proper multi-return handling
-		w := em.w
-		bodyWriter := NewGoWriter()
-		em.w = bodyWriter
-		em.emitReturnExpr(l.Body)
-		bodyStr := em.w.String()
-		em.w = w
 		return fmt.Sprintf("func(%s)%s {\n%s}", strings.Join(params, ", "), retType, bodyStr)
 	}
-	return fmt.Sprintf("func(%s) { %s }", strings.Join(params, ", "), em.emitExpr(l.Body))
+	return fmt.Sprintf("func(%s) {\n%s}", strings.Join(params, ", "), bodyStr)
 }
 
 func (em *Emitter) emitListLit(l IRListLit) string {
@@ -575,153 +577,9 @@ func (em *Emitter) emitTupleLit(t IRTupleLit) string {
 
 // --- Body Emission Modes ---
 //
-// Control-flow constructs like `if` and `match` can appear in three contexts:
-// (1) as a tail expression whose value is returned from the enclosing function,
-// (2) as a statement in void context where the value is discarded, and
-// (3) as a value-producing expression assigned to a variable.
-//
-// emitBody walks the common IRBlock / IRMatch / IRIfExpr / IRFor* structure
-// once and defers leaf handling to a callback. The three callers
-// (returnLeaf, voidLeaf, assignLeaf) differ only in what they emit when the
-// traversal reaches a non-control-flow expression.
-
-type emitLeaf func(e IRExpr)
-
-// bodyMode describes how a control-flow construct's leaves should be emitted.
-// - leaf: how to emit each non-control-flow expression at the bottom
-// - valueCtx: true when the surrounding context needs every branch to yield a
-//   value (return or assign). Drives whether a non-exhaustive match gets a
-//   `panic("unreachable")` fallback to satisfy Go's definite-return analysis.
-type bodyMode struct {
-	leaf     emitLeaf
-	valueCtx bool
-}
-
-func (em *Emitter) returnMode() bodyMode {
-	return bodyMode{leaf: em.returnLeaf, valueCtx: true}
-}
-
-func (em *Emitter) voidMode() bodyMode {
-	return bodyMode{leaf: em.voidLeaf, valueCtx: false}
-}
-
-func (em *Emitter) assignMode(goName string) bodyMode {
-	return bodyMode{leaf: em.assignLeaf(goName), valueCtx: true}
-}
-
-// assignMultiMode assigns expanded Result/Option values to multiple split names.
-// Used when a control-flow expression (match/if) appears as the value of a
-// multi-return let binding.
-func (em *Emitter) assignMultiMode(names []string) bodyMode {
-	return bodyMode{leaf: em.assignMultiLeaf(names), valueCtx: true}
-}
-
-func (em *Emitter) emitBody(e IRExpr, mode bodyMode) {
-	if e == nil {
-		return
-	}
-	switch expr := e.(type) {
-	case IRVoidExpr:
-		// nothing to emit
-	case IRBlock:
-		for _, stmt := range expr.Stmts {
-			em.emitStmt(stmt)
-		}
-		if expr.Expr != nil {
-			em.emitBody(expr.Expr, mode)
-		}
-	case IRForRange:
-		em.emitForRange(expr)
-	case IRForEach:
-		em.emitForEach(expr)
-	default:
-		mode.leaf(e)
-	}
-}
-
-func (em *Emitter) returnLeaf(e IRExpr) {
-	// Expanded Result/Option constructors: emit as multi-value return.
-	if vals := expandedValues(e); len(vals) > 0 {
-		parts := make([]string, len(vals))
-		for i, v := range vals {
-			parts[i] = em.emitExpr(v)
-		}
-		em.w.Return(strings.Join(parts, ", "))
-		return
-	}
-	em.w.Return(em.emitExpr(e))
-}
-
-// expandedValues returns the pre-computed ExpandedValues from the
-// expandResultOption post-pass, or nil if not expanded. Only Result leaves
-// produce expanded values now; Option is pointer-backed and emits as a
-// single value via emitExpr.
-func expandedValues(e IRExpr) []IRExpr {
-	switch expr := e.(type) {
-	case IROkCall:
-		return expr.ExpandedValues
-	case IRErrorCall:
-		return expr.ExpandedValues
-	}
-	return nil
-}
-
-func (em *Emitter) voidLeaf(e IRExpr) {
-	em.w.Stmt(em.emitExpr(e))
-}
-
-func (em *Emitter) assignLeaf(goName string) emitLeaf {
-	return func(e IRExpr) {
-		em.w.Set(goName, em.emitExpr(e))
-	}
-}
-
-// assignMultiLeaf reads ExpandedValues from a leaf Result/Option constructor
-// (Ok/Error/Some/None) and assigns each to its split name.
-func (em *Emitter) assignMultiLeaf(names []string) emitLeaf {
-	return func(e IRExpr) {
-		vals := expandedValues(e)
-		if len(vals) != len(names) {
-			// Leaf isn't an expanded Result/Option constructor — fall back
-			// so partial output is still visible rather than silently dropped.
-			em.w.Set(strings.Join(names, ", "), em.emitExpr(e))
-			return
-		}
-		parts := make([]string, len(vals))
-		for i, v := range vals {
-			parts[i] = em.emitExpr(v)
-		}
-		em.w.Set(strings.Join(names, ", "), strings.Join(parts, ", "))
-	}
-}
-
-// declareSplitVars emits `var name T` for each split name, typed from the
-// outer multi-return type (Result/Option).
-func (em *Emitter) declareSplitVars(names []string, multiType IRType) {
-	types := em.splitVarTypes(multiType, len(names))
-	for i, name := range names {
-		em.w.Var(name, types[i])
-	}
-}
-
-// splitVarTypes returns the Go types for each split name given the outer
-// multi-return type. Only Result remains multi-slot; Option is pointer-backed.
-func (em *Emitter) splitVarTypes(t IRType, n int) []string {
-	switch tt := t.(type) {
-	case IRResultType:
-		return []string{em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err)}
-	}
-	// Fallback: all interface{} (shouldn't hit in practice)
-	types := make([]string, n)
-	for i := range types {
-		types[i] = "interface{}"
-	}
-	return types
-}
-
-// Backwards-compatible wrappers so existing call sites stay short.
-func (em *Emitter) emitReturnExpr(e IRExpr) { em.emitBody(e, em.returnMode()) }
-func (em *Emitter) emitVoidBody(e IRExpr)   { em.emitBody(e, em.voidMode()) }
+// bodyMode and its leaf callbacks were retired in slice S4b. Stage 2
+// lowering now wraps every leaf statement in the right form (GoReturn /
+// GoReassign / GoExprStmt) so emit walks IRBlock.Stmts directly.
 
 // --- Statements ---
 
@@ -730,8 +588,6 @@ func (em *Emitter) emitStmt(s IRStmt) {
 	switch stmt := s.(type) {
 	case IRLetStmt:
 		em.emitLetStmt(stmt)
-	case IRTryLetStmt:
-		em.emitTryLetStmt(stmt)
 	case IRExprStmt:
 		em.emitExprStmt(stmt)
 	case IRDeferStmt:
@@ -904,30 +760,6 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 		w.Stmt(fmt.Sprintf("_ = %s", em.emitExpr(stmt.Value)))
 		return
 	}
-	// Multi-return calls with control-flow value: declare all split names,
-	// then walk the body so each Ok/Error/Some/None leaf assigns to all
-	// split names via expanded values. Covers `let x = match r { ... }`
-	// where arms produce Result/Option values.
-	if len(stmt.SplitNames) > 0 && isControlFlowValue(stmt.Value) {
-		em.declareSplitVars(stmt.SplitNames, stmt.Value.irType())
-		em.emitBody(stmt.Value, em.assignMultiMode(stmt.SplitNames))
-		return
-	}
-	// Multi-return calls: SplitNames populated by expandResultOption post-pass.
-	if len(stmt.SplitNames) > 0 {
-		names := strings.Join(stmt.SplitNames, ", ")
-		w.AssignMulti(names, em.emitExpr(stmt.Value))
-		return
-	}
-	// Value-position control flow (`let x = if ... { a } else { b }`, same for
-	// match): declare the var first, then walk the control-flow body so each
-	// leaf expression assigns to the declared var.
-	if isControlFlowValue(stmt.Value) {
-		typeStr := em.irTypeStr(em.letStmtType(stmt))
-		w.Var(stmt.GoName, typeStr)
-		em.emitBody(stmt.Value, em.assignMode(stmt.GoName))
-		return
-	}
 	if stmt.Type != nil {
 		if ll, ok := stmt.Value.(IRListLit); ok && len(ll.Elements) == 0 && ll.Spread == nil {
 			w.Var(stmt.GoName, em.irTypeStr(stmt.Type))
@@ -941,35 +773,11 @@ func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 
 // isControlFlowValue reports whether the given IR expression is a
 // control-flow construct that must be emitted as Go statements rather than
-// a single expression.
+// a single expression. Used by stage2 to decide whether an IRLetStmt's
+// value needs predeclare-then-walk treatment.
 func isControlFlowValue(e IRExpr) bool {
 	switch e.(type) {
 	case IRIfExpr, IRMatch:
-		return true
-	}
-	return false
-}
-
-
-// letStmtType returns the declared or inferred Go type for a let binding.
-// Prefers the explicit annotation when present; otherwise falls back to the
-// value's own IR type so control-flow values get a concrete var declaration.
-func (em *Emitter) letStmtType(stmt IRLetStmt) IRType {
-	if stmt.Type != nil {
-		return stmt.Type
-	}
-	if t := stmt.Value.irType(); t != nil {
-		return t
-	}
-	return IRInterfaceType{}
-}
-
-
-
-// isMultiReturnType checks if an IR type will be emitted as Go multi-return.
-func isMultiReturnType(t IRType) bool {
-	switch t.(type) {
-	case IRResultType, IROptionType:
 		return true
 	}
 	return false
@@ -983,48 +791,18 @@ func isUnitType(t IRType) bool {
 	return false
 }
 
-func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
-	w := em.w
-
-	// SplitNames, ErrorReturnValues, and ValueName are pre-computed by
-	// the expandResultOption post-pass. Emit is mechanical.
-	names := strings.Join(stmt.SplitNames, ", ")
-	if isControlFlowValue(stmt.CallExpr) {
-		// `let x = match ... { Ok(...) => Ok(...); Error(...) => Error(...) }?`
-		// — the match produces a Result whose multi-return values must be
-		// assigned across the split names. Declare split vars, then walk
-		// the body leaves with a multi-assign mode.
-		em.declareSplitVars(stmt.SplitNames, stmt.CallExpr.irType())
-		em.emitBody(stmt.CallExpr, em.assignMultiMode(stmt.SplitNames))
-	} else if len(stmt.SplitNames) == 1 {
-		w.Assign(names, em.emitExpr(stmt.CallExpr))
-	} else {
-		w.AssignMulti(names, em.emitExpr(stmt.CallExpr))
+// isMultiReturnType checks if an IR type will be emitted as Go multi-return.
+// Used by expandResultOption to detect when a let-bound value needs split
+// names. Both Result and Option are listed historically; under the
+// pointer-backed Option scheme only Result actually multi-returns, but
+// expandLetToMultiLet handles only Result and the predicate stays
+// permissive.
+func isMultiReturnType(t IRType) bool {
+	switch t.(type) {
+	case IRResultType, IROptionType:
+		return true
 	}
-
-	errName := stmt.SplitNames[len(stmt.SplitNames)-1]
-	w.If(fmt.Sprintf("%s != nil", errName), func() {
-		parts := make([]string, len(stmt.ErrorReturnValues))
-		for i, v := range stmt.ErrorReturnValues {
-			parts[i] = em.emitExpr(v)
-		}
-		w.Return(strings.Join(parts, ", "))
-	})
-
-	// Nil check for pointer Option: (*T, error) where val==nil && err==nil
-	if len(stmt.NilCheckReturnValues) > 0 && stmt.ValueName != "" {
-		w.If(fmt.Sprintf("%s == nil", stmt.ValueName), func() {
-			parts := make([]string, len(stmt.NilCheckReturnValues))
-			for i, v := range stmt.NilCheckReturnValues {
-				parts[i] = em.emitExpr(v)
-			}
-			w.Return(strings.Join(parts, ", "))
-		})
-	}
-
-	if stmt.GoName != "_" && stmt.ValueName != "" {
-		w.Assign(stmt.GoName, stmt.ValueName)
-	}
+	return false
 }
 
 // emitTryBlockExpr emits try { ... } as a Go IIFE: func() (T, error) { ... }().

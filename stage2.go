@@ -45,7 +45,236 @@ func stage2Lower(funcs []IRFn) []IRFn {
 	for i := range funcs {
 		funcs[i] = stage2LowerFn(funcs[i])
 	}
+	// Second pass: walk every anonymous lambda's body so emit no longer
+	// needs bodyMode for `emitLambda`.
+	for i := range funcs {
+		funcs[i].Body = walkLambdasInExpr(funcs[i].Body)
+	}
 	return funcs
+}
+
+// walkLambdasInExpr finds every anonymous IRFn (lambda literal) reachable
+// from e and stage2-lowers its body. Anonymous IRFn is emitted as a Go
+// `func(...) { ... }` literal; without this pass its body would still
+// contain Stage 1 control-flow that emit's bodyMode-based machinery used
+// to handle.
+func walkLambdasInExpr(e IRExpr) IRExpr {
+	if e == nil {
+		return nil
+	}
+	switch x := e.(type) {
+	case IRFn:
+		if x.GoName == "" {
+			mode := s2Return
+			if x.Ret == nil || isUnitType(x.Ret) {
+				mode = s2Void
+			}
+			walker := &stage2Walker{}
+			stmts := walker.walkExpr(x.Body, mode, nil)
+			for i, s := range stmts {
+				stmts[i] = walkLambdasInStmt(s)
+			}
+			x.Body = IRBlock{Stmts: stmts}
+		}
+		return x
+	case IRBlock:
+		for i, s := range x.Stmts {
+			x.Stmts[i] = walkLambdasInStmt(s)
+		}
+		x.Expr = walkLambdasInExpr(x.Expr)
+		return x
+	case IRTryBlock:
+		for i, s := range x.Stmts {
+			x.Stmts[i] = walkLambdasInStmt(s)
+		}
+		x.Expr = walkLambdasInExpr(x.Expr)
+		return x
+	case IRFnCall:
+		x.Fn = walkLambdasInExpr(x.Fn)
+		for i := range x.Args {
+			x.Args[i] = walkLambdasInExpr(x.Args[i])
+		}
+		return x
+	case IRMethodCall:
+		x.Receiver = walkLambdasInExpr(x.Receiver)
+		for i := range x.Args {
+			x.Args[i] = walkLambdasInExpr(x.Args[i])
+		}
+		return x
+	case IRFieldAccess:
+		x.Expr = walkLambdasInExpr(x.Expr)
+		return x
+	case IRIndexAccess:
+		x.Expr = walkLambdasInExpr(x.Expr)
+		x.Index = walkLambdasInExpr(x.Index)
+		return x
+	case IRBinaryExpr:
+		x.Left = walkLambdasInExpr(x.Left)
+		x.Right = walkLambdasInExpr(x.Right)
+		return x
+	case IRRefExpr:
+		x.Expr = walkLambdasInExpr(x.Expr)
+		return x
+	case IRConstructorCall:
+		for i := range x.Fields {
+			x.Fields[i].Value = walkLambdasInExpr(x.Fields[i].Value)
+		}
+		return x
+	case IROkCall:
+		x.Value = walkLambdasInExpr(x.Value)
+		for i := range x.ExpandedValues {
+			x.ExpandedValues[i] = walkLambdasInExpr(x.ExpandedValues[i])
+		}
+		return x
+	case IRErrorCall:
+		x.Value = walkLambdasInExpr(x.Value)
+		for i := range x.ExpandedValues {
+			x.ExpandedValues[i] = walkLambdasInExpr(x.ExpandedValues[i])
+		}
+		return x
+	case IRSomeCall:
+		x.Value = walkLambdasInExpr(x.Value)
+		return x
+	case IRStringInterp:
+		for i := range x.Args {
+			x.Args[i] = walkLambdasInExpr(x.Args[i])
+		}
+		return x
+	case IRListLit:
+		for i := range x.Elements {
+			x.Elements[i] = walkLambdasInExpr(x.Elements[i])
+		}
+		x.Spread = walkLambdasInExpr(x.Spread)
+		return x
+	case IRMapLit:
+		for i := range x.Entries {
+			x.Entries[i].Key = walkLambdasInExpr(x.Entries[i].Key)
+			x.Entries[i].Value = walkLambdasInExpr(x.Entries[i].Value)
+		}
+		return x
+	case IRTupleLit:
+		for i := range x.Elements {
+			x.Elements[i] = walkLambdasInExpr(x.Elements[i])
+		}
+		return x
+	case IRForRange:
+		x.Start = walkLambdasInExpr(x.Start)
+		x.End = walkLambdasInExpr(x.End)
+		x.Body = walkLambdasInExpr(x.Body)
+		return x
+	case IRForEach:
+		x.Iter = walkLambdasInExpr(x.Iter)
+		x.Body = walkLambdasInExpr(x.Body)
+		return x
+	case IRMatch:
+		x.Subject = walkLambdasInExpr(x.Subject)
+		for i := range x.Arms {
+			x.Arms[i].Body = walkLambdasInExpr(x.Arms[i].Body)
+		}
+		return x
+	case IRIfExpr:
+		x.Cond = walkLambdasInExpr(x.Cond)
+		x.Then = walkLambdasInExpr(x.Then)
+		x.Else = walkLambdasInExpr(x.Else)
+		return x
+	case GoErrorWrap:
+		x.Inner = walkLambdasInExpr(x.Inner)
+		return x
+	case GoDeref:
+		x.Inner = walkLambdasInExpr(x.Inner)
+		return x
+	}
+	return e
+}
+
+func walkLambdasInStmt(s IRStmt) IRStmt {
+	switch stmt := s.(type) {
+	case IRLetStmt:
+		stmt.Value = walkLambdasInExpr(stmt.Value)
+		return stmt
+	case IRTryLetStmt:
+		stmt.CallExpr = walkLambdasInExpr(stmt.CallExpr)
+		for i := range stmt.ErrorReturnValues {
+			stmt.ErrorReturnValues[i] = walkLambdasInExpr(stmt.ErrorReturnValues[i])
+		}
+		for i := range stmt.NilCheckReturnValues {
+			stmt.NilCheckReturnValues[i] = walkLambdasInExpr(stmt.NilCheckReturnValues[i])
+		}
+		return stmt
+	case IRExprStmt:
+		stmt.Expr = walkLambdasInExpr(stmt.Expr)
+		return stmt
+	case IRDeferStmt:
+		stmt.Expr = walkLambdasInExpr(stmt.Expr)
+		return stmt
+	case IRAssertStmt:
+		stmt.Expr = walkLambdasInExpr(stmt.Expr)
+		return stmt
+	case IRDestructureStmt:
+		stmt.Value = walkLambdasInExpr(stmt.Value)
+		return stmt
+	case GoMultiAssign:
+		stmt.Value = walkLambdasInExpr(stmt.Value)
+		return stmt
+	case GoVarDecl:
+		stmt.Init = walkLambdasInExpr(stmt.Init)
+		return stmt
+	case GoReassign:
+		for i := range stmt.Values {
+			stmt.Values[i] = walkLambdasInExpr(stmt.Values[i])
+		}
+		return stmt
+	case GoReturn:
+		for i := range stmt.Values {
+			stmt.Values[i] = walkLambdasInExpr(stmt.Values[i])
+		}
+		return stmt
+	case GoExprStmt:
+		stmt.Expr = walkLambdasInExpr(stmt.Expr)
+		return stmt
+	case GoIfElse:
+		if stmt.Init != nil {
+			stmt.Init = walkLambdasInStmt(stmt.Init)
+		}
+		stmt.Cond = walkLambdasInExpr(stmt.Cond)
+		for i, s := range stmt.Then.Stmts {
+			stmt.Then.Stmts[i] = walkLambdasInStmt(s)
+		}
+		for i, s := range stmt.Else.Stmts {
+			stmt.Else.Stmts[i] = walkLambdasInStmt(s)
+		}
+		return stmt
+	case GoSwitch:
+		stmt.Subject = walkLambdasInExpr(stmt.Subject)
+		for i := range stmt.Cases {
+			for j := range stmt.Cases[i].Vals {
+				stmt.Cases[i].Vals[j] = walkLambdasInExpr(stmt.Cases[i].Vals[j])
+			}
+			for j, s := range stmt.Cases[i].Body.Stmts {
+				stmt.Cases[i].Body.Stmts[j] = walkLambdasInStmt(s)
+			}
+		}
+		if stmt.Default != nil {
+			for i, s := range stmt.Default.Stmts {
+				stmt.Default.Stmts[i] = walkLambdasInStmt(s)
+			}
+		}
+		return stmt
+	case GoTypeSwitch:
+		stmt.Subject = walkLambdasInExpr(stmt.Subject)
+		for i := range stmt.Cases {
+			for j, s := range stmt.Cases[i].Body.Stmts {
+				stmt.Cases[i].Body.Stmts[j] = walkLambdasInStmt(s)
+			}
+		}
+		if stmt.Default != nil {
+			for i, s := range stmt.Default.Stmts {
+				stmt.Default.Stmts[i] = walkLambdasInStmt(s)
+			}
+		}
+		return stmt
+	}
+	return s
 }
 
 func stage2LowerFn(fn IRFn) IRFn {
