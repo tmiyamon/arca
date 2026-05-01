@@ -179,8 +179,7 @@ func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 		return []IRStmt{stmt}
 
 	case IRTryLetStmt:
-		// S4 will convert. Pass through.
-		return []IRStmt{stmt}
+		return w.lowerTryLetStmt(stmt)
 
 	case IRExprStmt:
 		// Statement-position expression: walk in void mode.
@@ -659,6 +658,64 @@ func (w *stage2Walker) buildIfElseFromExpr(e IRIfExpr, mode s2Mode, targets []st
 		Then: GoBlock{Stmts: thenStmts},
 		Else: GoBlock{Stmts: elseStmts},
 	}}
+}
+
+// lowerTryLetStmt converts `let x = expr?` into a sequence of Stage 2
+// statements: receive multi-return values into split names, branch to
+// the enclosing function's error return when the err slot is non-nil
+// (and optionally when the val slot is nil for pointer-Option), then
+// bind the user's name to the value slot.
+func (w *stage2Walker) lowerTryLetStmt(stmt IRTryLetStmt) []IRStmt {
+	var out []IRStmt
+
+	// Receive the multi-return values into the split names.
+	if isControlFlowValue(stmt.CallExpr) {
+		if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
+			if isUnitType(rt.Ok) && len(stmt.SplitNames) >= 1 {
+				out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: IRNamedType{GoName: "error"}})
+			} else if len(stmt.SplitNames) >= 2 {
+				out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: rt.Ok})
+				out = append(out, GoVarDecl{Name: stmt.SplitNames[1], Type: IRNamedType{GoName: "error"}})
+			}
+		}
+		out = append(out, w.walkExpr(stmt.CallExpr, s2Multi, stmt.SplitNames)...)
+	} else if len(stmt.SplitNames) == 1 {
+		out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Init: stmt.CallExpr})
+	} else {
+		out = append(out, GoMultiAssign{Names: stmt.SplitNames, Value: stmt.CallExpr})
+	}
+
+	// Error propagation: if err != nil { return errorReturnValues }
+	errName := stmt.SplitNames[len(stmt.SplitNames)-1]
+	out = append(out, GoIfElse{
+		Cond: IRBinaryExpr{
+			Op:    "!=",
+			Left:  IRIdent{GoName: errName},
+			Right: IRIdent{GoName: "nil"},
+			Type:  IRNamedType{GoName: "bool"},
+		},
+		Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: stmt.ErrorReturnValues}}},
+	})
+
+	// Pointer-Option nil check: if val == nil { return nilCheckReturnValues }
+	if len(stmt.NilCheckReturnValues) > 0 && stmt.ValueName != "" {
+		out = append(out, GoIfElse{
+			Cond: IRBinaryExpr{
+				Op:    "==",
+				Left:  IRIdent{GoName: stmt.ValueName},
+				Right: IRIdent{GoName: "nil"},
+				Type:  IRNamedType{GoName: "bool"},
+			},
+			Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: stmt.NilCheckReturnValues}}},
+		})
+	}
+
+	// Bind the user's name to the value slot.
+	if stmt.GoName != "_" && stmt.ValueName != "" {
+		out = append(out, GoVarDecl{Name: stmt.GoName, Init: IRIdent{GoName: stmt.ValueName}})
+	}
+
+	return out
 }
 
 // lowerTryBlockInternals walks an IRTryBlock's Stmts and tail Expr in
