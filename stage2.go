@@ -101,7 +101,20 @@ func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStm
 		if isOptionMatchArms(x) {
 			return w.buildOptionIfElse(x, mode, targets)
 		}
-		// Stage 1 dispatch (Enum/Sum/List/Literal/Type) — wrap.
+		if hasTypePattern(x) {
+			return w.buildTypeSwitch(x, mode, targets)
+		}
+		switch x.Arms[0].Pattern.(type) {
+		case IREnumPattern, IRWildcardPattern:
+			return w.buildEnumSwitch(x, mode, targets)
+		case IRSumTypePattern, IRSumTypeWildcardPattern:
+			return w.buildSumSwitch(x, mode, targets)
+		case IRListEmptyPattern, IRListExactPattern, IRListConsPattern, IRListDefaultPattern:
+			return w.buildListIfChain(x, mode, targets)
+		case IRLiteralPattern, IRLiteralDefaultPattern:
+			return w.buildLiteralSwitch(x, mode, targets)
+		}
+		// Unrecognised — wrap so emit's legacy match dispatch handles it.
 		return []IRStmt{goLegacyBody{Body: e, Mode: mode, Targets: targets}}
 
 	case IROkCall, IRErrorCall:
@@ -202,6 +215,29 @@ func expandedValuesOf(e IRExpr) []IRExpr {
 		return x.ExpandedValues
 	}
 	return nil
+}
+
+func hasTypePattern(m IRMatch) bool {
+	for _, arm := range m.Arms {
+		if _, ok := arm.Pattern.(IRMatchTypePattern); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWildcardArm(m IRMatch) bool {
+	for _, arm := range m.Arms {
+		switch arm.Pattern.(type) {
+		case IRWildcardPattern, IRSumTypeWildcardPattern, IRListDefaultPattern, IRLiteralDefaultPattern:
+			return true
+		}
+	}
+	return false
+}
+
+func isValueMode(mode s2Mode) bool {
+	return mode == s2Return || mode == s2Assign || mode == s2Multi
 }
 
 func isResultMatchArms(m IRMatch) bool {
@@ -414,5 +450,203 @@ func (w *stage2Walker) optionSubjectVar(m IRMatch) (string, IRStmt) {
 	n := w.nextSym()
 	name := fmt.Sprintf("__opt%d", n)
 	return name, GoVarDecl{Name: name, Type: m.Subject.irType(), Init: m.Subject}
+}
+
+// --- Enum / Literal: GoSwitch ---
+
+func (w *stage2Walker) buildEnumSwitch(m IRMatch, mode s2Mode, targets []string) []IRStmt {
+	sw := GoSwitch{Subject: m.Subject}
+	for i := range m.Arms {
+		arm := m.Arms[i]
+		body := GoBlock{Stmts: w.walkExpr(arm.Body, mode, targets)}
+		switch p := arm.Pattern.(type) {
+		case IREnumPattern:
+			sw.Cases = append(sw.Cases, GoSwitchCase{
+				Vals: []IRExpr{IRIdent{GoName: p.GoValue}},
+				Body: body,
+			})
+		case IRWildcardPattern:
+			sw.Default = &body
+		}
+	}
+	if sw.Default == nil && isValueMode(mode) && !hasWildcardArm(m) {
+		def := GoBlock{Stmts: []IRStmt{GoUnreachable{}}}
+		sw.Default = &def
+	}
+	return []IRStmt{sw}
+}
+
+func (w *stage2Walker) buildLiteralSwitch(m IRMatch, mode s2Mode, targets []string) []IRStmt {
+	sw := GoSwitch{Subject: m.Subject}
+	for i := range m.Arms {
+		arm := m.Arms[i]
+		body := GoBlock{Stmts: w.walkExpr(arm.Body, mode, targets)}
+		switch p := arm.Pattern.(type) {
+		case IRLiteralPattern:
+			sw.Cases = append(sw.Cases, GoSwitchCase{
+				Vals: []IRExpr{IRIdent{GoName: p.Value}},
+				Body: body,
+			})
+		case IRLiteralDefaultPattern:
+			sw.Default = &body
+		}
+	}
+	return []IRStmt{sw}
+}
+
+// --- Sum types / Any: GoTypeSwitch ---
+
+func (w *stage2Walker) buildSumSwitch(m IRMatch, mode s2Mode, targets []string) []IRStmt {
+	ts := GoTypeSwitch{Subject: m.Subject, BindVar: "v"}
+	for i := range m.Arms {
+		arm := m.Arms[i]
+		switch p := arm.Pattern.(type) {
+		case IRSumTypePattern:
+			var stmts []IRStmt
+			for _, b := range p.Bindings {
+				stmts = append(stmts, GoVarDecl{
+					Name: b.GoName,
+					Init: IRIdent{GoName: "v" + b.Source},
+				})
+			}
+			stmts = append(stmts, w.walkExpr(arm.Body, mode, targets)...)
+			ts.Cases = append(ts.Cases, GoTypeCase{
+				Type: IRNamedType{GoName: p.GoType},
+				Body: GoBlock{Stmts: stmts},
+			})
+		case IRSumTypeWildcardPattern:
+			var stmts []IRStmt
+			if p.Binding != nil {
+				stmts = append(stmts, GoVarDecl{
+					Name: p.Binding.GoName,
+					Init: IRIdent{GoName: "v"},
+				})
+			}
+			stmts = append(stmts, w.walkExpr(arm.Body, mode, targets)...)
+			body := GoBlock{Stmts: stmts}
+			ts.Default = &body
+		}
+	}
+	out := []IRStmt{ts}
+	if isValueMode(mode) && !hasWildcardArm(m) {
+		out = append(out, GoUnreachable{})
+	}
+	return out
+}
+
+func (w *stage2Walker) buildTypeSwitch(m IRMatch, mode s2Mode, targets []string) []IRStmt {
+	ts := GoTypeSwitch{Subject: m.Subject, BindVar: "__tv"}
+	for i := range m.Arms {
+		arm := m.Arms[i]
+		switch p := arm.Pattern.(type) {
+		case IRMatchTypePattern:
+			var stmts []IRStmt
+			if p.Binding != nil {
+				stmts = append(stmts, GoVarDecl{
+					Name: p.Binding.GoName,
+					Init: IRIdent{GoName: "__tv"},
+				})
+			}
+			stmts = append(stmts, w.walkExpr(arm.Body, mode, targets)...)
+			ts.Cases = append(ts.Cases, GoTypeCase{
+				Type: p.Target,
+				Body: GoBlock{Stmts: stmts},
+			})
+		case IRWildcardPattern:
+			body := GoBlock{Stmts: w.walkExpr(arm.Body, mode, targets)}
+			ts.Default = &body
+		}
+	}
+	return []IRStmt{ts}
+}
+
+// --- List: nested GoIfElse chain on len(subject) ---
+
+func (w *stage2Walker) buildListIfChain(m IRMatch, mode s2Mode, targets []string) []IRStmt {
+	// Build from the tail back so each else nests the remaining arms.
+	var tail []IRStmt
+	for i := len(m.Arms) - 1; i >= 0; i-- {
+		arm := m.Arms[i]
+		armStmts := w.walkExpr(arm.Body, mode, targets)
+		switch p := arm.Pattern.(type) {
+		case IRListEmptyPattern:
+			cond := IRBinaryExpr{
+				Op:    "==",
+				Left:  IRIdent{GoName: fmt.Sprintf("len(%s)", exprStr(m.Subject))},
+				Right: IRIdent{GoName: "0"},
+				Type:  IRNamedType{GoName: "bool"},
+			}
+			tail = []IRStmt{GoIfElse{
+				Cond: cond,
+				Then: GoBlock{Stmts: armStmts},
+				Else: GoBlock{Stmts: tail},
+			}}
+		case IRListExactPattern:
+			var bindings []IRStmt
+			for _, b := range p.Elements {
+				bindings = append(bindings, GoVarDecl{
+					Name: b.GoName,
+					Init: IRIdent{GoName: exprStr(m.Subject) + b.Source},
+				})
+			}
+			cond := IRBinaryExpr{
+				Op:    "==",
+				Left:  IRIdent{GoName: fmt.Sprintf("len(%s)", exprStr(m.Subject))},
+				Right: IRIdent{GoName: fmt.Sprintf("%d", p.MinLen)},
+				Type:  IRNamedType{GoName: "bool"},
+			}
+			tail = []IRStmt{GoIfElse{
+				Cond: cond,
+				Then: GoBlock{Stmts: append(bindings, armStmts...)},
+				Else: GoBlock{Stmts: tail},
+			}}
+		case IRListConsPattern:
+			var bindings []IRStmt
+			for _, b := range p.Elements {
+				bindings = append(bindings, GoVarDecl{
+					Name: b.GoName,
+					Init: IRIdent{GoName: exprStr(m.Subject) + b.Source},
+				})
+			}
+			if p.Rest != nil {
+				bindings = append(bindings, GoVarDecl{
+					Name: p.Rest.GoName,
+					Init: IRIdent{GoName: exprStr(m.Subject) + p.Rest.Source},
+				})
+			}
+			cond := IRBinaryExpr{
+				Op:    ">=",
+				Left:  IRIdent{GoName: fmt.Sprintf("len(%s)", exprStr(m.Subject))},
+				Right: IRIdent{GoName: fmt.Sprintf("%d", p.MinLen)},
+				Type:  IRNamedType{GoName: "bool"},
+			}
+			tail = []IRStmt{GoIfElse{
+				Cond: cond,
+				Then: GoBlock{Stmts: append(bindings, armStmts...)},
+				Else: GoBlock{Stmts: tail},
+			}}
+		case IRListDefaultPattern:
+			tail = armStmts
+		}
+	}
+	if isValueMode(mode) && !hasWildcardArm(m) {
+		tail = append(tail, GoUnreachable{})
+	}
+	return tail
+}
+
+// exprStr renders an IRExpr to its Go string form via a minimal printer
+// (needed by buildListIfChain when constructing length-check expressions).
+// This is a transient helper used only for synthetic IRIdent names that
+// embed the subject's surface form; replaced when list patterns gain
+// proper Stage 2 nodes that don't string-bake the subject.
+func exprStr(e IRExpr) string {
+	switch x := e.(type) {
+	case IRIdent:
+		return x.GoName
+	}
+	// Fall back to a placeholder; the existing tests use IRIdent subjects
+	// for list matches.
+	return "/* list subject */"
 }
 

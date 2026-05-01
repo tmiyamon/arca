@@ -73,6 +73,37 @@ func (w *GoWriter) IfElse(cond string, ifBody, elseBody func()) {
 	w.BlockLn(elseBody)
 }
 
+// GoIfBranch is one arm of an if / else-if chain. Body writes the case
+// content with the outer GoWriter's indentation.
+type GoIfBranch struct {
+	Cond string
+	Body func()
+}
+
+// IfChain emits `if c1 { ... } else if c2 { ... } else { default }`.
+// `defaultBody` is optional; when nil the chain terminates after the last
+// branch with no else clause.
+func (w *GoWriter) IfChain(branches []GoIfBranch, defaultBody func()) {
+	if len(branches) == 0 {
+		return
+	}
+	for i, br := range branches {
+		if i == 0 {
+			w.writeIndent()
+			fmt.Fprintf(&w.buf, "if %s ", br.Cond)
+		} else {
+			fmt.Fprintf(&w.buf, " else if %s ", br.Cond)
+		}
+		w.Block(br.Body)
+	}
+	if defaultBody == nil {
+		w.buf.WriteString("\n")
+		return
+	}
+	w.buf.WriteString(" else ")
+	w.BlockLn(defaultBody)
+}
+
 func (w *GoWriter) Switch(expr string, body func()) {
 	w.writeIndent()
 	fmt.Fprintf(&w.buf, "switch %s {\n", expr)

@@ -747,6 +747,12 @@ func (em *Emitter) emitStmt(s IRStmt) {
 		em.emitGoReturn(stmt)
 	case GoExprStmt:
 		w.Stmt(em.emitExpr(stmt.Expr))
+	case GoSwitch:
+		em.emitGoSwitch(stmt)
+	case GoTypeSwitch:
+		em.emitGoTypeSwitch(stmt)
+	case GoUnreachable:
+		w.Unreachable()
 	case goLegacyBody:
 		em.emitGoLegacyBody(stmt)
 	}
@@ -755,36 +761,56 @@ func (em *Emitter) emitStmt(s IRStmt) {
 // --- Stage 2 emit handlers ---
 
 func (em *Emitter) emitGoIfElse(g GoIfElse) {
-	w := em.w
 	if g.Init != nil {
 		em.emitStmt(g.Init)
 	}
-	cond := em.emitExpr(g.Cond)
-	if len(g.Else.Stmts) == 0 {
-		w.If(cond, func() {
-			for _, s := range g.Then.Stmts {
-				em.emitStmt(s)
-			}
-		})
+	branches, def := em.collectIfChain(g)
+	if def == nil && len(branches) == 1 {
+		em.w.If(branches[0].Cond, branches[0].Body)
 		return
 	}
-	if len(g.Then.Stmts) == 0 {
-		w.If("!("+cond+")", func() {
-			for _, s := range g.Else.Stmts {
+	var defBody func()
+	if def != nil {
+		stmts := def.Stmts
+		defBody = func() {
+			for _, s := range stmts {
 				em.emitStmt(s)
 			}
-		})
-		return
+		}
 	}
-	w.IfElse(cond, func() {
-		for _, s := range g.Then.Stmts {
-			em.emitStmt(s)
+	em.w.IfChain(branches, defBody)
+}
+
+// collectIfChain walks a GoIfElse-only chain (each Else.Stmts being a
+// single GoIfElse with no Init) and gathers the branches plus the
+// terminal else body. The chain unfolds nested GoIfElse so list-pattern
+// matches and similar emit `else if` rather than `else { if ... }`.
+func (em *Emitter) collectIfChain(g GoIfElse) ([]GoIfBranch, *GoBlock) {
+	var branches []GoIfBranch
+	cur := g
+	for {
+		condStr := em.emitExpr(cur.Cond)
+		thenStmts := cur.Then.Stmts
+		branches = append(branches, GoIfBranch{
+			Cond: condStr,
+			Body: func() {
+				for _, s := range thenStmts {
+					em.emitStmt(s)
+				}
+			},
+		})
+		if len(cur.Else.Stmts) == 1 {
+			if next, ok := cur.Else.Stmts[0].(GoIfElse); ok && next.Init == nil {
+				cur = next
+				continue
+			}
 		}
-	}, func() {
-		for _, s := range g.Else.Stmts {
-			em.emitStmt(s)
+		if len(cur.Else.Stmts) > 0 {
+			elseCopy := cur.Else
+			return branches, &elseCopy
 		}
-	})
+		return branches, nil
+	}
 }
 
 func (em *Emitter) emitGoMultiAssign(g GoMultiAssign) {
@@ -818,6 +844,50 @@ func (em *Emitter) emitGoReturn(g GoReturn) {
 		parts[i] = em.emitExpr(v)
 	}
 	em.w.Return(strings.Join(parts, ", "))
+}
+
+func (em *Emitter) emitGoSwitch(g GoSwitch) {
+	w := em.w
+	w.Switch(em.emitExpr(g.Subject), func() {
+		for _, c := range g.Cases {
+			parts := make([]string, len(c.Vals))
+			for i, v := range c.Vals {
+				parts[i] = em.emitExpr(v)
+			}
+			w.Case(strings.Join(parts, ", "), func() {
+				for _, s := range c.Body.Stmts {
+					em.emitStmt(s)
+				}
+			})
+		}
+		if g.Default != nil {
+			w.Default(func() {
+				for _, s := range g.Default.Stmts {
+					em.emitStmt(s)
+				}
+			})
+		}
+	})
+}
+
+func (em *Emitter) emitGoTypeSwitch(g GoTypeSwitch) {
+	w := em.w
+	w.SwitchType(g.BindVar, em.emitExpr(g.Subject), func() {
+		for _, c := range g.Cases {
+			w.Case(em.irTypeStr(c.Type), func() {
+				for _, s := range c.Body.Stmts {
+					em.emitStmt(s)
+				}
+			})
+		}
+		if g.Default != nil {
+			w.Default(func() {
+				for _, s := range g.Default.Stmts {
+					em.emitStmt(s)
+				}
+			})
+		}
+	})
 }
 
 // emitGoLegacyBody reconstructs a bodyMode from the captured s2Mode and
