@@ -314,11 +314,7 @@ func (em *Emitter) emitFn(fd IRFn) {
 	}
 
 	body := func() {
-		if fd.Ret != nil {
-			em.emitReturnExpr(fd.Body)
-		} else {
-			em.emitVoidBody(fd.Body)
-		}
+		em.emitFnBody(fd.Body)
 	}
 
 	// Special-case: `fun main() -> Result[_, _]`. Go's `main` takes no args
@@ -375,9 +371,25 @@ func (em *Emitter) emitResultMainWrapper(fd IRFn, rt IRResultType) {
 	})
 }
 
+// emitFnBody walks a stage2-lowered function body. After stage2Lower
+// every fn body is an IRBlock whose Stmts list contains the flat
+// sequence of statements (including the tail-position GoReturn for
+// return-typed functions).
+func (em *Emitter) emitFnBody(body IRExpr) {
+	if blk, ok := body.(IRBlock); ok {
+		for _, s := range blk.Stmts {
+			em.emitStmt(s)
+		}
+		return
+	}
+	if body != nil {
+		em.w.Stmt(em.emitExpr(body))
+	}
+}
+
 func (em *Emitter) indentAndEmitBody(e IRExpr) {
 	em.w.Indent()
-	em.emitReturnExpr(e)
+	em.emitFnBody(e)
 	em.w.Dedent()
 }
 
@@ -618,10 +630,6 @@ func (em *Emitter) emitBody(e IRExpr, mode bodyMode) {
 		if expr.Expr != nil {
 			em.emitBody(expr.Expr, mode)
 		}
-	case IRMatch:
-		em.emitMatch(expr, mode)
-	case IRIfExpr:
-		em.emitIfExpr(expr, mode)
 	case IRForRange:
 		em.emitForRange(expr)
 	case IRForEach:
@@ -753,8 +761,6 @@ func (em *Emitter) emitStmt(s IRStmt) {
 		em.emitGoTypeSwitch(stmt)
 	case GoUnreachable:
 		w.Unreachable()
-	case goLegacyBody:
-		em.emitGoLegacyBody(stmt)
 	}
 }
 
@@ -783,8 +789,9 @@ func (em *Emitter) emitGoIfElse(g GoIfElse) {
 
 // collectIfChain walks a GoIfElse-only chain (each Else.Stmts being a
 // single GoIfElse with no Init) and gathers the branches plus the
-// terminal else body. The chain unfolds nested GoIfElse so list-pattern
-// matches and similar emit `else if` rather than `else { if ... }`.
+// terminal else body. Only follows the chain when each link's ChainElse
+// is set; otherwise stops so IRIfExpr-converted GoIfElses preserve their
+// nested-block else form.
 func (em *Emitter) collectIfChain(g GoIfElse) ([]GoIfBranch, *GoBlock) {
 	var branches []GoIfBranch
 	cur := g
@@ -799,7 +806,7 @@ func (em *Emitter) collectIfChain(g GoIfElse) ([]GoIfBranch, *GoBlock) {
 				}
 			},
 		})
-		if len(cur.Else.Stmts) == 1 {
+		if cur.ChainElse && len(cur.Else.Stmts) == 1 {
 			if next, ok := cur.Else.Stmts[0].(GoIfElse); ok && next.Init == nil {
 				cur = next
 				continue
@@ -890,23 +897,6 @@ func (em *Emitter) emitGoTypeSwitch(g GoTypeSwitch) {
 	})
 }
 
-// emitGoLegacyBody reconstructs a bodyMode from the captured s2Mode and
-// walks the wrapped Stage 1 expression. Transitional scaffolding (S2/S3);
-// retired when all control-flow flows through Stage 2 leaf wrapping.
-func (em *Emitter) emitGoLegacyBody(g goLegacyBody) {
-	switch g.Mode {
-	case s2Return:
-		em.emitBody(g.Body, em.returnMode())
-	case s2Void:
-		em.emitBody(g.Body, em.voidMode())
-	case s2Assign:
-		if len(g.Targets) > 0 {
-			em.emitBody(g.Body, em.assignMode(g.Targets[0]))
-		}
-	case s2Multi:
-		em.emitBody(g.Body, em.assignMultiMode(g.Targets))
-	}
-}
 
 func (em *Emitter) emitLetStmt(stmt IRLetStmt) {
 	w := em.w
@@ -1037,14 +1027,13 @@ func (em *Emitter) emitTryLetStmt(stmt IRTryLetStmt) {
 	}
 }
 
-// emitTryBlockExpr emits try { ... } as a Go IIFE: func() (T, error) { ... }()
+// emitTryBlockExpr emits try { ... } as a Go IIFE: func() (T, error) { ... }().
+// Body has been stage2-lowered to a flat sequence of IRStmts with GoReturn
+// at the tail; emit just walks the list.
 func (em *Emitter) emitTryBlockExpr(rb IRTryBlock) string {
 	sub := &Emitter{w: NewGoWriter()}
 	for _, stmt := range rb.Stmts {
 		sub.emitStmt(stmt)
-	}
-	if rb.Expr != nil {
-		sub.emitReturnExpr(rb.Expr)
 	}
 	body := strings.TrimRight(sub.w.String(), "\n")
 	okStr := em.irTypeStr(rb.OkType)
@@ -1058,8 +1047,6 @@ func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
 		em.emitForRange(e)
 	case IRForEach:
 		em.emitForEach(e)
-	case IRMatch:
-		em.emitMatch(e, em.voidMode())
 	default:
 		w.Stmt(em.emitExpr(stmt.Expr))
 	}
@@ -1096,251 +1083,26 @@ func (em *Emitter) emitForRange(fr IRForRange) {
 	w.For(fmt.Sprintf("%s := %s; %s < %s; %s++",
 		fr.Binding, em.emitExpr(fr.Start),
 		fr.Binding, em.emitExpr(fr.End), fr.Binding), func() {
-		em.emitVoidBody(fr.Body)
+		em.emitForBodyStmts(fr.Body)
 	})
 }
 
 func (em *Emitter) emitForEach(fe IRForEach) {
 	w := em.w
 	w.For(fmt.Sprintf("_, %s := range %s", fe.Binding, em.emitExpr(fe.Iter)), func() {
-		em.emitVoidBody(fe.Body)
+		em.emitForBodyStmts(fe.Body)
 	})
 }
 
-// --- Match ---
-
-func (em *Emitter) emitIfExpr(e IRIfExpr, mode bodyMode) {
-	w := em.w
-	if e.Else != nil {
-		w.IfElse(em.emitExpr(e.Cond), func() {
-			em.emitBody(e.Then, mode)
-		}, func() {
-			em.emitBody(e.Else, mode)
-		})
-	} else {
-		w.If(em.emitExpr(e.Cond), func() {
-			em.emitBody(e.Then, mode)
-		})
-	}
-}
-
-func (em *Emitter) emitMatch(m IRMatch, mode bodyMode) {
-	if len(m.Arms) == 0 {
-		return
-	}
-	// Type-switch match — a TypePattern anywhere promotes the whole match
-	// to a Go type switch. This check has to run before the head-arm
-	// dispatch below so a leading wildcard doesn't misroute it.
-	for _, arm := range m.Arms {
-		if _, ok := arm.Pattern.(IRMatchTypePattern); ok {
-			em.emitMatchType(m, mode)
-			return
+// emitForBodyStmts walks a stage2-lowered for-loop body. Body is an
+// IRBlock whose Stmts list is a flat sequence of stage2 statements (the
+// stage2 walker sets it up via foldBody in s2Void mode).
+func (em *Emitter) emitForBodyStmts(body IRExpr) {
+	if blk, ok := body.(IRBlock); ok {
+		for _, s := range blk.Stmts {
+			em.emitStmt(s)
 		}
 	}
-	switch m.Arms[0].Pattern.(type) {
-	case IRResultOkPattern, IRResultErrorPattern:
-		em.emitMatchResult(m, mode)
-	case IROptionSomePattern, IROptionNonePattern:
-		em.emitMatchOption(m, mode)
-	case IREnumPattern:
-		em.emitMatchEnum(m, mode)
-	case IRSumTypePattern, IRSumTypeWildcardPattern:
-		em.emitMatchSumType(m, mode)
-	case IRListEmptyPattern, IRListExactPattern, IRListConsPattern, IRListDefaultPattern:
-		em.emitMatchList(m, mode)
-	case IRLiteralPattern, IRLiteralDefaultPattern:
-		em.emitMatchLiteral(m, mode)
-	}
-}
-
-// emitMatchType emits a Go type switch. Arms with IRMatchTypePattern
-// become `case T:` clauses; the leading type-switch binding receives the
-// narrowed value. A wildcard arm becomes `default:`.
-//
-// The switch binding uses a compiler-internal name (`__tv`). Each
-// TypePattern arm reassigns to the user-written binding name so the body
-// sees the variable the source declared, regardless of whether arms share
-// the same binding identifier.
-func (em *Emitter) emitMatchType(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-	const switchVar = "__tv"
-	w.SwitchType(switchVar, subject, func() {
-		for _, arm := range m.Arms {
-			switch p := arm.Pattern.(type) {
-			case IRMatchTypePattern:
-				goType := em.irTypeStr(p.Target)
-				w.Case(goType, func() {
-					if p.Binding != nil && p.Binding.GoName != switchVar {
-						w.Assign(p.Binding.GoName, switchVar)
-					}
-					em.emitBody(arm.Body, mode)
-				})
-			case IRWildcardPattern:
-				w.Default(func() {
-					em.emitBody(arm.Body, mode)
-				})
-			}
-		}
-	})
-}
-
-func (em *Emitter) emitMatchResult(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-
-	// Resolve the error condition variable from the match arm bindings.
-	// The post-pass (resolveMatchBindings) has already rewritten binding
-	// Sources to actual Go variable names. For params (no post-pass),
-	// the naming convention subject + "_err" is used as fallback.
-	errVar := subject + "_err"
-	if rt, ok := m.Subject.irType().(IRResultType); ok && isUnitType(rt.Ok) {
-		errVar = subject // error-only: subject IS the error
-	}
-	// Check if the Error arm has a resolved Source — use it if available.
-	for _, arm := range m.Arms {
-		if p, ok := arm.Pattern.(IRResultErrorPattern); ok && p.Binding != nil {
-			if p.Binding.Source != "" && p.Binding.Source != ".Err" {
-				errVar = p.Binding.Source
-				break
-			}
-		}
-	}
-	errCond := fmt.Sprintf("%s == nil", errVar)
-	errCondNeg := fmt.Sprintf("%s != nil", errVar)
-
-	var okArm, errorArm *IRMatchArm
-	for i := range m.Arms {
-		switch m.Arms[i].Pattern.(type) {
-		case IRResultOkPattern:
-			okArm = &m.Arms[i]
-		case IRResultErrorPattern:
-			errorArm = &m.Arms[i]
-		}
-	}
-	okVoid := okArm != nil && isVoidBody(okArm.Body)
-	errorVoid := errorArm != nil && isVoidBody(errorArm.Body)
-
-	if okVoid && errorVoid {
-		return
-	}
-	// Wrap Err binding in __goError when subject's Err is the Arca Error
-	// trait. The raw Go variable is `error`-typed, but the Arca-side binding
-	// expects ArcaError (for `.message()` and other trait methods). __goError
-	// satisfies both interfaces, making trait methods resolvable.
-	wrapErr := false
-	if rt, ok := m.Subject.irType().(IRResultType); ok {
-		if tt, ok := rt.Err.(IRTraitType); ok && tt.Name == "Error" {
-			wrapErr = true
-			em.usesGoError = true
-		}
-	}
-	// Helper: emit binding assignment from the resolved Source.
-	emitBinding := func(p interface{ GetBinding() *IRBinding }) {
-		if b := p.GetBinding(); b != nil && b.Source != "" {
-			if wrapErr {
-				if _, isErr := p.(IRResultErrorPattern); isErr {
-					w.Assign(b.GoName, fmt.Sprintf("__goError{inner: %s}", b.Source))
-					return
-				}
-			}
-			w.Assign(b.GoName, b.Source)
-		}
-	}
-
-	if okVoid {
-		w.If(errCondNeg, func() {
-			emitBinding(errorArm.Pattern.(IRResultErrorPattern))
-			em.emitBody(errorArm.Body, mode)
-		})
-		return
-	}
-	if errorVoid {
-		w.If(errCond, func() {
-			emitBinding(okArm.Pattern.(IRResultOkPattern))
-			em.emitBody(okArm.Body, mode)
-		})
-		return
-	}
-	w.IfElse(errCond, func() {
-		if okArm != nil {
-			emitBinding(okArm.Pattern.(IRResultOkPattern))
-			em.emitBody(okArm.Body, mode)
-		}
-	}, func() {
-		if errorArm != nil {
-			emitBinding(errorArm.Pattern.(IRResultErrorPattern))
-			em.emitBody(errorArm.Body, mode)
-		}
-	})
-}
-
-func (em *Emitter) emitMatchOption(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-
-	// Option is uniformly pointer-backed: `*T` where nil = None.
-	cond := subject + " != nil"
-	negCond := subject + " == nil"
-
-	// Collapsible Option (Inner is Ref/Ptr): Some binding passes the pointer
-	// through unchanged (`v := subject`). Non-collapsible: deref once since
-	// the outer pointer wraps a value that user-Arca expects as the value.
-	collapse := isPointerBackedOption(m.Subject.irType())
-
-	var someArm, noneArm *IRMatchArm
-	for i := range m.Arms {
-		switch m.Arms[i].Pattern.(type) {
-		case IROptionSomePattern:
-			someArm = &m.Arms[i]
-		case IROptionNonePattern:
-			noneArm = &m.Arms[i]
-		}
-	}
-	someVoid := someArm != nil && isVoidBody(someArm.Body)
-	noneVoid := noneArm != nil && isVoidBody(noneArm.Body)
-
-	if someVoid && noneVoid {
-		return
-	}
-	if someVoid {
-		w.If(negCond, func() {
-			em.emitBody(noneArm.Body, mode)
-		})
-		return
-	}
-	emitSomeBinding := func() {
-		if someArm == nil {
-			return
-		}
-		p := someArm.Pattern.(IROptionSomePattern)
-		if p.Binding == nil {
-			return
-		}
-		rhs := subject
-		if !collapse {
-			rhs = "*" + subject
-		}
-		w.Assign(p.Binding.GoName, rhs)
-	}
-
-	if noneVoid {
-		w.If(cond, func() {
-			emitSomeBinding()
-			em.emitBody(someArm.Body, mode)
-		})
-		return
-	}
-	w.IfElse(cond, func() {
-		if someArm != nil {
-			emitSomeBinding()
-			em.emitBody(someArm.Body, mode)
-		}
-	}, func() {
-		if noneArm != nil {
-			em.emitBody(noneArm.Body, mode)
-		}
-	})
 }
 
 // isPointerBackedOption reports whether an Option's inner type is itself
@@ -1402,142 +1164,6 @@ func (em *Emitter) noneInnerGoType(n IRNoneExpr) string {
 		return em.irTypeStr(opt.Inner)
 	}
 	return "interface{}"
-}
-
-func (em *Emitter) emitMatchEnum(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-	w.Switch(subject, func() {
-		for _, arm := range m.Arms {
-			switch p := arm.Pattern.(type) {
-			case IREnumPattern:
-				w.Case(p.GoValue, func() {
-					em.emitBody(arm.Body, mode)
-				})
-			case IRWildcardPattern:
-				w.Default(func() {
-					em.emitBody(arm.Body, mode)
-				})
-			}
-		}
-		if mode.valueCtx && !em.hasWildcard(m) {
-			w.Default(func() {
-				w.Unreachable()
-			})
-		}
-	})
-}
-
-func (em *Emitter) emitMatchSumType(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-	w.SwitchType("v", subject, func() {
-		for _, arm := range m.Arms {
-			switch p := arm.Pattern.(type) {
-			case IRSumTypePattern:
-				w.Case(p.GoType, func() {
-					for _, b := range p.Bindings {
-						w.Assign(b.GoName, fmt.Sprintf("v%s", b.Source))
-					}
-					em.emitBody(arm.Body, mode)
-				})
-			case IRSumTypeWildcardPattern:
-				w.Default(func() {
-					if p.Binding != nil {
-						w.Assign(p.Binding.GoName, "v")
-					}
-					em.emitBody(arm.Body, mode)
-				})
-			}
-		}
-	})
-	if mode.valueCtx && !em.hasWildcard(m) {
-		w.Unreachable()
-	}
-}
-
-func (em *Emitter) emitMatchList(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-	first := true
-	for _, arm := range m.Arms {
-		switch p := arm.Pattern.(type) {
-		case IRListEmptyPattern:
-			if first {
-				w.Line("if len(%s) == 0 {", subject)
-			} else {
-				w.Line("} else if len(%s) == 0 {", subject)
-			}
-		case IRListExactPattern:
-			if first {
-				w.Line("if len(%s) == %d {", subject, p.MinLen)
-			} else {
-				w.Line("} else if len(%s) == %d {", subject, p.MinLen)
-			}
-			w.Indent()
-			for _, b := range p.Elements {
-				w.Assign(b.GoName, fmt.Sprintf("%s%s", subject, b.Source))
-			}
-			w.Dedent()
-		case IRListConsPattern:
-			if first {
-				w.Line("if len(%s) >= %d {", subject, p.MinLen)
-			} else {
-				w.Line("} else if len(%s) >= %d {", subject, p.MinLen)
-			}
-			w.Indent()
-			for _, b := range p.Elements {
-				w.Assign(b.GoName, fmt.Sprintf("%s%s", subject, b.Source))
-			}
-			if p.Rest != nil {
-				w.Assign(p.Rest.GoName, fmt.Sprintf("%s%s", subject, p.Rest.Source))
-			}
-			w.Dedent()
-		case IRListDefaultPattern:
-			if first {
-				w.Line("{")
-			} else {
-				w.Line("} else {")
-			}
-		}
-		w.Indent()
-		em.emitBody(arm.Body, mode)
-		w.Dedent()
-		first = false
-	}
-	w.Line("}")
-	if mode.valueCtx {
-		w.Unreachable()
-	}
-}
-
-func (em *Emitter) emitMatchLiteral(m IRMatch, mode bodyMode) {
-	w := em.w
-	subject := em.emitExpr(m.Subject)
-	w.Switch(subject, func() {
-		for _, arm := range m.Arms {
-			switch p := arm.Pattern.(type) {
-			case IRLiteralPattern:
-				w.Case(p.Value, func() {
-					em.emitBody(arm.Body, mode)
-				})
-			case IRLiteralDefaultPattern:
-				w.Default(func() {
-					em.emitBody(arm.Body, mode)
-				})
-			}
-		}
-	})
-}
-
-func (em *Emitter) hasWildcard(m IRMatch) bool {
-	for _, arm := range m.Arms {
-		switch arm.Pattern.(type) {
-		case IRWildcardPattern, IRSumTypeWildcardPattern:
-			return true
-		}
-	}
-	return false
 }
 
 func isVoidBody(expr IRExpr) bool {

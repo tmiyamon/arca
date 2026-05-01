@@ -27,17 +27,6 @@ const (
 	s2Multi                // multi-target assign (Targets, Result-split)
 )
 
-// goLegacyBody is transitional scaffolding (S2/S3 only). Wraps a Stage 1
-// IRExpr that still requires bodyMode-walking because it contains Stage 1
-// control-flow not yet converted to Stage 2. Removed in S3 once all
-// control-flow flows through Stage 2 leaf wrapping.
-type goLegacyBody struct {
-	Body    IRExpr
-	Mode    s2Mode
-	Targets []string // for s2Assign / s2Multi
-}
-
-func (goLegacyBody) irStmtNode() {}
 
 // stage2Walker carries per-function state (synthetic-name counter).
 type stage2Walker struct {
@@ -114,15 +103,29 @@ func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStm
 		case IRLiteralPattern, IRLiteralDefaultPattern:
 			return w.buildLiteralSwitch(x, mode, targets)
 		}
-		// Unrecognised — wrap so emit's legacy match dispatch handles it.
-		return []IRStmt{goLegacyBody{Body: e, Mode: mode, Targets: targets}}
+		// Unrecognised match shape — leaf-wrap (should not occur post-S3).
+		return []IRStmt{w.wrapTail(e, mode, targets)}
 
 	case IROkCall, IRErrorCall:
 		return []IRStmt{w.wrapTail(e, mode, targets)}
 
-	case IRIfExpr, IRTryBlock, IRForRange, IRForEach:
-		// S3/S4 will convert; for now wrap.
-		return []IRStmt{goLegacyBody{Body: e, Mode: mode, Targets: targets}}
+	case IRIfExpr:
+		return w.buildIfElseFromExpr(x, mode, targets)
+
+	case IRForRange:
+		x.Body = w.foldBody(x.Body, s2Void, nil)
+		return []IRStmt{IRExprStmt{Expr: x}}
+
+	case IRForEach:
+		x.Body = w.foldBody(x.Body, s2Void, nil)
+		return []IRStmt{IRExprStmt{Expr: x}}
+
+	case IRTryBlock:
+		// Try block is a value-position IIFE — its internal body is walked
+		// with return mode (the Ok value) so emit can iterate stage2 stmts
+		// without bodyMode. Outer wrapping (GoIIFE) is S4's job.
+		walked := w.lowerTryBlockInternals(x)
+		return []IRStmt{w.wrapTail(walked, mode, targets)}
 
 	default:
 		// Plain leaf expression.
@@ -134,6 +137,11 @@ func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStm
 func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 	switch stmt := s.(type) {
 	case IRLetStmt:
+		// Recurse into IRTryBlock so its internal body is stage2-lowered
+		// even when the outer let just emits a multi-receive of the IIFE.
+		if tb, ok := stmt.Value.(IRTryBlock); ok {
+			stmt.Value = w.lowerTryBlockInternals(tb)
+		}
 		// Multi-receive let with non-control-flow value → GoMultiAssign.
 		if len(stmt.SplitNames) > 0 && !isControlFlowValue(stmt.Value) {
 			return []IRStmt{GoMultiAssign{
@@ -577,9 +585,10 @@ func (w *stage2Walker) buildListIfChain(m IRMatch, mode s2Mode, targets []string
 				Type:  IRNamedType{GoName: "bool"},
 			}
 			tail = []IRStmt{GoIfElse{
-				Cond: cond,
-				Then: GoBlock{Stmts: armStmts},
-				Else: GoBlock{Stmts: tail},
+				Cond:      cond,
+				Then:      GoBlock{Stmts: armStmts},
+				Else:      GoBlock{Stmts: tail},
+				ChainElse: true,
 			}}
 		case IRListExactPattern:
 			var bindings []IRStmt
@@ -596,9 +605,10 @@ func (w *stage2Walker) buildListIfChain(m IRMatch, mode s2Mode, targets []string
 				Type:  IRNamedType{GoName: "bool"},
 			}
 			tail = []IRStmt{GoIfElse{
-				Cond: cond,
-				Then: GoBlock{Stmts: append(bindings, armStmts...)},
-				Else: GoBlock{Stmts: tail},
+				Cond:      cond,
+				Then:      GoBlock{Stmts: append(bindings, armStmts...)},
+				Else:      GoBlock{Stmts: tail},
+				ChainElse: true,
 			}}
 		case IRListConsPattern:
 			var bindings []IRStmt
@@ -621,9 +631,10 @@ func (w *stage2Walker) buildListIfChain(m IRMatch, mode s2Mode, targets []string
 				Type:  IRNamedType{GoName: "bool"},
 			}
 			tail = []IRStmt{GoIfElse{
-				Cond: cond,
-				Then: GoBlock{Stmts: append(bindings, armStmts...)},
-				Else: GoBlock{Stmts: tail},
+				Cond:      cond,
+				Then:      GoBlock{Stmts: append(bindings, armStmts...)},
+				Else:      GoBlock{Stmts: tail},
+				ChainElse: true,
 			}}
 		case IRListDefaultPattern:
 			tail = armStmts
@@ -633,6 +644,46 @@ func (w *stage2Walker) buildListIfChain(m IRMatch, mode s2Mode, targets []string
 		tail = append(tail, GoUnreachable{})
 	}
 	return tail
+}
+
+// buildIfElseFromExpr converts an IRIfExpr into a GoIfElse with its
+// branches walked in the surrounding mode.
+func (w *stage2Walker) buildIfElseFromExpr(e IRIfExpr, mode s2Mode, targets []string) []IRStmt {
+	thenStmts := w.walkExpr(e.Then, mode, targets)
+	var elseStmts []IRStmt
+	if e.Else != nil {
+		elseStmts = w.walkExpr(e.Else, mode, targets)
+	}
+	return []IRStmt{GoIfElse{
+		Cond: e.Cond,
+		Then: GoBlock{Stmts: thenStmts},
+		Else: GoBlock{Stmts: elseStmts},
+	}}
+}
+
+// lowerTryBlockInternals walks an IRTryBlock's Stmts and tail Expr in
+// s2Return mode, folding the result back into the block's Stmts (and
+// clearing Expr). After this, emitTryBlockExpr can iterate Stmts without
+// bodyMode.
+func (w *stage2Walker) lowerTryBlockInternals(tb IRTryBlock) IRTryBlock {
+	var inner []IRStmt
+	for _, s := range tb.Stmts {
+		inner = append(inner, w.walkStmt(s)...)
+	}
+	if tb.Expr != nil {
+		inner = append(inner, w.walkExpr(tb.Expr, s2Return, nil)...)
+	}
+	tb.Stmts = inner
+	tb.Expr = nil
+	return tb
+}
+
+// foldBody walks a body expression in the given mode and returns it as an
+// IRBlock with the resulting stage2 stmts, suitable for emit walks that
+// no longer use bodyMode (for / for-each / try block bodies).
+func (w *stage2Walker) foldBody(body IRExpr, mode s2Mode, targets []string) IRExpr {
+	stmts := w.walkExpr(body, mode, targets)
+	return IRBlock{Stmts: stmts}
 }
 
 // exprStr renders an IRExpr to its Go string form via a minimal printer

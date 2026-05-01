@@ -33,12 +33,19 @@ type GoBlock struct {
 //
 // Init is optional (nil if absent) and used for Go's `if v, err := f(); err != nil`
 // idiom. When Else.Stmts is empty, emit omits the else branch.
+//
+// ChainElse: when true and Else.Stmts contains exactly one GoIfElse with
+// no Init, emit folds it as `} else if ... {` rather than the default
+// `} else { if ... { ... } }`. Used by list-pattern matches whose surface
+// form is naturally a chain. IRIfExpr conversion leaves it false to
+// preserve the nested form expected from a value-position if expression.
 type GoIfElse struct {
-	Init IRStmt
-	Cond IRExpr
-	Then GoBlock
-	Else GoBlock
-	Pos  Pos
+	Init      IRStmt
+	Cond      IRExpr
+	Then      GoBlock
+	Else      GoBlock
+	ChainElse bool
+	Pos       Pos
 }
 
 // GoSwitch: switch Subject { Cases default: Default }
