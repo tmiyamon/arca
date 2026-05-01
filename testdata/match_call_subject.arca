@@ -1,0 +1,13 @@
+import go "fmt"
+import go "strconv"
+
+fun double(s: String) -> Result[Int, Error] {
+  match strconv.Atoi(s) {
+    Ok(n) => Ok(n + n)
+    Error(e) => Error(e)
+  }
+}
+
+fun main() {
+  fmt.Println(double("21"))
+}

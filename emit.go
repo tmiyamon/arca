@@ -466,6 +466,12 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		return "&" + em.emitExpr(expr.Expr)
 	case IRTryBlock:
 		return em.emitTryBlockExpr(expr)
+	// --- Stage 2 expressions ---
+	case GoErrorWrap:
+		em.usesGoError = true
+		return fmt.Sprintf("__goError{inner: %s}", em.emitExpr(expr.Inner))
+	case GoDeref:
+		return "*" + em.emitExpr(expr.Inner)
 	default:
 		return "/* unsupported expr */"
 	}
@@ -728,6 +734,107 @@ func (em *Emitter) emitStmt(s IRStmt) {
 		})
 	case IRDestructureStmt:
 		em.emitDestructureStmt(stmt)
+	// --- Stage 2 nodes ---
+	case GoIfElse:
+		em.emitGoIfElse(stmt)
+	case GoMultiAssign:
+		em.emitGoMultiAssign(stmt)
+	case GoVarDecl:
+		em.emitGoVarDecl(stmt)
+	case GoReassign:
+		em.emitGoReassign(stmt)
+	case GoReturn:
+		em.emitGoReturn(stmt)
+	case GoExprStmt:
+		w.Stmt(em.emitExpr(stmt.Expr))
+	case goLegacyBody:
+		em.emitGoLegacyBody(stmt)
+	}
+}
+
+// --- Stage 2 emit handlers ---
+
+func (em *Emitter) emitGoIfElse(g GoIfElse) {
+	w := em.w
+	if g.Init != nil {
+		em.emitStmt(g.Init)
+	}
+	cond := em.emitExpr(g.Cond)
+	if len(g.Else.Stmts) == 0 {
+		w.If(cond, func() {
+			for _, s := range g.Then.Stmts {
+				em.emitStmt(s)
+			}
+		})
+		return
+	}
+	if len(g.Then.Stmts) == 0 {
+		w.If("!("+cond+")", func() {
+			for _, s := range g.Else.Stmts {
+				em.emitStmt(s)
+			}
+		})
+		return
+	}
+	w.IfElse(cond, func() {
+		for _, s := range g.Then.Stmts {
+			em.emitStmt(s)
+		}
+	}, func() {
+		for _, s := range g.Else.Stmts {
+			em.emitStmt(s)
+		}
+	})
+}
+
+func (em *Emitter) emitGoMultiAssign(g GoMultiAssign) {
+	em.w.AssignMulti(strings.Join(g.Names, ", "), em.emitExpr(g.Value))
+}
+
+func (em *Emitter) emitGoVarDecl(g GoVarDecl) {
+	w := em.w
+	if g.Init == nil {
+		w.Var(g.Name, em.irTypeStr(g.Type))
+		return
+	}
+	if g.Type == nil {
+		w.Assign(g.Name, em.emitExpr(g.Init))
+		return
+	}
+	w.VarAssign(g.Name, em.irTypeStr(g.Type), em.emitExpr(g.Init))
+}
+
+func (em *Emitter) emitGoReassign(g GoReassign) {
+	parts := make([]string, len(g.Values))
+	for i, v := range g.Values {
+		parts[i] = em.emitExpr(v)
+	}
+	em.w.Set(strings.Join(g.Targets, ", "), strings.Join(parts, ", "))
+}
+
+func (em *Emitter) emitGoReturn(g GoReturn) {
+	parts := make([]string, len(g.Values))
+	for i, v := range g.Values {
+		parts[i] = em.emitExpr(v)
+	}
+	em.w.Return(strings.Join(parts, ", "))
+}
+
+// emitGoLegacyBody reconstructs a bodyMode from the captured s2Mode and
+// walks the wrapped Stage 1 expression. Transitional scaffolding (S2/S3);
+// retired when all control-flow flows through Stage 2 leaf wrapping.
+func (em *Emitter) emitGoLegacyBody(g goLegacyBody) {
+	switch g.Mode {
+	case s2Return:
+		em.emitBody(g.Body, em.returnMode())
+	case s2Void:
+		em.emitBody(g.Body, em.voidMode())
+	case s2Assign:
+		if len(g.Targets) > 0 {
+			em.emitBody(g.Body, em.assignMode(g.Targets[0]))
+		}
+	case s2Multi:
+		em.emitBody(g.Body, em.assignMultiMode(g.Targets))
 	}
 }
 

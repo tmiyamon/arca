@@ -862,6 +862,12 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 		funcs[i].Body = expandWithCtx(funcs[i].Body, funcs[i].Ret, ctx)
 	}
 
+	// Stage 2 lowering: rewrite Result/Option dispatch + multi-receive let
+	// shapes into Stage 2 IR (defined in go_ir.go) so emit becomes a
+	// pretty-printer for those nodes (slice S2 of the 2026-05-02
+	// "Two-stage IR completion" plan in decisions/ideas.md).
+	funcs = stage2Lower(funcs)
+
 	// Report unused imports (skip side-effect imports, which are intentional,
 	// and packages consumed indirectly via auto-detected builtins like string
 	// interpolation needing fmt). Sort for deterministic diagnostic order.

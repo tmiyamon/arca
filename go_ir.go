@@ -211,6 +211,15 @@ type GoErrorWrap struct {
 	Pos   Pos
 }
 
+// GoDeref: *Inner   — Go pointer dereference. Used for Option binding
+// when the inner type is not already pointer-backed (e.g. `n := *opt`
+// inside the Some arm).
+type GoDeref struct {
+	Inner IRExpr
+	Type  IRType
+	Pos   Pos
+}
+
 // --- Interface implementations ---
 
 func (GoIfElse) irStmtNode()      {}
@@ -235,3 +244,5 @@ func (e GoTypedNil) irExprNode()       {}
 func (e GoTypedNil) irType() IRType    { return e.Type }
 func (e GoErrorWrap) irExprNode()      {}
 func (e GoErrorWrap) irType() IRType   { return e.Type }
+func (e GoDeref) irExprNode()          {}
+func (e GoDeref) irType() IRType       { return e.Type }
