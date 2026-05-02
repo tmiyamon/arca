@@ -4,6 +4,52 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-02: Synthetic Builder — FFI-only MVP via `derive`
+
+**Context:** The 2026-04-15 FFI table accepted Synthetic Builder as the boundary mechanism for Go mutation absorption, with implementation deferred. `design_ffi_synthetic_builder.md` settled the theoretical framing (compile-time synthesis, runST / typestate / linear / serde-derive lineage) but left the implementation shape open. Current stdlib (`BindJSON`, `QueryAs`, `Decode`) uses runtime reflection over T directly — `structScanPtrs` walks fields by name, `json.Unmarshal` writes into T, then `ArcaValidate` is invoked post-hoc. This leaks Go-side mutability via public fields on T, conflates wire format with domain type, and won't roundtrip sum types.
+
+**Decision: scope MVP to FFI use only. Builder is hidden inside stdlib helpers; user code never names `Builder` or writes `&`.** `BindJSON[Todo](r)?` works as today from the user's view; what changes is the implementation underneath.
+
+**Synthesis trigger: trait + `derive` annotation, not stdlib-function-name detection.** Compiler-stdlib coupling is limited to one trait name (`Bindable`); stdlib is free to rename / split / extend helpers without compiler changes.
+
+```arca
+type Todo derive(Bindable) (
+  id: Int
+  body: String { max_length: 255 }
+  startedAt: Option[Time]
+)
+```
+
+`derive(Bindable)` sits in the same modifier slot as `pub` / `static` — between the type name and the field tuple — matching Arca's existing decl-modifier style. Multiple traits: `derive(Bindable, Clone)`.
+
+Compiler emits, alongside `Todo` and `NewTodo`:
+
+- `TodoBuilder` Go struct (mutable, public fields, mirroring Todo's shape with Go-side types and `json` / `db` tags)
+- `func (b *TodoBuilder) Freeze() (Todo, error)` calling `NewTodo(...)` for constraint validation
+- `Bindable` trait impl on `Todo` exposing the builder factory
+
+Stdlib helpers (`BindJSON` / `QueryAs` / `Decode`) take `T: Bindable`. Implementation switches from "Unmarshal into T + ArcaValidate" to "construct Builder via trait, populate via Bind / Scan / Unmarshal, Freeze with validation". The reflection-based path retires.
+
+**Why FFI-only, not general user-facing Builder.** A user-facing builder (`let b = User.builder(); b.id = 1; let u = b.freeze()?`) was considered but deferred — Arca's record literal `User(id: 1, name: "...")` already covers ergonomic construction, and adding user-facing builder API doubles the design surface (validation timing, partial state, fluent vs named-field). FFI absorption is the unique value the mechanism provides today; user-facing promotion is purely additive once the underlying synthesis is in place.
+
+**Future extension paths (out of MVP scope):**
+
+- User-facing builder promotion — builder name and `Freeze` signature kept stable so this is additive
+- `extern { }` escape hatch for Go calls no derived helper covers
+- Sum type Builder with discriminator field
+- Arca-side accessors making T's Go fields private at runtime (lowering all field-access sites required)
+
+**Implementation slices (multi-session):**
+
+- B1 — Parser + AST for `derive(Trait)` modifier on type decl; `Bindable` trait registered in prelude; compiler synthesizes Builder struct and Freeze for derive-marked types
+- B2 — Stdlib helpers constrained to `T: Bindable`, implementation switched to Builder + Freeze; reflection path retires
+- B3 — Migrate `examples/todo` to `derive(Bindable)`; verify end-to-end roundtrip
+- B4 — Sum type Builder demo (validates the design beyond plain structs); deferrable
+
+**Status:** Design specified. Implementation deferred — slices B1–B4 across multiple sessions.
+
+---
+
 ## 2026-05-02: Layer 1 panic audit
 
 **Context:** The 2026-04-15 FFI table set Layer 1 safety as "Arca prevents panic from generated code" via Option / safe cast / bounds. `*T` auto-wrap, `?` compile-error, Any + match type pattern all landed; bounds was the deferred piece. Verifying what is actually sealed before declaring Layer 1 done.
