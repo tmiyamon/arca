@@ -4,6 +4,27 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-02: Layer 1 panic audit
+
+**Context:** The 2026-04-15 FFI table set Layer 1 safety as "Arca prevents panic from generated code" via Option / safe cast / bounds. `*T` auto-wrap, `?` compile-error, Any + match type pattern all landed; bounds was the deferred piece. Verifying what is actually sealed before declaring Layer 1 done.
+
+**Findings:**
+
+Compile-time panic emission in generated Go is contained to 2 intentional sources — `Assert` (`emit.go:597`) for user-explicit `assert expr` and `Unreachable` (`go_lower.go` `buildEnumSwitch` / `buildSumSwitch` / `buildListIfChain`) as exhaustive-match Go-side default fillers. No accidental emission paths.
+
+Runtime panic vectors:
+
+- Nil deref: sealed (`*T` auto-wrap to `Option[Ref[T]]`)
+- Type assertion failure: sealed (match type pattern is the only narrowing path)
+- `?` outside Result: sealed (compile error since 2026-04-18)
+- **Index out of bounds:** unsealed. `lowerIndexAccess` (`lower.go:3566`) lowers `arr[i]` to raw Go `arr[i]`
+- **Integer division by zero:** unsealed. `a / b` passes through `TkSlash` binary op in `parser.go:980`
+- **Slice / range:** indeterminate. `RangeExpr` standalone lowering at `lower.go:2252` carries a "shouldn't happen often" comment — survey before claiming either way
+
+**Status:** Audit complete. 2-3 vectors remain before Layer 1 panic-prevention is structurally closed. Implementation deferred. Resume checklist in memory `project_panic_audit_2026_05_02.md`.
+
+---
+
 ## 2026-04-18: Go `*T` → Option auto-wrap
 
 **Context:** Go FFI pointer returns (`*T`) can be nil at runtime, causing nil-pointer panics. The FFI boundary table (2026-04-15) listed `*T` nullability as "partially in place; systematic rule not yet decided".
