@@ -53,11 +53,19 @@ func stage2Lower(funcs []IRFn) []IRFn {
 	return funcs
 }
 
-// walkLambdasInExpr finds every anonymous IRFn (lambda literal) reachable
-// from e and stage2-lowers its body. Anonymous IRFn is emitted as a Go
-// `func(...) { ... }` literal; without this pass its body would still
-// contain Stage 1 control-flow that emit's bodyMode-based machinery used
-// to handle.
+// walkLambdasInExpr is the post-stage2 expression rewriter. Despite the
+// name, it does three jobs in one tree pass:
+//
+//  1. Stage2-lowers anonymous IRFn (lambda) bodies so emitLambda walks
+//     plain Stage 2 stmts.
+//  2. Rewrites IRSomeCall / IRNoneExpr into the corresponding Stage 2
+//     constructor-wrap nodes (GoPtrOf / GoTypedNil) — or a collapse /
+//     bare-nil shortcut when the inner already matches Go's pointer.
+//  3. Wraps Go-FFI multi-return calls returning Option (`(T, bool)`) in
+//     GoOptFromCall, so emit no longer needs to detect this at the call
+//     site.
+//  4. Converts IRTryBlock into GoIIFE once its body is stage2-lowered
+//     so emit renders the `func() (T, error) { ... }()` form mechanically.
 func walkLambdasInExpr(e IRExpr) IRExpr {
 	if e == nil {
 		return nil
@@ -88,17 +96,33 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 			x.Stmts[i] = walkLambdasInStmt(s)
 		}
 		x.Expr = walkLambdasInExpr(x.Expr)
-		return x
+		// Convert to GoIIFE — the IIFE wrapper is now structural.
+		retType := IRType(IRResultType{Ok: x.OkType, Err: x.ErrType})
+		return GoIIFE{
+			RetType: retType,
+			Body:    GoBlock{Stmts: x.Stmts},
+			Type:    retType,
+		}
 	case IRFnCall:
 		x.Fn = walkLambdasInExpr(x.Fn)
 		for i := range x.Args {
 			x.Args[i] = walkLambdasInExpr(x.Args[i])
+		}
+		if x.GoMultiReturn {
+			if _, ok := x.Type.(IROptionType); ok {
+				return GoOptFromCall{Call: x, Type: x.Type}
+			}
 		}
 		return x
 	case IRMethodCall:
 		x.Receiver = walkLambdasInExpr(x.Receiver)
 		for i := range x.Args {
 			x.Args[i] = walkLambdasInExpr(x.Args[i])
+		}
+		if x.GoMultiReturn {
+			if _, ok := x.Type.(IROptionType); ok {
+				return GoOptFromCall{Call: x, Type: x.Type}
+			}
 		}
 		return x
 	case IRFieldAccess:
@@ -134,7 +158,24 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 		return x
 	case IRSomeCall:
 		x.Value = walkLambdasInExpr(x.Value)
-		return x
+		// Collapse: when Inner is Ref/Ptr, the value already emits as *T
+		// matching the Option's Go shape — no __ptrOf needed.
+		if opt, ok := x.Type.(IROptionType); ok {
+			switch opt.Inner.(type) {
+			case IRRefType, IRPointerType:
+				return x.Value
+			}
+		}
+		return GoPtrOf{Inner: x.Value, Type: x.Type}
+	case IRNoneExpr:
+		if x.TypeArg != "" {
+			inner := "interface{}"
+			if opt, ok := x.Type.(IROptionType); ok {
+				inner = irTypeStr(opt.Inner)
+			}
+			return GoTypedNil{GoType: inner, Type: x.Type}
+		}
+		return IRIdent{GoName: "nil"}
 	case IRStringInterp:
 		for i := range x.Args {
 			x.Args[i] = walkLambdasInExpr(x.Args[i])

@@ -432,11 +432,9 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		}
 		return fmt.Sprintf("fmt.Sprintf(%q, %s)", expr.Format, args)
 	case IRFnCall:
-		raw := fmt.Sprintf("%s%s(%s)", em.emitExpr(expr.Fn), expr.TypeArgs, em.emitArgs(expr.Args))
-		return em.wrapGoMultiReturnOption(raw, expr.GoMultiReturn, expr.Type)
+		return fmt.Sprintf("%s%s(%s)", em.emitExpr(expr.Fn), expr.TypeArgs, em.emitArgs(expr.Args))
 	case IRMethodCall:
-		raw := fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
-		return em.wrapGoMultiReturnOption(raw, expr.GoMultiReturn, expr.Type)
+		return fmt.Sprintf("%s.%s(%s)", em.emitExpr(expr.Receiver), expr.Method, em.emitArgs(expr.Args))
 	case IRFieldAccess:
 		return fmt.Sprintf("%s.%s", em.emitExpr(expr.Expr), expr.Field)
 	case IRIndexAccess:
@@ -444,26 +442,11 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 	case IRConstructorCall:
 		return em.emitConstructorCall(expr)
 	case IROkCall:
-		// Value-position Ok: emit the value (error side is implicit nil)
+		// Value-position Ok: emit the value (error side is implicit nil).
+		// stage2 wraps tail-position Ok in GoReturn before reaching emit.
 		return em.emitExpr(expr.Value)
 	case IRErrorCall:
 		return em.emitExpr(expr.Value)
-	case IRSomeCall:
-		// Option<T> emits as *T. Some(v) produces that pointer.
-		// Collapse: when Inner is Ref<U>/Ptr<U>, Value already emits as *U,
-		// so Option<Ref<U>> and Value share the same Go type — pass-through.
-		// Otherwise use __ptrOf helper (handles literals/non-addressable values).
-		if isCollapsibleSomeValue(expr) {
-			return em.emitExpr(expr.Value)
-		}
-		return fmt.Sprintf("__ptrOf(%s)", em.emitExpr(expr.Value))
-	case IRNoneExpr:
-		// None emits as typed nil so assignment without annotation works:
-		// `x := None` → `x := (*int)(nil)` rather than ambiguous `x := nil`.
-		if expr.TypeArg != "" {
-			return fmt.Sprintf("(*%s)(nil)", em.noneInnerGoType(expr))
-		}
-		return "nil"
 	case IRFn:
 		return em.emitLambda(expr)
 	case IRBinaryExpr:
@@ -476,17 +459,33 @@ func (em *Emitter) emitExpr(e IRExpr) string {
 		return em.emitTupleLit(expr)
 	case IRRefExpr:
 		return "&" + em.emitExpr(expr.Expr)
-	case IRTryBlock:
-		return em.emitTryBlockExpr(expr)
 	// --- Stage 2 expressions ---
 	case GoErrorWrap:
 		em.usesGoError = true
 		return fmt.Sprintf("__goError{inner: %s}", em.emitExpr(expr.Inner))
 	case GoDeref:
 		return "*" + em.emitExpr(expr.Inner)
+	case GoPtrOf:
+		return fmt.Sprintf("__ptrOf(%s)", em.emitExpr(expr.Inner))
+	case GoOptFromCall:
+		return fmt.Sprintf("__optFrom(%s)", em.emitExpr(expr.Call))
+	case GoTypedNil:
+		return fmt.Sprintf("(*%s)(nil)", expr.GoType)
+	case GoIIFE:
+		return em.emitGoIIFE(expr)
 	default:
 		return "/* unsupported expr */"
 	}
+}
+
+// emitGoIIFE renders an IIFE expression: `func() RetType { Body }()`.
+func (em *Emitter) emitGoIIFE(g GoIIFE) string {
+	sub := &Emitter{w: NewGoWriter()}
+	for _, stmt := range g.Body.Stmts {
+		sub.emitStmt(stmt)
+	}
+	body := strings.TrimRight(sub.w.String(), "\n")
+	return fmt.Sprintf("func() %s {\n%s\n}()", irReturnTypeStr(g.RetType), body)
 }
 
 func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
@@ -805,18 +804,6 @@ func isMultiReturnType(t IRType) bool {
 	return false
 }
 
-// emitTryBlockExpr emits try { ... } as a Go IIFE: func() (T, error) { ... }().
-// Body has been stage2-lowered to a flat sequence of IRStmts with GoReturn
-// at the tail; emit just walks the list.
-func (em *Emitter) emitTryBlockExpr(rb IRTryBlock) string {
-	sub := &Emitter{w: NewGoWriter()}
-	for _, stmt := range rb.Stmts {
-		sub.emitStmt(stmt)
-	}
-	body := strings.TrimRight(sub.w.String(), "\n")
-	okStr := em.irTypeStr(rb.OkType)
-	return fmt.Sprintf("func() (%s, error) {\n%s\n}()", okStr, body)
-}
 
 func (em *Emitter) emitExprStmt(stmt IRExprStmt) {
 	w := em.w
@@ -885,11 +872,8 @@ func (em *Emitter) emitForBodyStmts(body IRExpr) {
 
 // isPointerBackedOption reports whether an Option's inner type is itself
 // pointer-like (Ref or Ptr), so outer and inner share the same Go `*T`
-// encoding. This enables the collapse: `Some(r)` for `Option<Ref<T>>` is
-// emitted as the ref itself, not `__ptrOf(r)`; and the match binding
-// `Some(v)` pass-through assigns `v := subject` rather than `v := *subject`.
-// All `Option<T>` is pointer-backed under the uniform scheme (2026-04-19);
-// this predicate only distinguishes the collapsible sub-case.
+// encoding. Stage 2 uses this for Option-match binding decisions
+// (pass-through vs deref).
 func isPointerBackedOption(t IRType) bool {
 	opt, ok := t.(IROptionType)
 	if !ok {
@@ -900,48 +884,6 @@ func isPointerBackedOption(t IRType) bool {
 		return true
 	}
 	return false
-}
-
-// isCollapsibleSomeValue reports whether an IRSomeCall emits as its value
-// directly (no __ptrOf wrap). Fires when the Option's inner is Ref or Ptr:
-// both outer Option and inner Ref emit as `*T`, so the wrap would produce
-// `**T`, which is semantically wrong for the collapse.
-func isCollapsibleSomeValue(sc IRSomeCall) bool {
-	opt, ok := sc.Type.(IROptionType)
-	if !ok {
-		return false
-	}
-	switch opt.Inner.(type) {
-	case IRRefType, IRPointerType:
-		return true
-	}
-	return false
-}
-
-// wrapGoMultiReturnOption converts a Go FFI call that returns `(T, bool)`
-// into a single `*T` at the Arca boundary, so the uniform pointer-backed
-// Option representation holds end-to-end. No-op when the call doesn't need
-// conversion (non-Go-multi-return, or Result — Go's `(T, error)` matches
-// Arca `Result<T, E>` emit without translation).
-func (em *Emitter) wrapGoMultiReturnOption(raw string, goMultiReturn bool, t IRType) string {
-	if !goMultiReturn {
-		return raw
-	}
-	if _, ok := t.(IROptionType); !ok {
-		return raw
-	}
-	return fmt.Sprintf("__optFrom(%s)", raw)
-}
-
-// noneInnerGoType renders the Go type of the inner slot of an IRNoneExpr.
-// For `None` of type `Option<Int>`, emit needs `(*int)(nil)` at the value
-// position so Go can type-infer. The IRNoneExpr's Type carries the Option
-// and the Inner tells us what to cast to.
-func (em *Emitter) noneInnerGoType(n IRNoneExpr) string {
-	if opt, ok := n.Type.(IROptionType); ok {
-		return em.irTypeStr(opt.Inner)
-	}
-	return "interface{}"
 }
 
 func isVoidBody(expr IRExpr) bool {
@@ -1058,7 +1000,12 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 
 // --- Type Rendering ---
 
-func (em *Emitter) irTypeStr(t IRType) string {
+func (em *Emitter) irTypeStr(t IRType) string { return irTypeStr(t) }
+
+// irTypeStr renders an IRType as its Go-side string. Pure function of the
+// type — no emitter / printer state used — so stage2 can call it to
+// fully resolve type strings before emit runs.
+func irTypeStr(t IRType) string {
 	if t == nil {
 		return ""
 	}
@@ -1067,37 +1014,37 @@ func (em *Emitter) irTypeStr(t IRType) string {
 		if len(tt.Params) > 0 {
 			params := make([]string, len(tt.Params))
 			for i, p := range tt.Params {
-				params[i] = em.irTypeStr(p)
+				params[i] = irTypeStr(p)
 			}
 			return tt.GoName + "[" + strings.Join(params, ", ") + "]"
 		}
 		return tt.GoName
 	case IRPointerType:
-		return "*" + em.irTypeStr(tt.Inner)
+		return "*" + irTypeStr(tt.Inner)
 	case IRRefType:
-		return "*" + em.irTypeStr(tt.Inner)
+		return "*" + irTypeStr(tt.Inner)
 	case IRTupleType:
 		if len(tt.Elements) == 2 {
-			return fmt.Sprintf("struct{ First %s; Second %s }", em.irTypeStr(tt.Elements[0]), em.irTypeStr(tt.Elements[1]))
+			return fmt.Sprintf("struct{ First %s; Second %s }", irTypeStr(tt.Elements[0]), irTypeStr(tt.Elements[1]))
 		}
 		return "interface{}"
 	case IRListType:
-		return "[]" + em.irTypeStr(tt.Elem)
+		return "[]" + irTypeStr(tt.Elem)
 	case IRMapType:
-		return "map[" + em.irTypeStr(tt.Key) + "]" + em.irTypeStr(tt.Value)
+		return "map[" + irTypeStr(tt.Key) + "]" + irTypeStr(tt.Value)
 	case IRResultType:
 		// Returns and params are expanded by the post-pass. Struct fields
 		// and other value positions fall through here.
-		return fmt.Sprintf("(%s, %s)", em.irTypeStr(tt.Ok), em.irTypeStr(tt.Err))
+		return fmt.Sprintf("(%s, %s)", irTypeStr(tt.Ok), irTypeStr(tt.Err))
 	case IROptionType:
 		// Option in struct field position → Go pointer (nil = None).
-		return "*" + em.irTypeStr(tt.Inner)
+		return "*" + irTypeStr(tt.Inner)
 	case IRInterfaceType:
 		return "interface{}"
 	case IRTraitType:
 		// Error maps to Go's stdlib `error` interface for interop with FFI
 		// returns. Method calls on Error-typed values are wrapped at the
-		// call site (see emitMatchResult, emitMethodCallWithErrorWrap).
+		// call site.
 		if tt.Name == "Error" {
 			return "error"
 		}
@@ -1105,12 +1052,12 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	case IRFnType:
 		params := make([]string, len(tt.Params))
 		for i, p := range tt.Params {
-			params[i] = em.irTypeStr(p)
+			params[i] = irTypeStr(p)
 		}
 		if tt.Ret == nil {
 			return "func(" + strings.Join(params, ", ") + ")"
 		}
-		return "func(" + strings.Join(params, ", ") + ") " + em.irTypeStr(tt.Ret)
+		return "func(" + strings.Join(params, ", ") + ") " + irTypeStr(tt.Ret)
 	case IRTypeVar:
 		return "interface{}" // unresolved type variable
 	default:
@@ -1118,18 +1065,21 @@ func (em *Emitter) irTypeStr(t IRType) string {
 	}
 }
 
+func (em *Emitter) irReturnTypeStr(t IRType) string { return irReturnTypeStr(t) }
+
 // irReturnTypeStr renders an IR type as a Go function return type. Result
 // still uses multi-return (Go-idiomatic), Option is uniformly pointer-backed
-// so it falls through to irTypeStr and emits as `*T`.
-func (em *Emitter) irReturnTypeStr(t IRType) string {
+// so it falls through to irTypeStr and emits as `*T`. Pure function so
+// stage2 can use it before emit runs.
+func irReturnTypeStr(t IRType) string {
 	switch tt := t.(type) {
 	case IRResultType:
 		if isUnitType(tt.Ok) {
 			return "error"
 		}
-		return fmt.Sprintf("(%s, error)", em.irTypeStr(tt.Ok))
+		return fmt.Sprintf("(%s, error)", irTypeStr(tt.Ok))
 	}
-	return em.irTypeStr(t)
+	return irTypeStr(t)
 }
 
 func (em *Emitter) goTypeParams(params []string) string {
