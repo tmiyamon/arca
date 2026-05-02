@@ -302,7 +302,7 @@ func (em *Emitter) emitValidatorAlias(v *IRValidator, typeName, zeroVal, goBase 
 
 func (em *Emitter) emitFn(fd IRFn) {
 	w := em.w
-	// Params are already expanded by expandFuncParams in lower.go.
+	// Result params are already split (val + err) by stage2's expandParams.
 	params := make([]string, len(fd.Params))
 	for i, p := range fd.Params {
 		params[i] = fmt.Sprintf("%s %s", p.GoName, em.irTypeStr(p.Type))
@@ -511,7 +511,8 @@ func (em *Emitter) emitConstructorCall(cc IRConstructorCall) string {
 }
 
 func (em *Emitter) emitLambda(l IRFn) string {
-	// Params are already expanded by the expandResultOption post-pass.
+	// Result params are already split by stage2's expandParams (called
+	// from walkLambdasInExpr for anonymous lambdas).
 	params := make([]string, len(l.Params))
 	for i, p := range l.Params {
 		if p.Type != nil {
@@ -790,19 +791,6 @@ func isUnitType(t IRType) bool {
 	return false
 }
 
-// isMultiReturnType checks if an IR type will be emitted as Go multi-return.
-// Used by expandResultOption to detect when a let-bound value needs split
-// names. Both Result and Option are listed historically; under the
-// pointer-backed Option scheme only Result actually multi-returns, but
-// expandLetToMultiLet handles only Result and the predicate stays
-// permissive.
-func isMultiReturnType(t IRType) bool {
-	switch t.(type) {
-	case IRResultType, IROptionType:
-		return true
-	}
-	return false
-}
 
 
 func (em *Emitter) emitExprStmt(stmt IRExprStmt) {

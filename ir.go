@@ -338,33 +338,29 @@ type IRFieldValue struct {
 	Source SourceInfo // Name = original Arca field name
 }
 
-// Builtin constructors. The ExpandedValues field is populated by the
-// expandResultOption post-pass so emit can mechanically output native
-// Go multi-return without knowing about Result/Option semantics.
+// Builtin constructors. Stage 2 lowering computes the multi-return form
+// for Ok/Error inline (see expandedValuesOf) and rewrites Some/None into
+// GoPtrOf / GoTypedNil — no sideband fields needed.
 type IROkCall struct {
-	Value          IRExpr
-	TypeArgs       string   // "[User, error]"
-	Type           IRType
-	ExpandedValues []IRExpr // e.g. [val, nil] — populated by post-pass
+	Value    IRExpr
+	TypeArgs string // "[User, error]"
+	Type     IRType
 }
 
 type IRErrorCall struct {
-	Value          IRExpr
-	TypeArgs       string
-	Type           IRType
-	ExpandedValues []IRExpr // e.g. [zero, err] — populated by post-pass
+	Value    IRExpr
+	TypeArgs string
+	Type     IRType
 }
 
 type IRSomeCall struct {
-	Value          IRExpr
-	Type           IRType
-	ExpandedValues []IRExpr // e.g. [val, true] — populated by post-pass
+	Value IRExpr
+	Type  IRType
 }
 
 type IRNoneExpr struct {
-	TypeArg        string // "[string]" etc.
-	Type           IRType
-	ExpandedValues []IRExpr // e.g. [zero, false] — populated by post-pass
+	TypeArg string // "[string]" etc.
+	Type    IRType
 }
 
 // Binary expression
@@ -518,24 +514,20 @@ type IRStmt interface {
 }
 
 type IRLetStmt struct {
-	GoName     string
-	Value      IRExpr
-	Type       IRType
-	Pos        Pos      // source position of the `let` keyword, used for diagnostics
-	SplitNames []string // for multi-return calls: ["r", "r_err"] — populated by post-pass
+	GoName string
+	Value  IRExpr
+	Type   IRType
+	Pos    Pos // source position of the `let` keyword, used for diagnostics
 }
 
 // Try let: let x = expr? — error propagation.
-// SplitNames/ErrorReturnValues/ValueName are populated by the expandResultOption
-// post-pass so emit can mechanically output the try pattern.
+// Split names and error return values are computed by stage2's
+// lowerTryLetStmt; only the user-visible fields and the enclosing-fn
+// return type live here.
 type IRTryLetStmt struct {
-	GoName               string   // "_" for discard
-	CallExpr             IRExpr
-	ReturnType           IRType   // enclosing function's return type
-	SplitNames           []string // ["__val1", "__err1"] — multi-receive names
-	ErrorReturnValues      []IRExpr // error return values: [zero, IRIdent{__err1}]
-	ValueName            string   // which split name holds the unwrapped value
-	NilCheckReturnValues    []IRExpr // nil check return values: [zero, fmt.Errorf(...)], nil if no check
+	GoName     string // "_" for discard
+	CallExpr   IRExpr
+	ReturnType IRType // enclosing function's return type
 }
 
 type IRExprStmt struct {

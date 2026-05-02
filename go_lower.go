@@ -107,12 +107,14 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 	switch x := e.(type) {
 	case IRFn:
 		if x.GoName == "" {
+			walker := newStage2Walker()
+			x.Params = walker.expandParams(x.Params)
 			mode := s2Return
 			if x.Ret == nil || isUnitType(x.Ret) {
 				mode = s2Void
 			}
-			walker := newStage2Walker()
 			stmts := walker.walkExpr(x.Body, mode, nil)
+			stmts = walker.blankUnusedSplits(stmts)
 			for i, s := range stmts {
 				stmts[i] = walkLambdasInStmt(s)
 			}
@@ -176,15 +178,9 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 		return x
 	case IROkCall:
 		x.Value = walkLambdasInExpr(x.Value)
-		for i := range x.ExpandedValues {
-			x.ExpandedValues[i] = walkLambdasInExpr(x.ExpandedValues[i])
-		}
 		return x
 	case IRErrorCall:
 		x.Value = walkLambdasInExpr(x.Value)
-		for i := range x.ExpandedValues {
-			x.ExpandedValues[i] = walkLambdasInExpr(x.ExpandedValues[i])
-		}
 		return x
 	case IRSomeCall:
 		x.Value = walkLambdasInExpr(x.Value)
@@ -265,12 +261,6 @@ func walkLambdasInStmt(s IRStmt) IRStmt {
 		return stmt
 	case IRTryLetStmt:
 		stmt.CallExpr = walkLambdasInExpr(stmt.CallExpr)
-		for i := range stmt.ErrorReturnValues {
-			stmt.ErrorReturnValues[i] = walkLambdasInExpr(stmt.ErrorReturnValues[i])
-		}
-		for i := range stmt.NilCheckReturnValues {
-			stmt.NilCheckReturnValues[i] = walkLambdasInExpr(stmt.NilCheckReturnValues[i])
-		}
 		return stmt
 	case IRExprStmt:
 		stmt.Expr = walkLambdasInExpr(stmt.Expr)
@@ -624,9 +614,6 @@ func collectStmtRefsStage2(stmts []IRStmt, refs map[string]bool) {
 			collectExprRefsStage2(stmt.Value, refs)
 		case IRTryLetStmt:
 			collectExprRefsStage2(stmt.CallExpr, refs)
-			for _, e := range stmt.ErrorReturnValues {
-				collectExprRefsStage2(e, refs)
-			}
 		case IRExprStmt:
 			collectExprRefsStage2(stmt.Expr, refs)
 		case IRDeferStmt:
