@@ -1025,3 +1025,87 @@ trait Display {
 		t.Fatalf("Display trait not found in lowerer output")
 	}
 }
+
+// Stage 2 lowering drops dictionary-kind IRTraitDecl nodes — they have no
+// Go-interface representation, so emit must never see them. Vtable traits
+// pass through untouched. Pins B1b's stage2LowerTypes contract.
+func TestStage2_DropsDictionaryTraits(t *testing.T) {
+	t.Parallel()
+	src := `
+trait Display {
+  fun show() -> String
+}
+trait Cloneable {
+  fun clone() -> Self
+}
+`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	var foundDisplay, foundCloneable bool
+	for _, td := range out.Types {
+		trait, ok := td.(IRTraitDecl)
+		if !ok {
+			continue
+		}
+		switch trait.GoName {
+		case traitGoName("Display"):
+			foundDisplay = true
+		case traitGoName("Cloneable"):
+			foundCloneable = true
+		}
+	}
+	if !foundDisplay {
+		t.Errorf("Vtable trait Display dropped from output")
+	}
+	if foundCloneable {
+		t.Errorf("Dictionary trait Cloneable should be dropped, but found in output")
+	}
+}
+
+// Referencing a dictionary-kind trait in a type position (parameter, return,
+// let annotation, ...) is rejected with ErrUnsupportedFeature in B1b.
+// B2 will replace this with hidden-parameter dictionary injection.
+func TestLower_DictionaryTraitAsType_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+trait Cloneable {
+  fun clone() -> Self
+}
+
+fun handle(c: Cloneable) {}
+`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for Cloneable in param position, got: %v", errs)
+	}
+}
+
+// `impl X: Cloneable { ... }` against a dictionary-kind trait is rejected in
+// B1b — the impl has no Go-interface to satisfy, and the dispatch mechanism
+// (dictionary struct) doesn't land until B2.
+func TestLower_ImplDictionaryTrait_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+trait Cloneable {
+  fun clone() -> Self
+}
+
+type Box (value: Int)
+
+impl Box: Cloneable {
+  fun clone() -> Self {
+    self
+  }
+}
+`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for impl of Cloneable, got: %v", errs)
+	}
+}

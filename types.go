@@ -28,6 +28,7 @@ const (
 	ErrCannotInferTypeParam
 	ErrTryOutsideResultContext
 	ErrTraitMethodCollision
+	ErrUnsupportedFeature
 	ErrParseExpected
 	ErrParseUnsupported
 	ErrParseInvalidSyntax
@@ -241,6 +242,24 @@ type ParseUnsupportedData struct {
 }
 
 func (d ParseUnsupportedData) Message() string {
+	if d.Context == "" {
+		return fmt.Sprintf("%s is not supported", d.Feature)
+	}
+	return fmt.Sprintf("%s is not supported in %s", d.Feature, d.Context)
+}
+
+// UnsupportedFeatureData covers feature gates the lowerer rejects after
+// parsing succeeds — typically things the parser can't catch because they
+// require name resolution (e.g. distinguishing a vtable trait from a
+// dictionary-only trait at a type-position reference). Mirrors
+// ParseUnsupportedData's shape so error messages stay consistent across
+// phases.
+type UnsupportedFeatureData struct {
+	Feature string
+	Context string
+}
+
+func (d UnsupportedFeatureData) Message() string {
 	if d.Context == "" {
 		return fmt.Sprintf("%s is not supported", d.Feature)
 	}

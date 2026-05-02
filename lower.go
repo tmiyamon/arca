@@ -856,7 +856,9 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	// pretty-printer for those nodes. stage2 self-sufficiently expands
 	// params, computes split names, generates ExpandedValues inline, and
 	// blanks unused split slots — replacing the prior expandResultOption
-	// pass entirely.
+	// pass entirely. The types pass drops dictionary-kind traits, which
+	// have no Go-interface representation.
+	types = stage2LowerTypes(types)
 	funcs = stage2Lower(funcs)
 
 	// Report unused imports (skip side-effect imports, which are intentional,
@@ -1361,6 +1363,18 @@ func (l *Lowerer) lowerTraitDecl(d TraitDecl) IRTraitDecl {
 	}
 }
 
+// traitIsDictionary reports whether the named trait routes through dictionary
+// dispatch (Self / static fun / associated type). Dictionary traits have no
+// Go-interface representation; B1b rejects every usage site, B2 will replace
+// the rejection with dictionary-struct emission.
+func (l *Lowerer) traitIsDictionary(name string) bool {
+	d, ok := l.traits[name]
+	if !ok {
+		return false
+	}
+	return analyzeTraitObjectSafety(d) == TraitKindDictionary
+}
+
 // lowerImplDecl emits impl methods as Go methods on the target concrete type.
 // Go's structural interface satisfaction means no extra registration is
 // needed on the Go side — the ArcaTrait interface and these methods share
@@ -1373,6 +1387,13 @@ func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 	}
 	if _, ok := l.traits[d.TraitName]; !ok {
 		l.addCompileError(ErrUnknownType, d.Pos, UnknownTypeData{Name: d.TraitName})
+		return nil
+	}
+	if l.traitIsDictionary(d.TraitName) {
+		l.addCompileError(ErrUnsupportedFeature, d.Pos, UnsupportedFeatureData{
+			Feature: fmt.Sprintf("impl of constraint-only trait %s", d.TraitName),
+			Context: "Phase 1 (dictionary dispatch lands in B2)",
+		})
 		return nil
 	}
 	if d.TraitName == "Error" {
@@ -2197,6 +2218,13 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		}
 		// Trait used as a type (trait object): `fun f(e: Error)`.
 		if _, ok := l.traits[nt.Name]; ok {
+			if l.traitIsDictionary(nt.Name) {
+				l.addCompileError(ErrUnsupportedFeature, nt.Pos, UnsupportedFeatureData{
+					Feature: fmt.Sprintf("constraint-only trait %s as a type", nt.Name),
+					Context: "Phase 1 (use a vtable trait, or wait for B2 dictionary dispatch)",
+				})
+				return IRInterfaceType{}
+			}
 			if nt.Name == "Error" {
 				l.builtins["error_trait"] = true
 			}

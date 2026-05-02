@@ -85,6 +85,22 @@ func (w *stage2Walker) splitsFor(name string) []string {
 	return nil
 }
 
+// stage2LowerTypes filters Stage 1 type decls down to the subset emit can
+// turn into Go directly. Currently this drops dictionary-kind IRTraitDecl
+// nodes — they record a constraint-only trait that has no Go-interface
+// representation, so emit must never see them. B2 will replace this drop
+// with "synthesise a per-type dictionary struct from the trait body".
+func stage2LowerTypes(types []IRTypeDecl) []IRTypeDecl {
+	out := types[:0]
+	for _, td := range types {
+		if trait, ok := td.(IRTraitDecl); ok && trait.Kind == TraitKindDictionary {
+			continue
+		}
+		out = append(out, td)
+	}
+	return out
+}
+
 // stage2Lower rewrites each function body's Result/Option dispatch and
 // multi-return let bindings into Stage 2 nodes. Other Stage 1 nodes pass
 // through (wrapped in goLegacyBody where they sit at a tail-form position).
