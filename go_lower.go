@@ -34,14 +34,42 @@ const (
 )
 
 
-// stage2Walker carries per-function state (synthetic-name counter).
+// stage2Walker carries per-function state: a synthetic-name counter, a
+// splits registry mapping ident GoName → split names produced by
+// expanding multi-return values, and a matchResolved set tracking which
+// subjects had their splits already resolved by a Result-match (mirroring
+// the previous expandResultOption / resolveMatchBindings split between
+// match-driven and reference-driven blank propagation).
 type stage2Walker struct {
-	counter int
+	counter        int
+	splits         map[string][]string
+	matchResolved  map[string]bool
+}
+
+func newStage2Walker() *stage2Walker {
+	return &stage2Walker{
+		splits:        make(map[string][]string),
+		matchResolved: make(map[string]bool),
+	}
 }
 
 func (w *stage2Walker) nextSym() int {
 	w.counter++
 	return w.counter
+}
+
+// registerSplit records the split names produced by expanding a Result-
+// typed param or let binding. Idempotent.
+func (w *stage2Walker) registerSplit(name string, splitNames []string) {
+	w.splits[name] = splitNames
+}
+
+// splitsFor returns the split names registered for an ident (or nil).
+func (w *stage2Walker) splitsFor(name string) []string {
+	if names, ok := w.splits[name]; ok {
+		return names
+	}
+	return nil
 }
 
 // stage2Lower rewrites each function body's Result/Option dispatch and
@@ -83,7 +111,7 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 			if x.Ret == nil || isUnitType(x.Ret) {
 				mode = s2Void
 			}
-			walker := &stage2Walker{}
+			walker := newStage2Walker()
 			stmts := walker.walkExpr(x.Body, mode, nil)
 			for i, s := range stmts {
 				stmts[i] = walkLambdasInStmt(s)
@@ -111,9 +139,7 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 		}
 	case IRFnCall:
 		x.Fn = walkLambdasInExpr(x.Fn)
-		for i := range x.Args {
-			x.Args[i] = walkLambdasInExpr(x.Args[i])
-		}
+		x.Args = walkAndFlattenCallArgs(x.Args)
 		if x.GoMultiReturn {
 			if _, ok := x.Type.(IROptionType); ok {
 				return GoOptFromCall{Call: x, Type: x.Type}
@@ -122,9 +148,7 @@ func walkLambdasInExpr(e IRExpr) IRExpr {
 		return x
 	case IRMethodCall:
 		x.Receiver = walkLambdasInExpr(x.Receiver)
-		for i := range x.Args {
-			x.Args[i] = walkLambdasInExpr(x.Args[i])
-		}
+		x.Args = walkAndFlattenCallArgs(x.Args)
 		if x.GoMultiReturn {
 			if _, ok := x.Type.(IROptionType); ok {
 				return GoOptFromCall{Call: x, Type: x.Type}
@@ -328,14 +352,42 @@ func stage2LowerFn(fn IRFn) IRFn {
 	if fn.Body == nil {
 		return fn
 	}
+	w := newStage2Walker()
+	fn.Params = w.expandParams(fn.Params)
 	mode := s2Return
 	if fn.Ret == nil || isUnitType(fn.Ret) {
 		mode = s2Void
 	}
-	w := &stage2Walker{}
 	stmts := w.walkExpr(fn.Body, mode, nil)
+	stmts = w.blankUnusedSplits(stmts)
 	fn.Body = IRBlock{Stmts: stmts, Type: fn.Ret}
 	return fn
+}
+
+// expandParams replaces Result-typed params with their split form
+// (val + err) and registers the split names in the walker. Replaces the
+// previous lower.go expandFuncParams.
+func (w *stage2Walker) expandParams(params []IRParamDecl) []IRParamDecl {
+	var out []IRParamDecl
+	for _, p := range params {
+		switch pt := p.Type.(type) {
+		case IRResultType:
+			if isUnitType(pt.Ok) {
+				out = append(out, IRParamDecl{GoName: p.GoName, Type: IRNamedType{GoName: "error"}})
+				w.registerSplit(p.GoName, []string{p.GoName})
+			} else {
+				errName := p.GoName + "_err"
+				out = append(out,
+					IRParamDecl{GoName: p.GoName, Type: pt.Ok},
+					IRParamDecl{GoName: errName, Type: IRNamedType{GoName: "error"}},
+				)
+				w.registerSplit(p.GoName, []string{p.GoName, errName})
+			}
+		default:
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // walkExpr walks an IRExpr in the given mode and produces a sequence of
@@ -418,27 +470,30 @@ func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 		if tb, ok := stmt.Value.(IRTryBlock); ok {
 			stmt.Value = w.lowerTryBlockInternals(tb)
 		}
+		// Compute the split names inline for Result-typed values, and
+		// register them so subsequent match dispatch finds them.
+		splitNames := w.computeLetSplits(stmt)
 		// Multi-receive let with non-control-flow value → GoMultiAssign.
-		if len(stmt.SplitNames) > 0 && !isControlFlowValue(stmt.Value) {
+		if len(splitNames) > 0 && !isControlFlowValue(stmt.Value) {
 			return []IRStmt{GoMultiAssign{
-				Names: stmt.SplitNames,
+				Names: splitNames,
 				Value: stmt.Value,
 				Pos:   stmt.Pos,
 			}}
 		}
 		// Multi-receive let with control-flow value: predeclare vars then
 		// recurse into value with multi-assign mode.
-		if len(stmt.SplitNames) > 0 && isControlFlowValue(stmt.Value) {
+		if len(splitNames) > 0 && isControlFlowValue(stmt.Value) {
 			var out []IRStmt
 			if rt, ok := stmt.Value.irType().(IRResultType); ok {
-				if isUnitType(rt.Ok) && len(stmt.SplitNames) >= 1 {
-					out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: IRNamedType{GoName: "error"}})
-				} else if len(stmt.SplitNames) >= 2 {
-					out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: rt.Ok})
-					out = append(out, GoVarDecl{Name: stmt.SplitNames[1], Type: IRNamedType{GoName: "error"}})
+				if isUnitType(rt.Ok) && len(splitNames) >= 1 {
+					out = append(out, GoVarDecl{Name: splitNames[0], Type: IRNamedType{GoName: "error"}})
+				} else if len(splitNames) >= 2 {
+					out = append(out, GoVarDecl{Name: splitNames[0], Type: rt.Ok})
+					out = append(out, GoVarDecl{Name: splitNames[1], Type: IRNamedType{GoName: "error"}})
 				}
 			}
-			out = append(out, w.walkExpr(stmt.Value, s2Multi, stmt.SplitNames)...)
+			out = append(out, w.walkExpr(stmt.Value, s2Multi, splitNames)...)
 			return out
 		}
 		// Single-target control-flow value: predeclare var then recurse with assign mode.
@@ -466,6 +521,41 @@ func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 	}
 }
 
+// computeLetSplits derives the multi-receive split names for an IRLetStmt
+// whose Value is Result-typed (or already a multi-return Go call). Also
+// registers the split in the walker so match dispatch can find them.
+// Returns nil for plain (non-multi-return) let bindings.
+func (w *stage2Walker) computeLetSplits(stmt IRLetStmt) []string {
+	if stmt.GoName == "_" || !isMultiReturnLetValue(stmt.Value) {
+		return nil
+	}
+	rt, ok := stmt.Value.irType().(IRResultType)
+	if !ok {
+		return nil
+	}
+	var splitNames []string
+	if isUnitType(rt.Ok) {
+		splitNames = []string{stmt.GoName}
+	} else {
+		splitNames = []string{stmt.GoName, stmt.GoName + "_err"}
+	}
+	w.registerSplit(stmt.GoName, splitNames)
+	return splitNames
+}
+
+// isMultiReturnLetValue reports whether a let value needs multi-receive
+// (`v, err := f()` rather than plain `v := expr`). Result-typed values
+// always need it; Option is uniformly pointer-backed and emits as a
+// single value.
+func isMultiReturnLetValue(v IRExpr) bool {
+	t := v.irType()
+	if t == nil {
+		return false
+	}
+	_, ok := t.(IRResultType)
+	return ok
+}
+
 // wrapTail wraps a non-control-flow leaf expression based on the tail mode.
 func (w *stage2Walker) wrapTail(e IRExpr, mode s2Mode, targets []string) IRStmt {
 	switch mode {
@@ -490,12 +580,234 @@ func (w *stage2Walker) wrapTail(e IRExpr, mode s2Mode, targets []string) IRStmt 
 	return GoExprStmt{Expr: e}
 }
 
+// okArmBinds reports whether the Result match's Ok arm has a value
+// binding (used for `match r { Ok(v) => use(v) }` cases). When no arm
+// binds the val slot, the slot is blanked to "_" in the let assignment.
+func okArmBinds(m IRMatch) bool {
+	for _, arm := range m.Arms {
+		if p, ok := arm.Pattern.(IRResultOkPattern); ok && p.Binding != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// blankUnusedSplits mirrors the previous markUnusedSplits sweep. After
+// walking the function body, any registered splits not consumed by a
+// match (matchResolved is false for them) get their unreferenced names
+// blanked to "_". The slice backing each splits entry is shared with
+// the GoMultiAssign that produced the names, so the blanking propagates
+// to emit.
+func (w *stage2Walker) blankUnusedSplits(stmts []IRStmt) []IRStmt {
+	if len(w.splits) == 0 {
+		return stmts
+	}
+	refs := make(map[string]bool)
+	collectStmtRefsStage2(stmts, refs)
+	for key, names := range w.splits {
+		if w.matchResolved[key] {
+			continue
+		}
+		for i, n := range names {
+			if n != "_" && !refs[n] {
+				names[i] = "_"
+			}
+		}
+	}
+	return stmts
+}
+
+func collectStmtRefsStage2(stmts []IRStmt, refs map[string]bool) {
+	for _, s := range stmts {
+		switch stmt := s.(type) {
+		case IRLetStmt:
+			collectExprRefsStage2(stmt.Value, refs)
+		case IRTryLetStmt:
+			collectExprRefsStage2(stmt.CallExpr, refs)
+			for _, e := range stmt.ErrorReturnValues {
+				collectExprRefsStage2(e, refs)
+			}
+		case IRExprStmt:
+			collectExprRefsStage2(stmt.Expr, refs)
+		case IRDeferStmt:
+			collectExprRefsStage2(stmt.Expr, refs)
+		case IRAssertStmt:
+			collectExprRefsStage2(stmt.Expr, refs)
+		case IRDestructureStmt:
+			collectExprRefsStage2(stmt.Value, refs)
+		case GoMultiAssign:
+			collectExprRefsStage2(stmt.Value, refs)
+		case GoVarDecl:
+			collectExprRefsStage2(stmt.Init, refs)
+		case GoReassign:
+			for _, e := range stmt.Values {
+				collectExprRefsStage2(e, refs)
+			}
+		case GoReturn:
+			for _, e := range stmt.Values {
+				collectExprRefsStage2(e, refs)
+			}
+		case GoExprStmt:
+			collectExprRefsStage2(stmt.Expr, refs)
+		case GoIfElse:
+			if stmt.Init != nil {
+				collectStmtRefsStage2([]IRStmt{stmt.Init}, refs)
+			}
+			collectExprRefsStage2(stmt.Cond, refs)
+			collectStmtRefsStage2(stmt.Then.Stmts, refs)
+			collectStmtRefsStage2(stmt.Else.Stmts, refs)
+		case GoSwitch:
+			collectExprRefsStage2(stmt.Subject, refs)
+			for _, c := range stmt.Cases {
+				for _, v := range c.Vals {
+					collectExprRefsStage2(v, refs)
+				}
+				collectStmtRefsStage2(c.Body.Stmts, refs)
+			}
+			if stmt.Default != nil {
+				collectStmtRefsStage2(stmt.Default.Stmts, refs)
+			}
+		case GoTypeSwitch:
+			collectExprRefsStage2(stmt.Subject, refs)
+			for _, c := range stmt.Cases {
+				collectStmtRefsStage2(c.Body.Stmts, refs)
+			}
+			if stmt.Default != nil {
+				collectStmtRefsStage2(stmt.Default.Stmts, refs)
+			}
+		}
+	}
+}
+
+func collectExprRefsStage2(e IRExpr, refs map[string]bool) {
+	if e == nil {
+		return
+	}
+	switch x := e.(type) {
+	case IRIdent:
+		refs[x.GoName] = true
+	case IRFnCall:
+		collectExprRefsStage2(x.Fn, refs)
+		for _, a := range x.Args {
+			collectExprRefsStage2(a, refs)
+		}
+	case IRMethodCall:
+		collectExprRefsStage2(x.Receiver, refs)
+		for _, a := range x.Args {
+			collectExprRefsStage2(a, refs)
+		}
+	case IRFieldAccess:
+		collectExprRefsStage2(x.Expr, refs)
+	case IRIndexAccess:
+		collectExprRefsStage2(x.Expr, refs)
+		collectExprRefsStage2(x.Index, refs)
+	case IRBinaryExpr:
+		collectExprRefsStage2(x.Left, refs)
+		collectExprRefsStage2(x.Right, refs)
+	case IRRefExpr:
+		collectExprRefsStage2(x.Expr, refs)
+	case IRConstructorCall:
+		for _, f := range x.Fields {
+			collectExprRefsStage2(f.Value, refs)
+		}
+	case IROkCall:
+		collectExprRefsStage2(x.Value, refs)
+	case IRErrorCall:
+		collectExprRefsStage2(x.Value, refs)
+	case IRSomeCall:
+		collectExprRefsStage2(x.Value, refs)
+	case IRStringInterp:
+		for _, a := range x.Args {
+			collectExprRefsStage2(a, refs)
+		}
+	case IRListLit:
+		for _, el := range x.Elements {
+			collectExprRefsStage2(el, refs)
+		}
+		collectExprRefsStage2(x.Spread, refs)
+	case IRMapLit:
+		for _, en := range x.Entries {
+			collectExprRefsStage2(en.Key, refs)
+			collectExprRefsStage2(en.Value, refs)
+		}
+	case IRTupleLit:
+		for _, el := range x.Elements {
+			collectExprRefsStage2(el, refs)
+		}
+	case IRFn:
+		// Lambda body — refs to outer-scope names count.
+		if blk, ok := x.Body.(IRBlock); ok {
+			collectStmtRefsStage2(blk.Stmts, refs)
+			collectExprRefsStage2(blk.Expr, refs)
+		} else {
+			collectExprRefsStage2(x.Body, refs)
+		}
+	case IRTryBlock:
+		collectStmtRefsStage2(x.Stmts, refs)
+		collectExprRefsStage2(x.Expr, refs)
+	case IRForRange:
+		collectExprRefsStage2(x.Start, refs)
+		collectExprRefsStage2(x.End, refs)
+		collectExprRefsStage2(x.Body, refs)
+	case IRForEach:
+		collectExprRefsStage2(x.Iter, refs)
+		collectExprRefsStage2(x.Body, refs)
+	case IRBlock:
+		collectStmtRefsStage2(x.Stmts, refs)
+		collectExprRefsStage2(x.Expr, refs)
+	case GoIIFE:
+		collectStmtRefsStage2(x.Body.Stmts, refs)
+	case GoPtrOf:
+		collectExprRefsStage2(x.Inner, refs)
+	case GoOptFromCall:
+		collectExprRefsStage2(x.Call, refs)
+	case GoErrorWrap:
+		collectExprRefsStage2(x.Inner, refs)
+	case GoDeref:
+		collectExprRefsStage2(x.Inner, refs)
+	}
+}
+
+// walkAndFlattenCallArgs walks each argument through walkLambdasInExpr,
+// then expands any Ok(v) / Error(e) constructor at top level into its
+// multi-return tuple form. Replaces the previous flattenArgs+expandCallArgs
+// passes that ran before stage2.
+func walkAndFlattenCallArgs(args []IRExpr) []IRExpr {
+	var out []IRExpr
+	for _, a := range args {
+		walked := walkLambdasInExpr(a)
+		if vals := expandedValuesOf(walked); vals != nil {
+			out = append(out, vals...)
+		} else {
+			out = append(out, walked)
+		}
+	}
+	return out
+}
+
+// expandedValuesOf returns the multi-return form of an Ok(v) / Error(e)
+// constructor — `[v, nil]` or `[zero(T), e]` (or single-element when Ok
+// is Unit). Computed inline rather than read from a sideband field.
 func expandedValuesOf(e IRExpr) []IRExpr {
 	switch x := e.(type) {
 	case IROkCall:
-		return x.ExpandedValues
+		rt, ok := x.Type.(IRResultType)
+		if !ok {
+			return nil
+		}
+		if isUnitType(rt.Ok) {
+			return []IRExpr{IRIdent{GoName: "nil"}}
+		}
+		return []IRExpr{x.Value, IRIdent{GoName: "nil"}}
 	case IRErrorCall:
-		return x.ExpandedValues
+		rt, ok := x.Type.(IRResultType)
+		if !ok {
+			return nil
+		}
+		if isUnitType(rt.Ok) {
+			return []IRExpr{x.Value}
+		}
+		return []IRExpr{irZeroExpr(rt.Ok), x.Value}
 	}
 	return nil
 }
@@ -591,40 +903,30 @@ func (w *stage2Walker) buildResultIfElse(m IRMatch, mode s2Mode, targets []strin
 }
 
 // resultVars returns (valVar, errVar, init) for a Result IRMatch.
-//   - If subject is IRIdent and arm Source already resolved → use existing names.
-//   - If subject is IRIdent (function param case) → derive from naming convention.
+//   - If subject is IRIdent with registered splits (param or prior let) → use them.
+//   - If subject is IRIdent without splits → derive from naming convention.
 //   - Otherwise → synthetic GoMultiAssign init.
+//
+// For IRIdent subjects, also blanks unused split slots (mirroring the
+// previous resolveMatchBindings behaviour: val slot becomes "_" when no
+// arm binds it; err slot stays because the cond reads it).
 func (w *stage2Walker) resultVars(m IRMatch) (valVar, errVar string, init IRStmt) {
-	// Try to read resolved Sources first.
-	for _, arm := range m.Arms {
-		switch p := arm.Pattern.(type) {
-		case IRResultOkPattern:
-			if p.Binding != nil && p.Binding.Source != "" && p.Binding.Source != ".Value" {
-				valVar = p.Binding.Source
-			}
-		case IRResultErrorPattern:
-			if p.Binding != nil && p.Binding.Source != "" && p.Binding.Source != ".Err" {
-				errVar = p.Binding.Source
-			}
-		}
-	}
-
-	// Subject is IRIdent — use convention even if Sources aren't resolved.
 	if subj, ok := m.Subject.(IRIdent); ok {
-		if rt, isResult := subj.Type.(IRResultType); isResult && isUnitType(rt.Ok) {
-			// error-only: subject itself is the err var
-			if errVar == "" {
-				errVar = subj.GoName
+		if names := w.splitsFor(subj.GoName); len(names) > 0 {
+			w.matchResolved[subj.GoName] = true
+			if len(names) >= 2 && !okArmBinds(m) {
+				names[0] = "_"
 			}
-			return "", errVar, nil
+			if len(names) == 1 {
+				return "", names[0], nil
+			}
+			return names[0], names[1], nil
 		}
-		if valVar == "" {
-			valVar = subj.GoName
+		// IRIdent subject without splits — derive from naming convention.
+		if rt, isResult := subj.Type.(IRResultType); isResult && isUnitType(rt.Ok) {
+			return "", subj.GoName, nil
 		}
-		if errVar == "" {
-			errVar = subj.GoName + "_err"
-		}
-		return valVar, errVar, nil
+		return subj.GoName, subj.GoName + "_err", nil
 	}
 
 	// Non-IRIdent subject — synthesise.
@@ -938,31 +1240,35 @@ func (w *stage2Walker) buildIfElseFromExpr(e IRIfExpr, mode s2Mode, targets []st
 
 // lowerTryLetStmt converts `let x = expr?` into a sequence of Stage 2
 // statements: receive multi-return values into split names, branch to
-// the enclosing function's error return when the err slot is non-nil
-// (and optionally when the val slot is nil for pointer-Option), then
-// bind the user's name to the value slot.
+// the enclosing function's error return when the err slot is non-nil,
+// then bind the user's name to the value slot. Split names and the
+// enclosing-fn error return values are computed inline (replaces the
+// prior expandTryLetStmt that pre-populated them on the IR node).
 func (w *stage2Walker) lowerTryLetStmt(stmt IRTryLetStmt) []IRStmt {
+	splitNames, valueName := w.tryLetSplits(stmt)
+	errorReturnValues := w.tryLetErrorReturns(stmt, splitNames)
+
 	var out []IRStmt
 
 	// Receive the multi-return values into the split names.
 	if isControlFlowValue(stmt.CallExpr) {
 		if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
-			if isUnitType(rt.Ok) && len(stmt.SplitNames) >= 1 {
-				out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: IRNamedType{GoName: "error"}})
-			} else if len(stmt.SplitNames) >= 2 {
-				out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Type: rt.Ok})
-				out = append(out, GoVarDecl{Name: stmt.SplitNames[1], Type: IRNamedType{GoName: "error"}})
+			if isUnitType(rt.Ok) && len(splitNames) >= 1 {
+				out = append(out, GoVarDecl{Name: splitNames[0], Type: IRNamedType{GoName: "error"}})
+			} else if len(splitNames) >= 2 {
+				out = append(out, GoVarDecl{Name: splitNames[0], Type: rt.Ok})
+				out = append(out, GoVarDecl{Name: splitNames[1], Type: IRNamedType{GoName: "error"}})
 			}
 		}
-		out = append(out, w.walkExpr(stmt.CallExpr, s2Multi, stmt.SplitNames)...)
-	} else if len(stmt.SplitNames) == 1 {
-		out = append(out, GoVarDecl{Name: stmt.SplitNames[0], Init: stmt.CallExpr})
+		out = append(out, w.walkExpr(stmt.CallExpr, s2Multi, splitNames)...)
+	} else if len(splitNames) == 1 {
+		out = append(out, GoVarDecl{Name: splitNames[0], Init: stmt.CallExpr})
 	} else {
-		out = append(out, GoMultiAssign{Names: stmt.SplitNames, Value: stmt.CallExpr})
+		out = append(out, GoMultiAssign{Names: splitNames, Value: stmt.CallExpr})
 	}
 
 	// Error propagation: if err != nil { return errorReturnValues }
-	errName := stmt.SplitNames[len(stmt.SplitNames)-1]
+	errName := splitNames[len(splitNames)-1]
 	out = append(out, GoIfElse{
 		Cond: IRBinaryExpr{
 			Op:    "!=",
@@ -970,28 +1276,53 @@ func (w *stage2Walker) lowerTryLetStmt(stmt IRTryLetStmt) []IRStmt {
 			Right: IRIdent{GoName: "nil"},
 			Type:  IRNamedType{GoName: "bool"},
 		},
-		Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: stmt.ErrorReturnValues}}},
+		Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: errorReturnValues}}},
 	})
 
-	// Pointer-Option nil check: if val == nil { return nilCheckReturnValues }
-	if len(stmt.NilCheckReturnValues) > 0 && stmt.ValueName != "" {
-		out = append(out, GoIfElse{
-			Cond: IRBinaryExpr{
-				Op:    "==",
-				Left:  IRIdent{GoName: stmt.ValueName},
-				Right: IRIdent{GoName: "nil"},
-				Type:  IRNamedType{GoName: "bool"},
-			},
-			Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: stmt.NilCheckReturnValues}}},
-		})
-	}
-
 	// Bind the user's name to the value slot.
-	if stmt.GoName != "_" && stmt.ValueName != "" {
-		out = append(out, GoVarDecl{Name: stmt.GoName, Init: IRIdent{GoName: stmt.ValueName}})
+	if stmt.GoName != "_" && valueName != "" {
+		out = append(out, GoVarDecl{Name: stmt.GoName, Init: IRIdent{GoName: valueName}})
 	}
 
 	return out
+}
+
+// tryLetSplits picks fresh split names (`__val<N>`, `__err<N>`) for a
+// try-let. Errors-only Result (Unit Ok) gets a single err slot. The user's
+// `let _ = expr?` discards the value slot via `_`.
+func (w *stage2Walker) tryLetSplits(stmt IRTryLetStmt) (splitNames []string, valueName string) {
+	n := w.nextSym()
+	errOnly := false
+	if rt, ok := stmt.CallExpr.irType().(IRResultType); ok {
+		errOnly = isUnitType(rt.Ok)
+	}
+	if errOnly {
+		errName := fmt.Sprintf("__err%d", n)
+		return []string{errName}, ""
+	}
+	valName := fmt.Sprintf("__val%d", n)
+	if stmt.GoName == "_" {
+		valName = "_"
+	}
+	errName := fmt.Sprintf("__err%d", n)
+	return []string{valName, errName}, valName
+}
+
+// tryLetErrorReturns builds the GoReturn values for the enclosing
+// function's error path: `[zero(Ok), err]` for `(T, error)` returns,
+// `[err]` for `error`-only returns. Returns nil when the enclosing fn
+// isn't Result-typed (let lower flag the misuse — it shouldn't reach
+// stage2 in that shape).
+func (w *stage2Walker) tryLetErrorReturns(stmt IRTryLetStmt, splitNames []string) []IRExpr {
+	rt, ok := stmt.ReturnType.(IRResultType)
+	if !ok {
+		return nil
+	}
+	errName := splitNames[len(splitNames)-1]
+	if isUnitType(rt.Ok) {
+		return []IRExpr{IRIdent{GoName: errName}}
+	}
+	return []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
 }
 
 // lowerTryBlockInternals walks an IRTryBlock's Stmts and tail Expr in

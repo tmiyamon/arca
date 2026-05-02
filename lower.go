@@ -851,21 +851,12 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	// Expand sum type methods to per-variant implementations
 	funcs = l.expandSumTypeMethods(funcs)
 
-	// Expand Result/Option in the IR: tail-position Ok/Error/Some/None
-	// become IRMultiReturn, let bindings of multi-return calls become
-	// IRMultiLetStmt, and Ok/Error/Some/None in call args are flattened.
-	// After this pass, emit.go can mechanically output native Go without
-	// knowing about Result/Option semantics.
-	for i := range funcs {
-		ctx := newExpandCtx()
-		expandFuncParams(&funcs[i], ctx)
-		funcs[i].Body = expandWithCtx(funcs[i].Body, funcs[i].Ret, ctx)
-	}
-
 	// Stage 2 lowering: rewrite Result/Option dispatch + multi-receive let
 	// shapes into Stage 2 IR (defined in go_ir.go) so emit becomes a
-	// pretty-printer for those nodes (slice S2 of the 2026-05-02
-	// "Two-stage IR completion" plan in decisions/ideas.md).
+	// pretty-printer for those nodes. stage2 self-sufficiently expands
+	// params, computes split names, generates ExpandedValues inline, and
+	// blanks unused split slots — replacing the prior expandResultOption
+	// pass entirely.
 	funcs = stage2Lower(funcs)
 
 	// Report unused imports (skip side-effect imports, which are intentional,
