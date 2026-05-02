@@ -2,20 +2,26 @@ package main
 
 import "fmt"
 
-// stage2.go — Stage 2 lowering for Result/Option dispatch and multi-return
-// let bindings (slice S2 of the 2026-05-02 "Two-stage IR completion" plan
-// in decisions/ideas.md).
+// go_lower.go — Stage 1 IR → Stage 2 IR lowering pass.
 //
-// Walks Stage 1 IR (post-expandResultOption) and rewrites:
-//   * IRMatch with Result arms     → GoIfElse + (GoMultiAssign init when subject isn't IRIdent)
-//   * IRMatch with Option arms     → GoIfElse + (GoVarDecl init when subject isn't IRIdent)
-//   * IRLetStmt with SplitNames    → GoMultiAssign / GoVarDecl + reassign (control-flow values)
-//   * Tail IROkCall / IRErrorCall  → GoReturn{Values: ExpandedValues}
+// Pairs with go_ir.go (Stage 2 node definitions). Designed and landed
+// across slices S1–S5 of the 2026-05-02 "Two-stage IR completion" plan
+// in decisions/ideas.md.
 //
-// Stage 1 control-flow we don't yet convert (IRIfExpr, Enum/Sum/List/
-// Literal/Type matches, IRTryBlock) is wrapped in goLegacyBody so emit
-// keeps walking it with bodyMode. The scaffold and remaining conversions
-// land in S3/S4.
+// `stage2Lower` walks each function body in two phases:
+//
+//   1. `stage2LowerFn` runs the per-fn `stage2Walker`, rewriting Stage 1
+//      control-flow / let-overload / Result-Option-constructor nodes into
+//      Stage 2 shapes (GoIfElse / GoSwitch / GoTypeSwitch / GoMultiAssign
+//      / GoVarDecl / GoReassign / GoReturn / GoExprStmt / GoIIFE / …).
+//   2. `walkLambdasInExpr` deep-walks every IR node and stage2-lowers
+//      anonymous IRFn (lambda) bodies — same recursion also rewrites
+//      IRSomeCall / IRNoneExpr / IRFnCall.GoMultiReturn / IRMethodCall.
+//      GoMultiReturn / IRTryBlock into their Stage 2 wrap/IIFE forms.
+//
+// After this file runs, no Stage 1 control-flow / let-overload / Result-
+// Option-constructor nodes remain. emit walks the resulting Stage 2 tree
+// mechanically.
 
 // s2Mode encodes where the tail value of a control-flow expression flows.
 type s2Mode int

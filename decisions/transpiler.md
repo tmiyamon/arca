@@ -4,6 +4,29 @@ IR pipeline, lowering, codegen. Newest first.
 
 ---
 
+## 2026-05-02: Two-stage IR (S1–S5 landed)
+
+**Context:** A `match call(...) { Ok(x) => ... }` bug emitted broken Go (`call(...)_err == nil`) because emit synthesised the discriminator name by string-concat assuming the subject was an IRIdent. A survey of `emit.go` found 12 sites where emit reconstructed dispatch / wrapping / type information that lower already had, including: Pattern-scan match dispatch, IRLetStmt overload (4-way branch), IRSomeCall / IRNoneExpr / IRFnCall.GoMultiReturn wrap decisions, `subject + "_err"` discriminator fabrication, and `bodyMode` / `valueCtx` flags threaded through `emitBody`. The shared root: `expandResultOption` annotated IR via sideband state (`expandCtx.splits`, `ExpandedValues`, arm `Source` placeholders) but never rewrote IR shape; emit reconstructed relationships by name lookup and produced malformed Go for any subject shape outside the expected.
+
+**Decision: Promote the post-lower pass to a true rewrite.** New file `go_ir.go` defines Stage 2 IR — `GoIfElse`, `GoSwitch`, `GoTypeSwitch`, `GoMultiAssign`, `GoVarDecl`, `GoReassign`, `GoReturn`, `GoExprStmt`, `GoForRange`, `GoForCStyle`, `GoUnreachable`, `GoIIFE`, `GoPtrOf`, `GoOptFromCall`, `GoTypedNil`, `GoErrorWrap`, `GoDeref`. New file `go_lower.go` rewrites Stage 1 IR (Arca-semantic, in `ir.go`) into Stage 2 IR (Go-structure-near). After `stage2Lower`, no Stage 1 control-flow / let-overload / Result-Option-constructor nodes remain. emit walks Stage 2 mechanically — no string concatenation of subject expressions, no `expandCtx` lookup, no Pattern-scan dispatch, no Type-based wrap decisions, no `bodyMode` threading.
+
+Slices landed:
+
+- **S1** — `go_ir.go` defines Stage 2 node types. No wiring yet.
+- **S2** — `stage2Lower` for Result/Option matches + IRLetStmt overloads (`IRMatch` → `GoIfElse` with `GoMultiAssign` init for non-IRIdent subjects). Call-subject Result match bug structurally fixed; new `testdata/match_call_subject` exercises it. Option call-subject double-eval also fixed by construction.
+- **S3a** — Enum / Sum / List / Literal / Type matches → `GoSwitch` / `GoTypeSwitch` / nested `GoIfElse`. `GoWriter.IfChain` added so list-pattern else-if chains emit as `} else if` rather than nested `} else { if ... }`.
+- **S3b** — `IRIfExpr` → `GoIfElse`. `IRForRange` / `IRForEach` / `IRTryBlock` bodies folded to Stage 2 stmts so emit walks them without `bodyMode`. Old `emitMatch` dispatcher + per-kind handlers + `emitIfExpr` + `hasWildcard` + `goLegacyBody` scaffold deleted.
+- **S4a** — `IRTryLetStmt` (`let x = expr?`) expands directly into `GoMultiAssign` / `GoVarDecl` + `GoIfElse{GoReturn}`. `emitTryLetStmt` deletes.
+- **S4b** — `walkLambdasInExpr` / `walkLambdasInStmt` deep IR walker stage2-lowers every anonymous lambda body. `bodyMode`, `emitBody`, leaf callbacks, mode constructors, `emitReturnExpr`, `emitVoidBody`, `declareSplitVars`, `splitVarTypes`, `expandedValues`, `letStmtType` all retire.
+- **S4c** — `IRSomeCall` → `GoPtrOf` (or collapse), `IRNoneExpr` → `GoTypedNil` (or bare `nil`), `IRFnCall` / `IRMethodCall` with `GoMultiReturn` + Option → `GoOptFromCall`, `IRTryBlock` → `GoIIFE`. `irTypeStr` / `irReturnTypeStr` extracted to free functions so stage2 resolves type strings before emit. `wrapGoMultiReturnOption` / `isCollapsibleSomeValue` / `noneInnerGoType` / `emitTryBlockExpr` / `isVoidBody` retire.
+- **S5** — `CLAUDE.md` updated to describe the two-stage pipeline and Stage 2 nodes; this entry added.
+
+Origin: 2026-04-19 "Two-stage IR" idea entry whose Slice 3 (Result formalisation) was deferred and is now subsumed across the entire IR.
+
+**Status:** Done. emit shrank from ~1610 lines to ~860; new `go_lower.go` adds ~960. Snapshots stayed byte-identical except `testdata/match_call_subject` (new test for the previously-broken case). `expandResultOption` remains pre-stage2 to populate `IRLetStmt.SplitNames` / `IROkCall.ExpandedValues` / arm `Source`s for stage2's consumption — retiring it in favour of stage2 doing the work directly is a future cleanup but not on the critical path.
+
+---
+
 ## 2026-04-18: try {} block
 
 **Context:** `?` was only usable inside Result-returning functions. In `main()` or other non-Result functions, there was no way to use `?` for error propagation. Previous behavior generated panic, which violated Arca's safety guarantees.

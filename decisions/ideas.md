@@ -117,7 +117,7 @@ Each slice ships independently; tests stay green throughout. Snapshots remain by
 | `go_ir.go` | 0 | ~250 | +250 |
 | `lower.go` (main lowering) | ~5500 | ~5500 | 0 |
 | `lower.go` (`expandResultOption` + helpers) | ~500 | ~0 | -500 |
-| `stage2.go` (new — `stage2Lower`) | 0 | ~900 | +900 |
+| `go_lower.go` (new — `stage2Lower`) | 0 | ~900 | +900 |
 | `emit.go` | ~1610 | ~700 | -900 |
 | **Total** | **~8310** | **~8050** | **-260** |
 

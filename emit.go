@@ -886,18 +886,6 @@ func isPointerBackedOption(t IRType) bool {
 	return false
 }
 
-func isVoidBody(expr IRExpr) bool {
-	if _, ok := expr.(IRVoidExpr); ok {
-		return true
-	}
-	if block, ok := expr.(IRBlock); ok && block.Expr != nil && len(block.Stmts) == 0 {
-		if _, ok := block.Expr.(IRVoidExpr); ok {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Builtins ---
 
 func (em *Emitter) emitBuiltins(builtins []string) {
