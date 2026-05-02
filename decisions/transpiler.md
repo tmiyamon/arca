@@ -4,6 +4,20 @@ IR pipeline, lowering, codegen. Newest first.
 
 ---
 
+## 2026-05-02: `?` in expression position via `IRTryExpr` + Stage 2 hoist
+
+**Context:** `?` only worked at statement level — `let x = expr?` and bare `expr?` were intercepted in `lowerStmt` and routed to `IRTryLetStmt`. Inside any other expression (`match expr? { … }`, `f(g()?)`, `Ok(g()? + 1)`) the `__try` fell through `lowerFnCallWithHint` to a silent unwrap, producing the inner expression with its original Result type intact and a downstream type-mismatch error rather than the expected error-propagation. The user's `match sql.Open(…)? { Some(db) => … None => … }` form failed with "match subject has no Option type" for exactly this reason. The parser was independently broken: `?` was consumed in `parseExprPrec` after the binary-precedence loop, so `f()? * 2` failed with "expected expression, got *".
+
+**Decision: One uniform rule — every `IRTryExpr` is hoisted to a synthetic split + nil-check + early-return ahead of the enclosing statement.** New Stage 1 node `IRTryExpr{Inner, OkType, ErrType, ReturnType, Pos}` with `irType()` = `OkType`. `lower.go`'s `lowerTryExprWithHint` constructs it from `__try` in expression context, propagating an `IRResultType` hint into the inner call and snapping the enclosing return type at construction time. `stage2Walker` grows a `hoist []IRStmt` buffer and a `hoistTryInExpr` deep walker that walks data-expressions only (stops at `IRFn` lambda bodies, `IRTryBlock`, `IRBlock` — each owns its own walker / return type). At each `IRTryExpr` it pushes `__try<N>, __try<N>_err := <Inner>` + `if __try<N>_err != nil { return zero, __try<N>_err }` and substitutes the expression with `IRIdent{__try<N>}`. `walkExpr` flushes the buffer at entry; `walkStmt` flushes for plain lets, defers, asserts, destructures, and try-let receive sites — every statement-producing path. Parser change: `?` moved from `parseExprPrec` to a postfix loop in `parseUnaryExpr` so it binds tighter than binary operators.
+
+The boundary-stopping deep walker is the structural piece that makes the rule uniform — without it, `f(g()?)` and `match expr? { … }` would each need a position-specific hoist (the rejected v1 design). Lambda / try-block opacity is what keeps `?` semantics scoped to the right enclosing function: each owns its own `stage2Walker` instance via `walkLambdasInExpr` / `lowerTryBlockInternals`.
+
+The existing `IRTryLetStmt` shortcut at statement level is preserved (statement-level `let x = expr?` and bare `expr?` route there directly from `lowerStmt`). It is functionally equivalent to producing `IRTryExpr` and letting Stage 2 hoist, but the shortcut path produces fewer synthetic names and is a more direct emit; keeping both is a deliberate non-unification.
+
+**Status:** Done. `examples/todo`'s `match sql.Open(...)? { Some / None }` form works. New `testdata/try_expr.{arca,go}` exercises tail / call-arg / multiple-`?` / let-nested positions; `TestE2ETryExpr` verifies runtime output.
+
+---
+
 ## 2026-05-02: Two-stage IR (S1–S5 landed)
 
 **Context:** A `match call(...) { Ok(x) => ... }` bug emitted broken Go (`call(...)_err == nil`) because emit synthesised the discriminator name by string-concat assuming the subject was an IRIdent. A survey of `emit.go` found 12 sites where emit reconstructed dispatch / wrapping / type information that lower already had, including: Pattern-scan match dispatch, IRLetStmt overload (4-way branch), IRSomeCall / IRNoneExpr / IRFnCall.GoMultiReturn wrap decisions, `subject + "_err"` discriminator fabrication, and `bodyMode` / `valueCtx` flags threaded through `emitBody`. The shared root: `expandResultOption` annotated IR via sideband state (`expandCtx.splits`, `ExpandedValues`, arm `Source` placeholders) but never rewrote IR shape; emit reconstructed relationships by name lookup and produced malformed Go for any subject shape outside the expected.

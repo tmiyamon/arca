@@ -198,6 +198,10 @@ func TestE2ETryOperator(t *testing.T) {
 	runE2E(t, "testdata/try_operator.arca", "42\n")
 }
 
+func TestE2ETryExpr(t *testing.T) {
+	runE2E(t, "testdata/try_expr.arca", "7 <nil>\n16 <nil>\n7 <nil>\n10 <nil>\n")
+}
+
 func TestE2EShadowing(t *testing.T) {
 	runE2E(t, "testdata/shadowing.arca", "hello\n42\n")
 }

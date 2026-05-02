@@ -36,14 +36,17 @@ const (
 
 // stage2Walker carries per-function state: a synthetic-name counter, a
 // splits registry mapping ident GoName → split names produced by
-// expanding multi-return values, and a matchResolved set tracking which
+// expanding multi-return values, a matchResolved set tracking which
 // subjects had their splits already resolved by a Result-match (mirroring
 // the previous expandResultOption / resolveMatchBindings split between
-// match-driven and reference-driven blank propagation).
+// match-driven and reference-driven blank propagation), and a hoist
+// buffer that collects synthetic statements produced when expression-
+// position IRTryExpr nodes are extracted ahead of the enclosing stmt.
 type stage2Walker struct {
-	counter        int
-	splits         map[string][]string
-	matchResolved  map[string]bool
+	counter       int
+	splits        map[string][]string
+	matchResolved map[string]bool
+	hoist         []IRStmt
 }
 
 func newStage2Walker() *stage2Walker {
@@ -51,6 +54,16 @@ func newStage2Walker() *stage2Walker {
 		splits:        make(map[string][]string),
 		matchResolved: make(map[string]bool),
 	}
+}
+
+// flushHoist returns and clears the pending hoisted statements.
+func (w *stage2Walker) flushHoist() []IRStmt {
+	if len(w.hoist) == 0 {
+		return nil
+	}
+	out := w.hoist
+	w.hoist = nil
+	return out
 }
 
 func (w *stage2Walker) nextSym() int {
@@ -382,7 +395,9 @@ func (w *stage2Walker) expandParams(params []IRParamDecl) []IRParamDecl {
 
 // walkExpr walks an IRExpr in the given mode and produces a sequence of
 // IRStmts. Mode determines how leaf values (Ok/Error/literals/calls) are
-// wrapped at the tail.
+// wrapped at the tail. Any IRTryExpr in value-position children is
+// hoisted into a synthetic GoMultiAssign + nil-check + return ahead of
+// the produced statements.
 func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStmt {
 	if e == nil {
 		return nil
@@ -390,6 +405,16 @@ func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStm
 	if _, ok := e.(IRVoidExpr); ok {
 		return nil
 	}
+	e = w.hoistTryInExpr(e)
+	pre := w.flushHoist()
+	body := w.walkExprBody(e, mode, targets)
+	if len(pre) == 0 {
+		return body
+	}
+	return append(pre, body...)
+}
+
+func (w *stage2Walker) walkExprBody(e IRExpr, mode s2Mode, targets []string) []IRStmt {
 	switch x := e.(type) {
 	case IRBlock:
 		var out []IRStmt
@@ -452,6 +477,9 @@ func (w *stage2Walker) walkExpr(e IRExpr, mode s2Mode, targets []string) []IRStm
 }
 
 // walkStmt processes Stage 1 statements, converting let-overload forms.
+// Hoists IRTryExpr from value-position children of stmts that don't
+// re-enter walkExpr (plain lets, try-let receive expressions, defers,
+// asserts, destructures).
 func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 	switch stmt := s.(type) {
 	case IRLetStmt:
@@ -465,11 +493,13 @@ func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 		splitNames := w.computeLetSplits(stmt)
 		// Multi-receive let with non-control-flow value → GoMultiAssign.
 		if len(splitNames) > 0 && !isControlFlowValue(stmt.Value) {
-			return []IRStmt{GoMultiAssign{
+			stmt.Value = w.hoistTryInExpr(stmt.Value)
+			pre := w.flushHoist()
+			return append(pre, GoMultiAssign{
 				Names: splitNames,
 				Value: stmt.Value,
 				Pos:   stmt.Pos,
-			}}
+			})
 		}
 		// Multi-receive let with control-flow value: predeclare vars then
 		// recurse into value with multi-assign mode.
@@ -497,14 +527,33 @@ func (w *stage2Walker) walkStmt(s IRStmt) []IRStmt {
 			return out
 		}
 		// Plain let — keep as Stage 1 IRLetStmt; emit handles it.
-		return []IRStmt{stmt}
+		stmt.Value = w.hoistTryInExpr(stmt.Value)
+		pre := w.flushHoist()
+		return append(pre, stmt)
 
 	case IRTryLetStmt:
-		return w.lowerTryLetStmt(stmt)
+		stmt.CallExpr = w.hoistTryInExpr(stmt.CallExpr)
+		pre := w.flushHoist()
+		return append(pre, w.lowerTryLetStmt(stmt)...)
 
 	case IRExprStmt:
 		// Statement-position expression: walk in void mode.
 		return w.walkExpr(stmt.Expr, s2Void, nil)
+
+	case IRDeferStmt:
+		stmt.Expr = w.hoistTryInExpr(stmt.Expr)
+		pre := w.flushHoist()
+		return append(pre, stmt)
+
+	case IRAssertStmt:
+		stmt.Expr = w.hoistTryInExpr(stmt.Expr)
+		pre := w.flushHoist()
+		return append(pre, stmt)
+
+	case IRDestructureStmt:
+		stmt.Value = w.hoistTryInExpr(stmt.Value)
+		pre := w.flushHoist()
+		return append(pre, stmt)
 
 	default:
 		return []IRStmt{s}
@@ -753,6 +802,142 @@ func collectExprRefsStage2(e IRExpr, refs map[string]bool) {
 	case GoDeref:
 		collectExprRefsStage2(x.Inner, refs)
 	}
+}
+
+// hoistTryInExpr deep-walks a value-position expression and replaces
+// each IRTryExpr with a fresh ident referring to the Ok-typed split of a
+// synthetic GoMultiAssign + nil-check + return pushed onto the walker's
+// hoist buffer. Caller is responsible for flushing the buffer ahead of
+// the enclosing statement.
+//
+// Walks data-expressions only — does not dive into IRFn (lambda body),
+// IRTryBlock, IRBlock, or IRMatch arm bodies. `?` inside those carries
+// its own enclosing return type and is processed by the appropriate
+// inner walker (a nested stage2Walker for lambdas / try blocks, or the
+// outer walker's recursive walkExpr for arms / match subjects).
+func (w *stage2Walker) hoistTryInExpr(e IRExpr) IRExpr {
+	if e == nil {
+		return nil
+	}
+	switch x := e.(type) {
+	case IRTryExpr:
+		// Recurse into Inner first so chained `expr??` hoists in order.
+		inner := w.hoistTryInExpr(x.Inner)
+
+		n := w.nextSym()
+		errName := fmt.Sprintf("__try%d_err", n)
+		var splitNames []string
+		var valName string
+		if isUnitType(x.OkType) {
+			splitNames = []string{errName}
+		} else {
+			valName = fmt.Sprintf("__try%d", n)
+			splitNames = []string{valName, errName}
+		}
+		w.hoist = append(w.hoist, GoMultiAssign{Names: splitNames, Value: inner})
+
+		var errReturn []IRExpr
+		if rt, ok := x.ReturnType.(IRResultType); ok {
+			if isUnitType(rt.Ok) {
+				errReturn = []IRExpr{IRIdent{GoName: errName}}
+			} else {
+				errReturn = []IRExpr{irZeroExpr(rt.Ok), IRIdent{GoName: errName}}
+			}
+		}
+		w.hoist = append(w.hoist, GoIfElse{
+			Cond: IRBinaryExpr{
+				Op:    "!=",
+				Left:  IRIdent{GoName: errName},
+				Right: IRIdent{GoName: "nil"},
+				Type:  IRNamedType{GoName: "bool"},
+			},
+			Then: GoBlock{Stmts: []IRStmt{GoReturn{Values: errReturn}}},
+		})
+
+		if valName == "" {
+			return IRVoidExpr{}
+		}
+		return IRIdent{GoName: valName, Type: x.OkType}
+
+	case IRFnCall:
+		x.Fn = w.hoistTryInExpr(x.Fn)
+		for i := range x.Args {
+			x.Args[i] = w.hoistTryInExpr(x.Args[i])
+		}
+		return x
+	case IRMethodCall:
+		x.Receiver = w.hoistTryInExpr(x.Receiver)
+		for i := range x.Args {
+			x.Args[i] = w.hoistTryInExpr(x.Args[i])
+		}
+		return x
+	case IRFieldAccess:
+		x.Expr = w.hoistTryInExpr(x.Expr)
+		return x
+	case IRIndexAccess:
+		x.Expr = w.hoistTryInExpr(x.Expr)
+		x.Index = w.hoistTryInExpr(x.Index)
+		return x
+	case IRBinaryExpr:
+		x.Left = w.hoistTryInExpr(x.Left)
+		x.Right = w.hoistTryInExpr(x.Right)
+		return x
+	case IRRefExpr:
+		x.Expr = w.hoistTryInExpr(x.Expr)
+		return x
+	case IRConstructorCall:
+		for i := range x.Fields {
+			x.Fields[i].Value = w.hoistTryInExpr(x.Fields[i].Value)
+		}
+		return x
+	case IROkCall:
+		x.Value = w.hoistTryInExpr(x.Value)
+		return x
+	case IRErrorCall:
+		x.Value = w.hoistTryInExpr(x.Value)
+		return x
+	case IRSomeCall:
+		x.Value = w.hoistTryInExpr(x.Value)
+		return x
+	case IRStringInterp:
+		for i := range x.Args {
+			x.Args[i] = w.hoistTryInExpr(x.Args[i])
+		}
+		return x
+	case IRListLit:
+		for i := range x.Elements {
+			x.Elements[i] = w.hoistTryInExpr(x.Elements[i])
+		}
+		x.Spread = w.hoistTryInExpr(x.Spread)
+		return x
+	case IRMapLit:
+		for i := range x.Entries {
+			x.Entries[i].Key = w.hoistTryInExpr(x.Entries[i].Key)
+			x.Entries[i].Value = w.hoistTryInExpr(x.Entries[i].Value)
+		}
+		return x
+	case IRTupleLit:
+		for i := range x.Elements {
+			x.Elements[i] = w.hoistTryInExpr(x.Elements[i])
+		}
+		return x
+	case IRMatch:
+		x.Subject = w.hoistTryInExpr(x.Subject)
+		return x
+	case IRIfExpr:
+		x.Cond = w.hoistTryInExpr(x.Cond)
+		return x
+	case IRForRange:
+		x.Start = w.hoistTryInExpr(x.Start)
+		x.End = w.hoistTryInExpr(x.End)
+		return x
+	case IRForEach:
+		x.Iter = w.hoistTryInExpr(x.Iter)
+		return x
+	}
+	// IRFn, IRTryBlock, IRBlock, leaf literals, IRIdent — opaque or no
+	// children to walk for hoisting.
+	return e
 }
 
 // walkAndFlattenCallArgs walks each argument through walkLambdasInExpr,

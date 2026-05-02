@@ -322,6 +322,20 @@ type IRTryBlock struct {
 	ErrType IRType // error type (always IRNamedType{GoName: "error"})
 }
 
+// IRTryExpr represents `expr?` in expression position. Stage 2 hoists the
+// computation to a synthetic GoMultiAssign + GoIfElse{GoReturn} ahead of
+// the enclosing statement and substitutes the expression with an ident
+// referring to the Ok-typed split value. ReturnType is the enclosing
+// function's (or try-block IIFE's) Result return type, used to build the
+// error-propagation return values.
+type IRTryExpr struct {
+	Inner      IRExpr // must produce a Result
+	OkType     IRType
+	ErrType    IRType
+	ReturnType IRType // enclosing fn / try block return type
+	Pos        Pos
+}
+
 // Constructor: resolved to Go struct literal or NewType() call
 type IRConstructorCall struct {
 	GoName        string // "GreetingHello", "User"
@@ -598,6 +612,8 @@ func (e IRBlock) irExprNode()           {}
 func (e IRBlock) irType() IRType        { return e.Type }
 func (e IRTryBlock) irExprNode()     {}
 func (e IRTryBlock) irType() IRType  { return IRResultType{Ok: e.OkType, Err: e.ErrType} }
+func (e IRTryExpr) irExprNode()      {}
+func (e IRTryExpr) irType() IRType   { return e.OkType }
 func (e IRConstructorCall) irExprNode()    {}
 func (e IRConstructorCall) irType() IRType { return e.Type }
 func (e IROkCall) irExprNode()          {}

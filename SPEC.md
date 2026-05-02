@@ -266,6 +266,7 @@ fun main() {
 - `?` unwraps `Result` one layer, propagating `Error` to the enclosing Result context
 - `?` on `Option[T]` is **a compile error** in a Result-returning function — the two semantics do not mix. Convert explicitly with `.okOr(err)?`, or use a monadic pipeline (`.flatMap`, `.map`).
 - `?` is only valid inside Result-returning functions or `try {}` blocks (compile error otherwise)
+- `?` is a postfix operator that binds tighter than binary operators, so `f()? * 2` parses as `(f()?) * 2` and is allowed in any expression position — `match expr? { … }`, `f(g()?)`, `Ok(g()? + h()?)`, `let x = g()? + 1`. The compiler hoists each `?` into a synthetic split + nil-check + early return ahead of the enclosing statement
 - `try { ... }` is a block expression that returns `Result[T, Error]` where T is the type of the final expression
 - `try` is not a keyword — only `try {` is recognized as a try block. `let try = 42` is valid
 

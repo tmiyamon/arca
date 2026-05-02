@@ -1,0 +1,25 @@
+import go "strconv"
+
+fun tailTry(s: String) -> Result[Int, Error] {
+  Ok(strconv.Atoi(s)?)
+}
+
+fun callArgTry(s: String) -> Result[Int, Error] {
+  Ok(strconv.Atoi(s)? * 2)
+}
+
+fun multipleTry(a: String, b: String) -> Result[Int, Error] {
+  Ok(strconv.Atoi(a)? + strconv.Atoi(b)?)
+}
+
+fun letNestedTry(s: String) -> Result[Int, Error] {
+  let x = strconv.Atoi(s)? + 1
+  Ok(x)
+}
+
+fun main() {
+  println(tailTry("7"))
+  println(callArgTry("8"))
+  println(multipleTry("3", "4"))
+  println(letNestedTry("9"))
+}

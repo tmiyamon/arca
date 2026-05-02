@@ -1008,12 +1008,6 @@ func (p *Parser) parseExprPrec(minPrec int) (Expr, error) {
 		expr = BinaryExpr{Op: op.Lit, Left: expr, Right: right}
 	}
 
-	// ? operator
-	if p.peek().Kind == TkQuestion {
-		p.advance()
-		expr = FnCall{NodePos: At(p.peek().Line, p.peek().Col), Fn: Ident{Name: "__try", NodePos: At(p.peek().Line, p.peek().Col)}, Args: []Expr{expr}}
-	}
-
 	// Pipe operator
 	for p.peek().Kind == TkPipe {
 		pipePos := Pos{p.peek().Line, p.peek().Col}
@@ -1070,7 +1064,18 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		}
 		return FnCall{Fn: Ident{Name: "__not"}, Args: []Expr{expr}}, nil
 	}
-	return p.parsePrimaryExpr()
+	expr, err := p.parsePrimaryExpr()
+	if err != nil {
+		return nil, err
+	}
+	// Postfix `?` binds tighter than binary operators so `f()? * 2` parses
+	// as `(f()?) * 2`. The loop handles chains like `f()??` (unwrap twice).
+	for p.peek().Kind == TkQuestion {
+		pos := AtTok(p.peek())
+		p.advance()
+		expr = FnCall{NodePos: pos, Fn: Ident{Name: "__try", NodePos: pos}, Args: []Expr{expr}}
+	}
+	return expr, nil
 }
 
 func (p *Parser) parsePrimaryExpr() (Expr, error) {

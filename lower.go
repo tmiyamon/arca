@@ -2434,11 +2434,13 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 	if ident, ok := e.Fn.(Ident); ok {
 		switch ident.Name {
 		case "__try":
-			// Try operator: this shouldn't appear as a standalone expression,
-			// it is handled at the statement level in lowerStmt.
-			// If it leaks here, lower the inner expression.
+			// Try operator in expression context: produces IRTryExpr which
+			// stage2Lower hoists into a multi-assign + nil-check + early
+			// return ahead of the enclosing statement. Statement-level
+			// `let x = expr?` and bare `expr?` are intercepted earlier in
+			// lowerStmt and use IRTryLetStmt instead.
 			if len(e.Args) == 1 {
-				return l.lowerExpr(e.Args[0])
+				return l.lowerTryExprWithHint(e, e.Args[0], hint)
 			}
 		default:
 			// Check prelude builtins
@@ -4198,6 +4200,45 @@ func (l *Lowerer) lowerLetStmt(s LetStmt) []IRStmt {
 	}
 
 	return l.lowerNormalLetStmt(s)
+}
+
+// lowerTryExprWithHint lowers a `?` in expression position into IRTryExpr.
+// Stage 2 hoists the call to a synthetic GoMultiAssign + GoIfElse{GoReturn}
+// ahead of the enclosing statement and substitutes the expression with the
+// Ok-typed split ident.
+func (l *Lowerer) lowerTryExprWithHint(call FnCall, inner Expr, hint IRType) IRExpr {
+	var innerHint IRType
+	if hint != nil {
+		innerHint = IRResultType{Ok: hint, Err: IRNamedType{GoName: "error"}}
+	}
+	loweredInner := l.lowerExprHint(inner, innerHint)
+
+	rt, isResult := loweredInner.irType().(IRResultType)
+	if !isResult {
+		// Inner is not a Result — emit it as-is. Type mismatch will be
+		// reported by the outer hint check; no need to double-report.
+		return loweredInner
+	}
+
+	var enclosingRet IRType
+	if l.currentIRRetType != nil {
+		enclosingRet = l.currentIRRetType
+	} else if l.currentRetType != nil {
+		enclosingRet = l.lowerType(l.currentRetType)
+	}
+	if !isIRResultType(enclosingRet) {
+		l.addCompileError(ErrTryOutsideResultContext, call.Pos, TryOutsideResultContextData{})
+		return loweredInner
+	}
+	l.builtins["result"] = true
+
+	return IRTryExpr{
+		Inner:      loweredInner,
+		OkType:     rt.Ok,
+		ErrType:    rt.Err,
+		ReturnType: enclosingRet,
+		Pos:        call.Pos,
+	}
 }
 
 // lowerTryLetStmt lowers `let x = expr?` into IRTryLetStmt.
