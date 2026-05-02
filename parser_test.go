@@ -107,21 +107,6 @@ impl User {
 	}
 }
 
-func TestParseStaticInTraitRejected(t *testing.T) {
-	t.Parallel()
-	_, err := parseSource(t, `
-trait Display {
-  static fun make() -> String
-}
-`)
-	if err == nil {
-		t.Fatal("expected error for static fun in trait, got nil")
-	}
-	if !strings.Contains(err.Error(), "static fun is not supported in trait") {
-		t.Errorf("unexpected error: %s", err.Error())
-	}
-}
-
 func TestParseStaticInImplRejected(t *testing.T) {
 	t.Parallel()
 	_, err := parseSource(t, `

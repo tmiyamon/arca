@@ -1283,12 +1283,10 @@ func registerPreludeTraits(l *Lowerer) {
 //   - mentions `Self` only via the receiver — never in a parameter type,
 //     return type, or nested type argument.
 //
-// Otherwise the trait is TraitKindDictionary — Phase 1 already rejects
-// `static fun` in trait at parse time, and any `Self` in a non-receiver
-// position currently produces broken Go output, so today every parsed
-// trait classifies as Vtable. The analysis exists ahead of the parser
-// relaxations (B1b/B1c) so the dispatch routing is in place when those
-// land.
+// Otherwise the trait is TraitKindDictionary. stage2LowerTypes drops
+// dictionary IRTraitDecl nodes before emit (B1b), and lowerNamedType /
+// lowerImplDecl reject usage of such traits with ErrUnsupportedFeature
+// until B2 lands the dictionary-struct emission.
 func analyzeTraitObjectSafety(d TraitDecl) TraitKind {
 	for _, m := range d.Methods {
 		if m.Static {

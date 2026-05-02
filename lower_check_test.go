@@ -874,11 +874,12 @@ impl Nope: Display {
 }
 
 // analyzeTraitObjectSafety classifies traits for B-series Synthetic
-// Builder dispatch routing (decisions/ffi.md 2026-05-02 refined). Phase 1
-// rejects `static fun` in trait at parse and treats `Self` outside the
-// receiver as ill-formed, so today every parsed trait classifies as
-// Vtable. Non-object-safe cases are constructed by hand here so the
-// dispatch routing is verified before parser relaxations land in B1b/B1c.
+// Builder dispatch routing (decisions/ffi.md 2026-05-02 refined). Parser
+// relaxations have landed (B1b: Self in non-receiver positions; B1c:
+// static fun in trait body), so non-object-safe traits parsable from
+// source live in TestStage2_DropsDictionaryTraits and the source-level
+// cases below. The hand-constructed cases here pin the analyzer's
+// detection of every trigger independent of parser surface.
 
 func TestAnalyzeTraitObjectSafety_ParsedTraitsAreVtable(t *testing.T) {
 	t.Parallel()
@@ -1028,7 +1029,8 @@ trait Display {
 
 // Stage 2 lowering drops dictionary-kind IRTraitDecl nodes — they have no
 // Go-interface representation, so emit must never see them. Vtable traits
-// pass through untouched. Pins B1b's stage2LowerTypes contract.
+// pass through untouched. Cloneable triggers Dictionary via Self in return
+// (B1b parser path); Default triggers via static fun (B1c parser path).
 func TestStage2_DropsDictionaryTraits(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -1037,6 +1039,9 @@ trait Display {
 }
 trait Cloneable {
   fun clone() -> Self
+}
+trait Default {
+  static fun make() -> String
 }
 `
 	tokens, err := NewLexer(src).Tokenize()
@@ -1049,7 +1054,7 @@ trait Cloneable {
 	}
 	l := NewLowerer(prog, "main", &NullTypeResolver{})
 	out := l.Lower(prog, "main", false)
-	var foundDisplay, foundCloneable bool
+	var foundDisplay, foundCloneable, foundDefault bool
 	for _, td := range out.Types {
 		trait, ok := td.(IRTraitDecl)
 		if !ok {
@@ -1060,6 +1065,8 @@ trait Cloneable {
 			foundDisplay = true
 		case traitGoName("Cloneable"):
 			foundCloneable = true
+		case traitGoName("Default"):
+			foundDefault = true
 		}
 	}
 	if !foundDisplay {
@@ -1067,6 +1074,9 @@ trait Cloneable {
 	}
 	if foundCloneable {
 		t.Errorf("Dictionary trait Cloneable should be dropped, but found in output")
+	}
+	if foundDefault {
+		t.Errorf("Dictionary trait Default (static fun) should be dropped, but found in output")
 	}
 }
 

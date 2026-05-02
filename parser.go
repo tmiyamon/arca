@@ -49,7 +49,7 @@ func (p *Parser) errExpected(tok Token, what, got string) error {
 }
 
 // errUnsupported constructs a structured feature-gate rejection at tok's
-// position — e.g. `static fun is not supported in trait (Phase 1)`.
+// position — e.g. `static fun is not supported in impl (Phase 1)`.
 func (p *Parser) errUnsupported(tok Token, feature, context string) error {
 	return CompileError{
 		Code:  ErrParseUnsupported,
@@ -347,8 +347,10 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 	}
 	var methods []FnDecl
 	for p.peek().Kind != TkRBrace {
+		static := false
 		if p.peek().Kind == TkStatic {
-			return nil, p.errUnsupported(p.peek(), "static fun", "trait (Phase 1)")
+			p.advance()
+			static = true
 		}
 		if p.peek().Kind != TkFn {
 			tok := p.peek()
@@ -358,6 +360,7 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 		if err != nil {
 			return nil, err
 		}
+		sig.Static = static
 		methods = append(methods, sig)
 	}
 	p.advance() // skip '}'
