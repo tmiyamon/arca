@@ -4,6 +4,74 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-02 (refined): Synthetic Builder — Vtable + Dictionary hybrid dispatch
+
+**Supersedes the same-day "Synthetic Builder — FFI-only MVP via `derive`" entry below.** The earlier entry settled on a marker `Bindable` trait + Go-side type-assertion (Path 1 in working notes). Reviewing it surfaced three structural problems:
+
+- `derive(Bindable[TodoBuilder])` is chicken-and-egg — `TodoBuilder` is what derive itself produces, can't be referenced in the annotation.
+- Phase 1 trait restrictions (no `Self` / no `static fun` / no associated types / no generic bounds) exist precisely to keep traits object-safe for Go interface vtable dispatch. Bindable needs every one of those — Self-referencing Builder type, static factory, associated type. The marker-trait workaround pushes the abstraction outside Arca into Go-side compiler magic — a structural leak.
+- Path 1 was a short-term cost minimisation. Walking through Rust's two-mode dispatch model and Haskell/Scala's dictionary passing showed dictionary fits Arca's Go target better than monomorphisation (no native-binary / frame-budget / no-std rationale to justify code bloat).
+
+**Decision: Phase 1 vtable trait stays unchanged; add a parallel dictionary-passing dispatch for traits that can't be object-safe.** Per-trait routing is automatic by object-safety analysis (Rust model — same trait keyword, dispatch chosen from the trait's body):
+
+- Trait body satisfies object safety (only `&self` methods, no `Self` outside receiver, no static fn, no associated types) → emit as Go interface, dispatched via vtable. Existing Phase 1 behaviour, no change. Usable as a type (`fn handle(e: Error)`, `List[Error]`).
+- Trait body fails object safety (has `Self` / static fun / associated type) → "constraint-only" trait. Per-`derive` compiler emits a dictionary struct; generic functions take the dictionary as a hidden parameter; call sites are rewritten to inject the dictionary. Not usable as a type — `let xs: List[Bindable] = …` is a compile error directing the user to vtable-style interfaces.
+
+```arca
+// Phase 1, vtable (unchanged):
+trait Error { fun message() -> String }
+
+// New constraint-only, dictionary:
+trait Bindable {
+  type Builder
+  static fun arcaBuilder() -> Self::Builder
+  fun freeze(b: Self::Builder) -> Result[Self, Error]
+}
+
+type Todo derive(Bindable) (
+  id: Int
+  body: String { max_length: 255 }
+)
+// compiler emits alongside Todo + NewTodo:
+//   type TodoBuilder (id: Int, body: String) { json/db tags }
+//   fun (b: TodoBuilder) freeze() -> Result[Todo, Error] { NewTodo(b.id, b.body) }
+//   var TodoBindable = BindableDict[Todo, TodoBuilder] { … }    // hidden dict instance
+
+fun stdlib.bindJSON[T: Bindable](r: Ref[http.Request]) -> Result[T, Error] {
+  // compiler injects hidden `dict: BindableDict[T, _]` parameter
+  let b = dict.arcaBuilder()
+  json.unmarshal(req.body, &b)?
+  dict.freeze(b)
+}
+
+let todo = stdlib.bindJSON[Todo](r)?    // compiler rewrites to inject TodoBindable
+```
+
+`derive(Bindable)` takes no type arg; the Builder type is conventionally named `<T>Builder` and emitted in the same scope. User never writes the Builder name in derive; user code may reference `TodoBuilder` directly if they want the lower-level form, but stdlib helpers hide it.
+
+**Why dictionary, not monomorphisation:** Arca targets Go (managed runtime, GC, vtable dispatch already pervasive). Rust's monomorphisation rationale — `no_std`, frame budget, native binary size, zero indirect-call cost — does not apply. Dictionary passing matches Arca's situation: one indirect call per trait method (comparable to existing Go interface dispatch), no per-T code-body duplication, no library-distribution complications. Scala 3 (`given/using`) and Swift (Protocol Witness Tables) use this hybrid model for the same reason. Across modern languages, vtable + dictionary coexistence is the mainstream pattern; pure monomorphisation (Rust, C++) is a systems-language outlier.
+
+**Stdlib refactor:** existing `BindJSON` / `QueryAs` / `Decode` switch from "runtime reflection over T + post-hoc ArcaValidate" to "construct Builder via dictionary, populate via Bind / Scan / Unmarshal, Freeze with validation". The reflection path retires.
+
+**Future extension paths (out of MVP):**
+
+- User-facing builder promotion (the conventional `<T>Builder` and `freeze()` are kept stable so promotion is additive — user can already write `let b = TodoBuilder(); … b.freeze()?` if they want)
+- `extern { }` escape hatch for arbitrary Go mutation calls
+- Sum type Builder with discriminator field
+- Arca-side accessors making T's Go fields private at runtime
+
+**Implementation slices (multi-session):**
+
+- B1 — Object-safety analysis pass; trait kind tagging (vtable vs dictionary) inferred from trait body
+- B2 — Dictionary struct emission for `derive`-marked types; generic-function hidden-parameter insertion at lower
+- B3 — `derive(Trait)` syntax in parser + AST; `Bindable` trait registered in prelude
+- B4 — Stdlib helpers constrained to `T: Bindable`, implementation switched to dictionary + Freeze; reflection path retires
+- B5 — `examples/todo` migrated; sum type Builder demo (deferrable)
+
+**Status:** Design refined. Implementation deferred — slices B1–B5 across multiple sessions.
+
+---
+
 ## 2026-05-02: Synthetic Builder — FFI-only MVP via `derive`
 
 **Context:** The 2026-04-15 FFI table accepted Synthetic Builder as the boundary mechanism for Go mutation absorption, with implementation deferred. `design_ffi_synthetic_builder.md` settled the theoretical framing (compile-time synthesis, runST / typestate / linear / serde-derive lineage) but left the implementation shape open. Current stdlib (`BindJSON`, `QueryAs`, `Decode`) uses runtime reflection over T directly — `structScanPtrs` walks fields by name, `json.Unmarshal` writes into T, then `ArcaValidate` is invoked post-hoc. This leaks Go-side mutability via public fields on T, conflates wire format with domain type, and won't roundtrip sum types.
