@@ -139,11 +139,41 @@ type IRTypeAliasDecl struct {
 	Validator *IRValidator
 }
 
-// IRTraitDecl emits as a Go interface declaration. Impl methods satisfy it
-// via Go's structural interface rule; no explicit registration needed.
+// TraitKind classifies a trait by its dispatch strategy. Determined by
+// object-safety analysis (see analyzeTraitObjectSafety in lower.go):
+// object-safe traits (only &self methods, no Self outside receiver, no
+// static fun, no associated types) emit as Go interfaces dispatched via
+// vtable; object-unsafe traits emit as compiler-generated dictionary
+// structs threaded through generic functions as hidden parameters.
+//
+// Per the 2026-05-02 (refined) Synthetic Builder design in
+// decisions/ffi.md: every Phase 1 trait is currently object-safe and
+// thus TraitKindVtable. The TraitKindDictionary path is infrastructure
+// for B2 onwards.
+type TraitKind int
+
+const (
+	TraitKindVtable TraitKind = iota
+	TraitKindDictionary
+)
+
+func (k TraitKind) String() string {
+	switch k {
+	case TraitKindVtable:
+		return "vtable"
+	case TraitKindDictionary:
+		return "dictionary"
+	}
+	return "unknown"
+}
+
+// IRTraitDecl emits as a Go interface declaration when Kind is Vtable.
+// Impl methods satisfy it via Go's structural interface rule; no explicit
+// registration needed. Dictionary-kind traits emit differently — see B2.
 type IRTraitDecl struct {
 	GoName  string // Arca<Name>, e.g. "ArcaError"
 	Methods []IRInterfaceMethod
+	Kind    TraitKind
 }
 
 type IRVariantDecl struct {

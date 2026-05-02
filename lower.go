@@ -1275,6 +1275,71 @@ func registerPreludeTraits(l *Lowerer) {
 	}
 }
 
+// analyzeTraitObjectSafety classifies a trait by Rust-style object-safety
+// rules. A trait is object-safe (TraitKindVtable) when every method:
+//   - is non-static (uses an implicit `self` receiver), and
+//   - mentions `Self` only via the receiver — never in a parameter type,
+//     return type, or nested type argument.
+//
+// Otherwise the trait is TraitKindDictionary — Phase 1 already rejects
+// `static fun` in trait at parse time, and any `Self` in a non-receiver
+// position currently produces broken Go output, so today every parsed
+// trait classifies as Vtable. The analysis exists ahead of the parser
+// relaxations (B1b/B1c) so the dispatch routing is in place when those
+// land.
+func analyzeTraitObjectSafety(d TraitDecl) TraitKind {
+	for _, m := range d.Methods {
+		if m.Static {
+			return TraitKindDictionary
+		}
+		if typeContainsSelf(m.ReturnType) {
+			return TraitKindDictionary
+		}
+		for _, p := range m.Params {
+			if typeContainsSelf(p.Type) {
+				return TraitKindDictionary
+			}
+		}
+	}
+	return TraitKindVtable
+}
+
+// typeContainsSelf reports whether the AST type tree mentions `Self`
+// anywhere — top-level or as a generic parameter / pointer inner /
+// tuple element / function param/ret.
+func typeContainsSelf(t Type) bool {
+	if t == nil {
+		return false
+	}
+	switch x := t.(type) {
+	case NamedType:
+		if x.Name == "Self" {
+			return true
+		}
+		for _, p := range x.Params {
+			if typeContainsSelf(p) {
+				return true
+			}
+		}
+	case PointerType:
+		return typeContainsSelf(x.Inner)
+	case TupleType:
+		for _, e := range x.Elements {
+			if typeContainsSelf(e) {
+				return true
+			}
+		}
+	case FunctionType:
+		for _, p := range x.Params {
+			if typeContainsSelf(p) {
+				return true
+			}
+		}
+		return typeContainsSelf(x.Ret)
+	}
+	return false
+}
+
 // lowerTraitDecl emits the Go interface declaration for a trait.
 func (l *Lowerer) lowerTraitDecl(d TraitDecl) IRTraitDecl {
 	methods := make([]IRInterfaceMethod, 0, len(d.Methods))
@@ -1292,6 +1357,7 @@ func (l *Lowerer) lowerTraitDecl(d TraitDecl) IRTraitDecl {
 	return IRTraitDecl{
 		GoName:  traitGoName(d.Name),
 		Methods: methods,
+		Kind:    analyzeTraitObjectSafety(d),
 	}
 }
 

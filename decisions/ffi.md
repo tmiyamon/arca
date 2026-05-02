@@ -63,12 +63,16 @@ let todo = stdlib.bindJSON[Todo](r)?    // compiler rewrites to inject TodoBinda
 **Implementation slices (multi-session):**
 
 - B1 — Object-safety analysis pass; trait kind tagging (vtable vs dictionary) inferred from trait body
+  - B1a (landed) — `TraitKind` + `IRTraitDecl.Kind`, `analyzeTraitObjectSafety` analyser; every parsed trait still classifies as Vtable (parser restrictions block the alternatives), so no codegen change. Hand-constructed TraitDecls in tests cover the Dictionary path.
+  - B1b — Lift the parser block on `Self` in non-receiver positions; lower resolves trait `Self` placeholder; analyser routes to Dictionary
+  - B1c — Lift the parser block on `static fun` in trait; lower handles trait static fun
+  - B1d — Associated type syntax in trait body
 - B2 — Dictionary struct emission for `derive`-marked types; generic-function hidden-parameter insertion at lower
 - B3 — `derive(Trait)` syntax in parser + AST; `Bindable` trait registered in prelude
 - B4 — Stdlib helpers constrained to `T: Bindable`, implementation switched to dictionary + Freeze; reflection path retires
 - B5 — `examples/todo` migrated; sum type Builder demo (deferrable)
 
-**Status:** Design refined. Implementation deferred — slices B1–B5 across multiple sessions.
+**Status:** Design refined. B1a landed; B1b–B5 across multiple sessions.
 
 ---
 

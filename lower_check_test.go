@@ -872,3 +872,156 @@ impl Nope: Display {
 		t.Fatalf("expected ErrUnknownType for impl on missing type, got: %v", errs)
 	}
 }
+
+// analyzeTraitObjectSafety classifies traits for B-series Synthetic
+// Builder dispatch routing (decisions/ffi.md 2026-05-02 refined). Phase 1
+// rejects `static fun` in trait at parse and treats `Self` outside the
+// receiver as ill-formed, so today every parsed trait classifies as
+// Vtable. Non-object-safe cases are constructed by hand here so the
+// dispatch routing is verified before parser relaxations land in B1b/B1c.
+
+func TestAnalyzeTraitObjectSafety_ParsedTraitsAreVtable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "single &self method",
+			source: `
+trait Display {
+  fun show() -> String
+}
+`,
+		},
+		{
+			name: "void method",
+			source: `
+trait Logger {
+  fun log()
+}
+`,
+		},
+		{
+			name: "method with parameters",
+			source: `
+trait Comparator {
+  fun compare(other: Int) -> Int
+}
+`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			lexer := NewLexer(tc.source)
+			tokens, err := lexer.Tokenize()
+			if err != nil {
+				t.Fatalf("lex: %v", err)
+			}
+			prog, err := NewParser(tokens).ParseProgram()
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			var trait TraitDecl
+			for _, d := range prog.Decls {
+				if td, ok := d.(TraitDecl); ok {
+					trait = td
+					break
+				}
+			}
+			if trait.Name == "" {
+				t.Fatalf("no trait found in source")
+			}
+			if got := analyzeTraitObjectSafety(trait); got != TraitKindVtable {
+				t.Errorf("expected Vtable, got %s", got)
+			}
+		})
+	}
+}
+
+func TestAnalyzeTraitObjectSafety_NonObjectSafeIsDictionary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		trait TraitDecl
+	}{
+		{
+			name: "static fun",
+			trait: TraitDecl{Name: "Default", Methods: []FnDecl{
+				{Name: "make", Static: true, ReturnType: NamedType{Name: "Self"}},
+			}},
+		},
+		{
+			name: "Self in return type",
+			trait: TraitDecl{Name: "Cloneable", Methods: []FnDecl{
+				{Name: "clone", ReturnType: NamedType{Name: "Self"}},
+			}},
+		},
+		{
+			name: "Self in parameter",
+			trait: TraitDecl{Name: "Combiner", Methods: []FnDecl{
+				{Name: "combine", Params: []FnParam{{Name: "other", Type: NamedType{Name: "Self"}}}},
+			}},
+		},
+		{
+			name: "Self nested under generic",
+			trait: TraitDecl{Name: "Producer", Methods: []FnDecl{
+				{Name: "produce", ReturnType: NamedType{
+					Name:   "List",
+					Params: []Type{NamedType{Name: "Self"}},
+				}},
+			}},
+		},
+		{
+			name: "Self under pointer",
+			trait: TraitDecl{Name: "Borrower", Methods: []FnDecl{
+				{Name: "borrow", ReturnType: PointerType{Inner: NamedType{Name: "Self"}}},
+			}},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := analyzeTraitObjectSafety(tc.trait); got != TraitKindDictionary {
+				t.Errorf("expected Dictionary, got %s", got)
+			}
+		})
+	}
+}
+
+func TestLowerTraitDecl_SetsKindFromAnalysis(t *testing.T) {
+	t.Parallel()
+	// Validate that lowerTraitDecl stamps the Kind on every emitted
+	// IRTraitDecl. Currently parsed traits all classify as Vtable, so this
+	// check pins the wiring in place ahead of B1b's parser relaxations.
+	src := `
+trait Display {
+  fun show() -> String
+}
+`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	var found bool
+	for _, td := range out.Types {
+		if trait, ok := td.(IRTraitDecl); ok && trait.GoName == traitGoName("Display") {
+			found = true
+			if trait.Kind != TraitKindVtable {
+				t.Errorf("expected Vtable kind on emitted trait, got %s", trait.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Display trait not found in lowerer output")
+	}
+}
