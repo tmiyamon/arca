@@ -58,16 +58,14 @@ type Todo (
 }
 
 fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
-  let result = stdlib.QueryAs[Todo](app.db, "select * from todos order by id")
-  match result {
+  match stdlib.QueryAs[Todo](app.db, "select * from todos order by id") {
     Ok(todos) => c.JSON(http.StatusOK, {"todos": todos})
     Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
   }
 }
 
 fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
-  let result = createTodo(app, c)
-  match result {
+  match createTodo(app, c) {
     Ok(todo) => c.JSON(http.StatusOK, todo)
     Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
   }
