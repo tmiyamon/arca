@@ -346,7 +346,20 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 		return nil, err
 	}
 	var methods []FnDecl
+	var assocs []TraitAssocTypeDecl
 	for p.peek().Kind != TkRBrace {
+		if p.peek().Kind == TkType {
+			p.advance()
+			assocName, err := p.expect(TkUpperIdent)
+			if err != nil {
+				return nil, err
+			}
+			assocs = append(assocs, TraitAssocTypeDecl{
+				Pos:  Pos{assocName.Line, assocName.Col},
+				Name: assocName.Lit,
+			})
+			continue
+		}
 		static := false
 		if p.peek().Kind == TkStatic {
 			p.advance()
@@ -354,7 +367,7 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 		}
 		if p.peek().Kind != TkFn {
 			tok := p.peek()
-			return nil, p.errExpected(tok, "fun or }", tok.String())
+			return nil, p.errExpected(tok, "type, fun or }", tok.String())
 		}
 		sig, err := p.parseTraitMethodSig(name.Lit)
 		if err != nil {
@@ -364,7 +377,7 @@ func (p *Parser) parseTraitDecl() (Decl, error) {
 		methods = append(methods, sig)
 	}
 	p.advance() // skip '}'
-	return TraitDecl{Pos: pos, NamePos: namePos, Name: name.Lit, Methods: methods}, nil
+	return TraitDecl{Pos: pos, NamePos: namePos, Name: name.Lit, Methods: methods, AssocTypes: assocs}, nil
 }
 
 func (p *Parser) parseTraitMethodSig(traitName string) (FnDecl, error) {
@@ -572,6 +585,19 @@ func (p *Parser) parseAtomType() (Type, error) {
 	switch tok.Kind {
 	case TkUpperIdent, TkIdent:
 		name := tok.Lit
+		// Self.Builder — trait associated type access (B1d). Only Self is
+		// recognised today; future generic-parameter receivers will use the
+		// same shape. Distinct from the qualified-type fold below because
+		// associated types are late-bound (substituted at impl time, not
+		// resolved at parse time).
+		if name == "Self" && p.peek().Kind == TkDot {
+			p.advance()
+			next, err := p.expect(TkUpperIdent)
+			if err != nil {
+				return nil, err
+			}
+			return AssocTypeName{Pos: pos, Recv: "Self", Name: next.Lit}, nil
+		}
 		// Qualified type: module.Type
 		for p.peek().Kind == TkDot {
 			p.advance()

@@ -66,13 +66,13 @@ let todo = stdlib.bindJSON[Todo](r)?    // compiler rewrites to inject TodoBinda
   - B1a (landed) — `TraitKind` + `IRTraitDecl.Kind`, `analyzeTraitObjectSafety` analyser; every parsed trait still classifies as Vtable (parser restrictions block the alternatives), so no codegen change. Hand-constructed TraitDecls in tests cover the Dictionary path.
   - B1b (landed) — `Self` in trait method return / parameter positions parses + lowers cleanly; the analyser routes such traits to Dictionary; `stage2LowerTypes` drops dictionary IRTraitDecl nodes so emit stays mechanical; usage sites (trait as type, `impl X: Trait`) reject with `ErrUnsupportedFeature` until B2 lands. Parser already accepted `Self` — no parser change required.
   - B1c (landed) — `static fun` in trait body now parses; the trait-decl loop accepts an optional `static` modifier and stamps `FnDecl.Static`. Analyser + stage2 drop + usage rejection from B1a/B1b carry the rest. The parser block on `static fun` in **impl** body stays in place — Phase 1 still has no impl path for dictionary traits.
-  - B1d — Associated type syntax in trait body
+  - B1d (landed) — `type Foo` declarations and `Self.Foo` references in trait method signatures now parse. Syntax: dot rather than `::` (matches Arca's existing `sql.DB` / `record.field` path convention; Rust's `::` is not the universal associated-type marker — Swift / Scala / OCaml all use `.`). New AST nodes `TraitAssocTypeDecl` and `AssocTypeName` keep associated-type access distinct from qualified-type fold so B2 can substitute by structural match. `lowerType` lowers `AssocTypeName` to opaque `IRInterfaceType`; analyser routes the trait through Dictionary so stage2 drops it. B2 introduces the dedicated IR node and substitution.
 - B2 — Dictionary struct emission for `derive`-marked types; generic-function hidden-parameter insertion at lower
 - B3 — `derive(Trait)` syntax in parser + AST; `Bindable` trait registered in prelude
 - B4 — Stdlib helpers constrained to `T: Bindable`, implementation switched to dictionary + Freeze; reflection path retires
 - B5 — `examples/todo` migrated; sum type Builder demo (deferrable)
 
-**Status:** Design refined. B1a + B1b + B1c landed; B1d–B5 across multiple sessions.
+**Status:** Design refined. B1 landed end-to-end (B1a + B1b + B1c + B1d); B2–B5 across multiple sessions.
 
 ---
 

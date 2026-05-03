@@ -54,10 +54,23 @@ type FunctionType struct {
 	Ret    Type
 }
 
-func (NamedType) typeNode()    {}
-func (PointerType) typeNode()  {}
-func (TupleType) typeNode()    {}
-func (FunctionType) typeNode() {}
+// AssocTypeName is a trait associated-type access — `Self.Builder` in a
+// trait method signature. Distinct from NamedType ("sql.DB" qualified Go
+// type) because the resolution is late-bound: the compiler has to
+// substitute the receiver with the impl-side concrete type. B1d only
+// parses the syntax and routes the trait through Dictionary dispatch;
+// B2 lands the substitution.
+type AssocTypeName struct {
+	Pos  Pos
+	Recv string // "Self" only in B1d; future: generic type params
+	Name string
+}
+
+func (NamedType) typeNode()     {}
+func (PointerType) typeNode()   {}
+func (TupleType) typeNode()     {}
+func (FunctionType) typeNode()  {}
+func (AssocTypeName) typeNode() {}
 
 // --- Expressions ---
 
@@ -374,10 +387,19 @@ type FnDecl struct {
 }
 
 type TraitDecl struct {
-	Pos     Pos
-	NamePos Pos
-	Name    string
-	Methods []FnDecl // body-less (FnDecl.Body == nil)
+	Pos        Pos
+	NamePos    Pos
+	Name       string
+	Methods    []FnDecl // body-less (FnDecl.Body == nil)
+	AssocTypes []TraitAssocTypeDecl
+}
+
+// TraitAssocTypeDecl is a `type Builder` declaration inside a trait body.
+// B1d only records its presence so analyzeTraitObjectSafety can route the
+// trait through Dictionary; B1d performs no resolution.
+type TraitAssocTypeDecl struct {
+	Pos  Pos
+	Name string
 }
 
 type ImplDecl struct {

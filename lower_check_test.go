@@ -981,6 +981,23 @@ func TestAnalyzeTraitObjectSafety_NonObjectSafeIsDictionary(t *testing.T) {
 				{Name: "borrow", ReturnType: PointerType{Inner: NamedType{Name: "Self"}}},
 			}},
 		},
+		{
+			name: "associated type declaration alone",
+			trait: TraitDecl{
+				Name:       "Container",
+				AssocTypes: []TraitAssocTypeDecl{{Name: "Item"}},
+				Methods:    []FnDecl{{Name: "size", ReturnType: NamedType{Name: "Int"}}},
+			},
+		},
+		{
+			name: "associated type via Self.X in return",
+			trait: TraitDecl{
+				Name: "Producer",
+				Methods: []FnDecl{
+					{Name: "make", ReturnType: AssocTypeName{Recv: "Self", Name: "Output"}},
+				},
+			},
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -1030,7 +1047,8 @@ trait Display {
 // Stage 2 lowering drops dictionary-kind IRTraitDecl nodes — they have no
 // Go-interface representation, so emit must never see them. Vtable traits
 // pass through untouched. Cloneable triggers Dictionary via Self in return
-// (B1b parser path); Default triggers via static fun (B1c parser path).
+// (B1b); Default triggers via static fun (B1c); Bindable triggers via
+// associated type + Self.Builder method signature (B1d).
 func TestStage2_DropsDictionaryTraits(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -1043,6 +1061,11 @@ trait Cloneable {
 trait Default {
   static fun make() -> String
 }
+trait Bindable {
+  type Builder
+  static fun arcaBuilder() -> Self.Builder
+  fun freeze(b: Self.Builder) -> Self
+}
 `
 	tokens, err := NewLexer(src).Tokenize()
 	if err != nil {
@@ -1054,7 +1077,7 @@ trait Default {
 	}
 	l := NewLowerer(prog, "main", &NullTypeResolver{})
 	out := l.Lower(prog, "main", false)
-	var foundDisplay, foundCloneable, foundDefault bool
+	var foundDisplay, foundCloneable, foundDefault, foundBindable bool
 	for _, td := range out.Types {
 		trait, ok := td.(IRTraitDecl)
 		if !ok {
@@ -1067,6 +1090,8 @@ trait Default {
 			foundCloneable = true
 		case traitGoName("Default"):
 			foundDefault = true
+		case traitGoName("Bindable"):
+			foundBindable = true
 		}
 	}
 	if !foundDisplay {
@@ -1077,6 +1102,9 @@ trait Default {
 	}
 	if foundDefault {
 		t.Errorf("Dictionary trait Default (static fun) should be dropped, but found in output")
+	}
+	if foundBindable {
+		t.Errorf("Dictionary trait Bindable (associated type) should be dropped, but found in output")
 	}
 }
 

@@ -179,6 +179,8 @@ func (f *Formatter) formatType(t Type) string {
 			parts[i] = f.formatType(p)
 		}
 		return "(" + strings.Join(parts, ", ") + ") -> " + f.formatType(tt.Ret)
+	case AssocTypeName:
+		return tt.Recv + "." + tt.Name
 	default:
 		return "?"
 	}

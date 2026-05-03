@@ -1288,6 +1288,9 @@ func registerPreludeTraits(l *Lowerer) {
 // lowerImplDecl reject usage of such traits with ErrUnsupportedFeature
 // until B2 lands the dictionary-struct emission.
 func analyzeTraitObjectSafety(d TraitDecl) TraitKind {
+	if len(d.AssocTypes) > 0 {
+		return TraitKindDictionary
+	}
 	for _, m := range d.Methods {
 		if m.Static {
 			return TraitKindDictionary
@@ -1306,7 +1309,7 @@ func analyzeTraitObjectSafety(d TraitDecl) TraitKind {
 
 // typeContainsSelf reports whether the AST type tree mentions `Self`
 // anywhere — top-level or as a generic parameter / pointer inner /
-// tuple element / function param/ret.
+// tuple element / function param/ret / associated-type receiver.
 func typeContainsSelf(t Type) bool {
 	if t == nil {
 		return false
@@ -1336,6 +1339,8 @@ func typeContainsSelf(t Type) bool {
 			}
 		}
 		return typeContainsSelf(x.Ret)
+	case AssocTypeName:
+		return x.Recv == "Self"
 	}
 	return false
 }
@@ -2139,6 +2144,13 @@ func (l *Lowerer) lowerType(t Type) IRType {
 			ret = l.lowerType(tt.Ret)
 		}
 		return IRFnType{Params: params, Ret: ret}
+	case AssocTypeName:
+		// Self.Builder — opaque in B1d. The enclosing trait is classified
+		// Dictionary by analyzeTraitObjectSafety and dropped by
+		// stage2LowerTypes, so this IR placeholder never reaches emit.
+		// B2 introduces a dedicated IR node and substitutes against the
+		// impl-side concrete type.
+		return IRInterfaceType{}
 	default:
 		return IRInterfaceType{}
 	}

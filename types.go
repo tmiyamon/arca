@@ -557,6 +557,8 @@ func typeName(t Type) string {
 			elems[i] = typeName(e)
 		}
 		return "(" + strings.Join(elems, ", ") + ")"
+	case AssocTypeName:
+		return tt.Recv + "." + tt.Name
 	case FunctionType:
 		params := make([]string, len(tt.Params))
 		for i, p := range tt.Params {
