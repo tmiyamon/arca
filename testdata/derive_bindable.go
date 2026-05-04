@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -12,6 +13,11 @@ type Todo struct {
 type BindableSlot[T any] struct {
 	Set   bool
 	Value T
+}
+
+type BindableDict[T any, B any] struct {
+	Draft  func() B
+	Freeze func(B) (T, error)
 }
 
 type TodoDraft struct {
@@ -27,3 +33,17 @@ func main() {
 	t := Todo{Id: 1, Body: "draft"}
 	fmt.Println(t.describe())
 }
+
+func __TodoFreeze(d TodoDraft) (Todo, error) {
+	if d.Id.Set == false {
+		return Todo{}, errors.New("Todo.id is unset")
+	}
+	if d.Body.Set == false {
+		return Todo{}, errors.New("Todo.body is unset")
+	}
+	return Todo{Id: d.Id.Value, Body: d.Body.Value}, nil
+}
+
+var __TodoBindable = BindableDict[Todo, TodoDraft]{Draft: func() TodoDraft {
+	return TodoDraft{}
+}, Freeze: __TodoFreeze}

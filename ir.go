@@ -92,8 +92,19 @@ type IRProgram struct {
 	Package  string
 	Imports  []IRImport
 	Types    []IRTypeDecl
+	Globals  []IRGlobalVar
 	Funcs    []IRFuncDecl
 	Builtins []string // "result", "option", "map", "filter", "fold"
+}
+
+// IRGlobalVar is a top-level Go `var Name Type = Init` declaration. Arca's
+// user surface has no top-level vars; this is reserved for compiler-emitted
+// state such as the `__<TypeName><TraitName>` Bindable dictionary instances
+// (decisions/ffi.md 2026-05-04 refined Synthetic Builder, B2c).
+type IRGlobalVar struct {
+	GoName string
+	Type   IRType
+	Init   IRExpr
 }
 
 type IRImport struct {

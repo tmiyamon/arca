@@ -867,6 +867,13 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	types = stage2LowerTypes(types)
 	funcs = stage2Lower(funcs)
 
+	// Bindable dispatch synthesis (B2c): emits per-host __<Type>Freeze
+	// function and __<Type>Bindable dictionary instance. Stage 2 IR is
+	// produced directly so the freeze body can use GoIfElse / GoReturn
+	// without going through stage2Lower again.
+	dispatchFuncs, dispatchGlobals := l.synthesizeBindableDispatch()
+	funcs = append(funcs, dispatchFuncs...)
+
 	// Report unused imports (skip side-effect imports, which are intentional,
 	// and packages consumed indirectly via auto-detected builtins like string
 	// interpolation needing fmt). Sort for deterministic diagnostic order.
@@ -901,11 +908,15 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	if l.builtins["os"] && !l.hasImport("os") {
 		imports = append(imports, IRImport{Path: "os"})
 	}
+	if l.builtins["errors"] && !l.hasImport("errors") {
+		imports = append(imports, IRImport{Path: "errors"})
+	}
 
 	return IRProgram{
 		Package:  pkgName,
 		Imports:  imports,
 		Types:    types,
+		Globals:  dispatchGlobals,
 		Funcs:    funcs,
 		Builtins: builtinNames,
 	}
@@ -988,6 +999,17 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 				{GoName: "Value", Type: IRNamedType{GoName: "T"}},
 			},
 		},
+		IRStructDecl{
+			GoName:     "BindableDict",
+			TypeParams: []string{"T", "B"},
+			Fields: []IRFieldDecl{
+				{GoName: "Draft", Type: IRFnType{Ret: IRNamedType{GoName: "B"}}},
+				{GoName: "Freeze", Type: IRFnType{
+					Params: []IRType{IRNamedType{GoName: "B"}},
+					Ret:    IRResultType{Ok: IRNamedType{GoName: "T"}, Err: IRNamedType{GoName: "error"}},
+				}},
+			},
+		},
 	}
 	for _, name := range names {
 		td, ok := l.types[name]
@@ -1009,6 +1031,127 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 		})
 	}
 	return out
+}
+
+// synthesizeBindableDispatch generates the per-host BindableDict instance
+// (`__<TypeName>Bindable`) and its standalone Freeze function
+// (`__<TypeName>Freeze`). Runs after stage2Lower so the freeze body can use
+// Stage 2 IR (GoIfElse / GoReturn) directly. Per decisions/ffi.md
+// 2026-05-04 refined Synthetic Builder, this is B2c — the Draft factory and
+// d.freeze() user surface land in B2f.
+func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
+	if len(l.bindableTypes) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(l.bindableTypes))
+	for name := range l.bindableTypes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var funcs []IRFn
+	var globals []IRGlobalVar
+	boolType := IRNamedType{GoName: "bool"}
+	stringType := IRNamedType{GoName: "string"}
+	errorType := IRNamedType{GoName: "error"}
+
+	for _, name := range names {
+		td, ok := l.types[name]
+		if !ok {
+			continue
+		}
+		ctor := td.Constructors[0]
+		hostType := IRNamedType{GoName: name}
+		draftType := IRNamedType{GoName: name + "Draft"}
+		draftIdent := IRIdent{GoName: "d", Type: draftType}
+
+		var stmts []IRStmt
+		for _, f := range ctor.Fields {
+			goField := capitalize(f.Name)
+			slot := IRFieldAccess{Expr: draftIdent, Field: goField}
+			cond := IRBinaryExpr{
+				Op:    "==",
+				Left:  IRFieldAccess{Expr: slot, Field: "Set", Type: boolType},
+				Right: IRBoolLit{Value: false, Type: boolType},
+				Type:  boolType,
+			}
+			errCall := IRFnCall{
+				Fn:   IRIdent{GoName: "errors.New"},
+				Args: []IRExpr{IRStringLit{Value: fmt.Sprintf("%s.%s is unset", name, f.Name), Type: stringType}},
+				Type: errorType,
+			}
+			stmts = append(stmts, GoIfElse{
+				Cond: cond,
+				Then: GoBlock{Stmts: []IRStmt{
+					GoReturn{Values: []IRExpr{
+						IRConstructorCall{GoName: name, Type: hostType},
+						errCall,
+					}},
+				}},
+			})
+		}
+
+		var successValues []IRExpr
+		if l.hasConstraints(td) {
+			args := make([]IRFieldValue, len(ctor.Fields))
+			for i, f := range ctor.Fields {
+				slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
+				args[i] = IRFieldValue{Value: IRFieldAccess{Expr: slot, Field: "Value"}}
+			}
+			successValues = []IRExpr{IRConstructorCall{
+				GoName:        name,
+				Fields:        args,
+				GoMultiReturn: true,
+				Type:          hostType,
+			}}
+		} else {
+			fields := make([]IRFieldValue, len(ctor.Fields))
+			for i, f := range ctor.Fields {
+				slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
+				fields[i] = IRFieldValue{
+					GoName: capitalize(f.Name),
+					Value:  IRFieldAccess{Expr: slot, Field: "Value"},
+				}
+			}
+			successValues = []IRExpr{
+				IRConstructorCall{GoName: name, Fields: fields, Type: hostType},
+				IRIdent{GoName: "nil"},
+			}
+		}
+		stmts = append(stmts, GoReturn{Values: successValues})
+
+		funcs = append(funcs, IRFn{
+			GoName: "__" + name + "Freeze",
+			Params: []IRParamDecl{{GoName: "d", Type: draftType}},
+			Ret:    IRResultType{Ok: hostType, Err: errorType},
+			Body:   IRBlock{Stmts: stmts},
+		})
+
+		draftLambda := IRFn{
+			Ret: draftType,
+			Body: IRBlock{Stmts: []IRStmt{
+				GoReturn{Values: []IRExpr{IRConstructorCall{GoName: name + "Draft", Type: draftType}}},
+			}},
+		}
+		dictType := IRNamedType{GoName: "BindableDict", Params: []IRType{hostType, draftType}}
+		globals = append(globals, IRGlobalVar{
+			GoName: "__" + name + "Bindable",
+			Init: IRConstructorCall{
+				GoName:   "BindableDict",
+				TypeArgs: fmt.Sprintf("[%s, %s]", name, name+"Draft"),
+				Fields: []IRFieldValue{
+					{GoName: "Draft", Value: draftLambda},
+					{GoName: "Freeze", Value: IRIdent{GoName: "__" + name + "Freeze"}},
+				},
+				Type: dictType,
+			},
+		})
+	}
+
+	if len(funcs) > 0 {
+		l.builtins["errors"] = true
+	}
+	return funcs, globals
 }
 
 func (l *Lowerer) lowerTypeDecl(td TypeDecl) IRTypeDecl {

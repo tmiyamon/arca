@@ -1213,6 +1213,70 @@ func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
 	}
 }
 
+// B2c synthesises the BindableDict struct, a `__<Type>Freeze` function with
+// per-field unset checks, and a `__<Type>Bindable` global var wiring Draft
+// (anonymous closure) and Freeze (named func reference).
+func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
+	t.Parallel()
+	src := `type Todo (id: Int, body: String) derive Bindable`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+
+	var dict *IRStructDecl
+	for i := range out.Types {
+		if sd, ok := out.Types[i].(IRStructDecl); ok && sd.GoName == "BindableDict" {
+			dict = &sd
+			break
+		}
+	}
+	if dict == nil {
+		t.Fatalf("BindableDict not synthesised")
+	}
+	if len(dict.TypeParams) != 2 || dict.TypeParams[0] != "T" || dict.TypeParams[1] != "B" {
+		t.Errorf("BindableDict type params: want [T, B], got %v", dict.TypeParams)
+	}
+
+	var freezeFn *IRFn
+	for i := range out.Funcs {
+		if out.Funcs[i].GoName == "__TodoFreeze" {
+			fn := out.Funcs[i]
+			freezeFn = &fn
+			break
+		}
+	}
+	if freezeFn == nil {
+		t.Fatalf("__TodoFreeze not synthesised")
+	}
+	body, ok := freezeFn.Body.(IRBlock)
+	if !ok {
+		t.Fatalf("__TodoFreeze body: want IRBlock, got %T", freezeFn.Body)
+	}
+	// Two unset checks (one per field) + one success return.
+	if len(body.Stmts) != 3 {
+		t.Errorf("__TodoFreeze body stmts: want 3, got %d", len(body.Stmts))
+	}
+
+	if len(out.Globals) != 1 {
+		t.Fatalf("globals: want 1, got %d", len(out.Globals))
+	}
+	gv := out.Globals[0]
+	if gv.GoName != "__TodoBindable" {
+		t.Errorf("global name: want __TodoBindable, got %s", gv.GoName)
+	}
+	cc, ok := gv.Init.(IRConstructorCall)
+	if !ok || cc.GoName != "BindableDict" {
+		t.Errorf("global init: want BindableDict ctor, got %T %v", gv.Init, gv.Init)
+	}
+}
+
 // `derive Bindable` registers the type as bindable; B2b+ consume the registry
 // to drive Draft / Dictionary synthesis. B2a only validates that the trait
 // name is recognised and tracks the type.

@@ -31,6 +31,10 @@ func (em *Emitter) Emit(prog IRProgram) string {
 		em.emitFn(fd)
 		em.w.Line("")
 	}
+	for _, gv := range prog.Globals {
+		em.emitGlobalVar(gv)
+		em.w.Line("")
+	}
 	em.emitBuiltins(prog.Builtins)
 	bodyStr := em.w.String()
 
@@ -678,6 +682,18 @@ func (em *Emitter) collectIfChain(g GoIfElse) ([]GoIfBranch, *GoBlock) {
 
 func (em *Emitter) emitGoMultiAssign(g GoMultiAssign) {
 	em.w.AssignMulti(strings.Join(g.Names, ", "), em.emitExpr(g.Value))
+}
+
+// emitGlobalVar emits a top-level `var Name [Type] = Init` declaration. Used
+// for compiler-emitted state (e.g. Bindable dictionary instances) that has
+// no Arca user-surface counterpart. Type is optional — when nil, Go infers
+// from the initialiser.
+func (em *Emitter) emitGlobalVar(g IRGlobalVar) {
+	if g.Type == nil {
+		em.w.Stmt(fmt.Sprintf("var %s = %s", g.GoName, em.emitExpr(g.Init)))
+		return
+	}
+	em.w.VarAssign(g.GoName, em.irTypeStr(g.Type), em.emitExpr(g.Init))
 }
 
 func (em *Emitter) emitGoVarDecl(g GoVarDecl) {
