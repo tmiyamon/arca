@@ -4,6 +4,115 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-04 (refined): Synthetic Builder — Bindable as compiler intrinsic + naming finalisation
+
+**Supersedes the 2026-05-02 (refined) entry's Bindable trait shape, derive syntax, and naming.** The dispatch model from that entry (vtable + dictionary hybrid, object-safety routing) carries forward unchanged — what changes is how Bindable itself is positioned and spelled.
+
+Reviewing the 2026-05-02 (refined) sketch in design discussion surfaced four structural problems:
+
+- Treating Bindable as a user-defined trait forces every Phase 1 trait restriction (no `Self` / no `static fun` / no associated types / no generic bounds) to gain a "constraint-only dictionary trait" exception. The exception is real but it scatters trait machinery across user-facing surface for what is mechanically one compiler-managed mechanism.
+- `arcaBuilder` as a method name leaks Go-emit-side concern (the `arca` prefix exists to avoid collision with user code in Go) into the Arca-side surface where users will read and write it.
+- `Builder` struct + per-field `bool` flags (sketch G1) tracks "was this field set" through path-dependent runtime state. Layer 1's panic-prevention contract is structural, not path-dependent — `Option` is pointer-backed precisely so nil-check is structural. Bindable's field-state encoding should match.
+- `derive(Bindable)` as a function-call-shaped annotation between the type name and field tuple sits visually adjacent to `pub` / `static` modifiers but parses differently. Arca's existing decl-modifier slot is bare-keyword (not function-call), and `derive` belongs there.
+
+**Decision: Bindable is a compiler intrinsic, not a user trait.** Same category as `Result` / `Option` — the name is reserved, manual `impl T: Bindable` is rejected by parser/lower, only `derive Bindable` activates synthesis. This dissolves the "constraint-only trait" exception: Phase 1 trait restrictions stay as written for user traits, and Bindable's machinery (associated `Draft` type, `static fun draft()`, generic dispatch dictionary) is compiler-internal, not surface trait syntax.
+
+**`derive` syntax — modifier-style, block-adjacent (P2 form):**
+
+```arca
+type Todo (
+  id: Int
+  body: String { max_length: 255 }
+  startedAt: Option[Time]
+) derive Bindable {
+  // optional method block
+}
+
+// block-less form: derive at tail
+type Status derive Bindable { Active, Archived }
+```
+
+Rule: `derive` sits immediately before the body block `{ }`; if there is no block, `derive` goes at the tail. Same rule for product and sum types. Multiple traits: `derive Bindable, Clone` — but MVP accepts one only (multi-derive is parser-rejected until the trait-composition session lands).
+
+**Naming finalisation:**
+
+| Concept | Name | Rationale |
+|---|---|---|
+| Synthesised mutable type | `Todo.Draft` | Associated type on Bindable; `Draft` (vs `Builder`) avoids implying a setter chain that doesn't exist — population is by FFI mutation (json/scan), not user `.id(1).body("…")`. |
+| Per-field state | `BindableSlot[T] = Set(T) \| Unset` | Sum type, structurally panic-free. Pattern-match (`match slot { Set(v) => …; Unset => … }`) is the only access; no flag-bool path-dependency. |
+| Factory | `Todo.draft()` | Static method on the host type (no `arca` prefix). Returns `Todo.Draft`. |
+| Finaliser | `d.freeze()` | Inherent method on the Draft type, returns `Result[Todo, Error]`. Calls `NewTodo(...)` for constraint validation. Name preserved from Haskell `runST` lineage. |
+
+**`BindableSlot[T]` as sum type (G3):** each Draft field has type `BindableSlot[T]`, where:
+
+```arca
+type BindableSlot[T] {
+  Set(value: T)
+  Unset
+}
+```
+
+Compiler emits `Set` for FFI-populated fields, `Unset` for absent ones; `freeze` pattern-matches `Unset` → returns `Err(MissingFieldError)`, `Set(v)` → unwraps for `NewTodo` call. No `nil`, no flag bool, no order-of-write dependence. The inability to construct an invalid Draft state is structural, not enforced by check.
+
+**Dispatch dictionary — generic struct + function-pointer fields (Q4b-fp):**
+
+```go
+// emitted alongside Todo / NewTodo:
+type BindableDict[T any, B any] struct {
+    Draft  func() B
+    Freeze func(B) (T, error)
+    // (future: Bind / Scan / Decode populate hooks)
+}
+
+var __TodoBindable = BindableDict[Todo, TodoDraft]{
+    Draft:  func() TodoDraft { return TodoDraft{} },
+    Freeze: func(d TodoDraft) (Todo, error) { return NewTodo(...) },
+}
+```
+
+Generic functions taking `[T: Bindable]` receive a hidden `__bindableT` parameter (modifier form, positioned immediately after type params). Call sites are rewritten at lower:
+
+```arca
+fun bindJSON[T: Bindable](r: Ref[http.Request]) -> Result[T, Error] {
+  let b = __bindableT.draft()
+  json.unmarshal(r.body, &b)?
+  __bindableT.freeze(b)
+}
+
+let todo = bindJSON[Todo](r)?    // lower rewrites to bindJSON(__TodoBindable, r)?
+```
+
+`currentDictParams` tracks transitive chains: a generic function calling another generic function passes its own `__bindableT` through, no per-call resolution at every depth.
+
+**Instance naming convention:** `__<TypeName><TraitName>` (e.g. `__TodoBindable`, `__StatusBindable`). Underscore prefix marks compiler-emitted, the concatenation collision-checks against user code that already cannot start identifiers with `__`.
+
+**Constraint syntax — single only:** MVP accepts `[T: Bindable]` exactly. Multi-trait bound (`[T: A + B]` / `&` / `with` / `where` clause) is deferred to a dedicated trait-composition session — the design space spans `+` precedence with type-arg syntax, intersection vs union semantics, where-clause vs inline form, and is unrelated to Bindable's correctness.
+
+**Known trade-off (X1):** Arca's `[T: Bindable]` carries one type parameter; the Go-emitted `BindableDict[T, B]` carries two. The associated type `B = T::Draft` is resolved at lower (the dictionary instance picks the concrete pair) but the Go-side type cannot collapse to a single param without associated-type support in Go's type system. This leak does not surface in Arca code — `BindableDict` is compiler-internal — but anyone reading emitted Go sees the two-param form.
+
+**Rejected: `type[X]` fusion syntax.** A proposal to write `type[Bindable] Todo (...)` (subscript-style derive on the `type` keyword) was considered. Rejected because `[T]` is already Arca's type-parameter syntax (`type Pair[A, B]`), and overloading the same bracket position with a different role (derive list vs type params) creates visual ambiguity at every type decl. Future attribute systems may revisit this with a different sigil.
+
+**Stdlib refactor (B3, unchanged from 2026-05-02 entry):** `BindJSON` / `QueryAs` / `Decode` switch from runtime reflection over `T` to dictionary-driven `draft()` → populate → `freeze()`. The reflection path retires.
+
+**Implementation slices (B2 expansion, supersedes B2 in 2026-05-02 entry):**
+
+| Slice | Content | Est. |
+|---|---|---|
+| B2a | `derive Bindable` parser + AST + Bindable intrinsic registration | ~200 |
+| B2b | `Todo.Draft` synthesis + `BindableSlot[T]` IR + Go emit (G3 sum type) | ~400 |
+| B2c | `BindableDict[T, B]` struct emission + `__TodoBindable` instance | ~300 |
+| B2d | `[T: Bindable]` constraint parser + IR + lower resolution | ~150 |
+| B2e | `__bindableT` hidden-param injection + call site rewrite + transitive chain | ~400 |
+| B2f | `Todo.draft()` factory + `d.freeze()` synthesis + `NewTodo` integration | ~200 |
+
+Total ~1650, 3-4 sessions. Slice boundaries keep test suite green.
+
+See `design_bindable_type_ideas.md` for nine deferred ideas surfaced in this discussion (BindableSlot as general "presence tracking" abstraction, compiler-intrinsic trait category, R3 sister-trait shape, trait-as-namespace syntax, type composition syntax, phantom-type rejection rationale, user-facing builder promotion, `type[X]` fusion re-evaluation, 3-layer invariant model).
+
+**Status:** Design refined. B1 landed end-to-end (B1a + B1b + B1c + B1d); B2a–B2f next.
+
+---
+
 ## 2026-05-02 (refined): Synthetic Builder — Vtable + Dictionary hybrid dispatch
 
 **Supersedes the same-day "Synthetic Builder — FFI-only MVP via `derive`" entry below.** The earlier entry settled on a marker `Bindable` trait + Go-side type-assertion (Path 1 in working notes). Reviewing it surfaced three structural problems:
