@@ -1147,3 +1147,53 @@ impl Box: Cloneable {
 		t.Fatalf("expected ErrUnsupportedFeature for impl of Cloneable, got: %v", errs)
 	}
 }
+
+// `derive Bindable` registers the type as bindable; B2b+ consume the registry
+// to drive Draft / Dictionary synthesis. B2a only validates that the trait
+// name is recognised and tracks the type.
+func TestLower_DeriveBindable_RegistersType(t *testing.T) {
+	t.Parallel()
+	src := `type Todo (id: Int, body: String) derive Bindable`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	l.Lower(prog, "main", false)
+	if !l.bindableTypes["Todo"] {
+		t.Errorf("expected bindableTypes[\"Todo\"] = true, got false; map: %v", l.bindableTypes)
+	}
+	if len(l.errors) != 0 {
+		t.Errorf("unexpected errors: %v", l.errors)
+	}
+}
+
+// `derive Foo` for any name other than the registered intrinsic Bindable is
+// rejected. MVP supports only `derive Bindable`.
+func TestLower_DeriveUnknown_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`type Box (value: Int) derive Cloneable`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for derive Cloneable, got: %v", errs)
+	}
+}
+
+// Manual `impl T: Bindable { ... }` is rejected — Bindable is a compiler
+// intrinsic, only `derive Bindable` activates synthesis (B2a).
+func TestLower_ManualImplBindable_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+type Box (value: Int)
+
+impl Box: Bindable {
+  fun freeze() -> Box { self }
+}
+`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for manual impl Bindable, got: %v", errs)
+	}
+}

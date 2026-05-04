@@ -125,6 +125,87 @@ impl User: Display {
 	}
 }
 
+// findTypeDecl returns the first TypeDecl named name from prog.
+func findTypeDecl(t *testing.T, prog *Program, name string) TypeDecl {
+	t.Helper()
+	for _, d := range prog.Decls {
+		if td, ok := d.(TypeDecl); ok && td.Name == name {
+			return td
+		}
+	}
+	t.Fatalf("TypeDecl %q not found", name)
+	return TypeDecl{}
+}
+
+func TestParseDeriveBindable(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		typeName string
+		src      string
+	}{
+		{
+			"short record with method block",
+			"Todo",
+			`type Todo (id: Int, body: String) derive Bindable {
+  fun describe() -> String { self.body }
+}`,
+		},
+		{
+			"short record without method block",
+			"Todo",
+			`type Todo (id: Int, body: String) derive Bindable`,
+		},
+		{
+			"sum type",
+			"Status",
+			`type Status derive Bindable {
+  Active
+  Archived
+}`,
+		},
+		{
+			"long form with constructors",
+			"Resp",
+			`type Resp derive Bindable {
+  Ok(value: Int)
+  Err(message: String)
+}`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prog, err := parseSource(t, tc.src)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			td := findTypeDecl(t, prog, tc.typeName)
+			if len(td.Derives) != 1 {
+				t.Fatalf("Derives: want 1, got %d", len(td.Derives))
+			}
+			if td.Derives[0].Name != "Bindable" {
+				t.Errorf("Derives[0].Name: want Bindable, got %s", td.Derives[0].Name)
+			}
+			if td.Derives[0].Pos.Line == 0 || td.Derives[0].Pos.Col == 0 {
+				t.Errorf("Derives[0].Pos should be populated, got %+v", td.Derives[0].Pos)
+			}
+		})
+	}
+}
+
+func TestParseDeriveMultiRejected(t *testing.T) {
+	t.Parallel()
+	_, err := parseSource(t, `type Todo (id: Int) derive Bindable, Cloneable`)
+	if err == nil {
+		t.Fatal("expected error for multi-trait derive, got nil")
+	}
+	if !strings.Contains(err.Error(), "multi-trait `derive`") {
+		t.Errorf("error should mention multi-trait derive; got: %s", err.Error())
+	}
+}
+
 // paramTypeOf returns the type of the first parameter of the first top-level
 // function declaration in src. Used as a lightweight probe for function-type
 // parse results.

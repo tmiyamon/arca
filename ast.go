@@ -356,6 +356,14 @@ type TypeDecl struct {
 	Constructors []Constructor
 	Methods      []FnDecl
 	Tags         []TagRule
+	Derives      []Derive
+}
+
+// Derive is a single trait name in a `derive Trait` clause on a TypeDecl.
+// Pos points at the trait identifier for diagnostics.
+type Derive struct {
+	Pos  Pos
+	Name string
 }
 
 type TypeAliasDecl struct {

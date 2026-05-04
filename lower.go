@@ -13,6 +13,7 @@ type Lowerer struct {
 	typeAliases  map[string]TypeAliasDecl
 	traits       map[string]TraitDecl
 	impls        map[string][]ImplDecl // keyed by target type name
+	bindableTypes map[string]bool       // type names with `derive Bindable`; B2b+ consume
 	ctorTypes    map[string]string     // constructor name → type name
 	fnNames      map[string]string     // arca name → Go name for pub functions
 	functions    map[string]FnDecl
@@ -740,6 +741,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		typeAliases:  make(map[string]TypeAliasDecl),
 		traits:       make(map[string]TraitDecl),
 		impls:        make(map[string][]ImplDecl),
+		bindableTypes: make(map[string]bool),
 		ctorTypes:    make(map[string]string),
 		fnNames:      make(map[string]string),
 		functions:    make(map[string]FnDecl),
@@ -916,11 +918,42 @@ func (l *Lowerer) hasImport(pkg string) bool {
 
 // --- Type Declarations ---
 
+// intrinsicTraitNames lists trait names reserved for compiler synthesis;
+// users cannot `impl` them and `derive` is the only way to associate one
+// with a type. Bindable is the first member (decisions/ffi.md 2026-05-04
+// refined). Cloneable / Hashable etc. may join later.
+var intrinsicTraitNames = map[string]bool{
+	"Bindable": true,
+}
+
+// validateDeriveList enforces the rules from decisions/ffi.md 2026-05-04
+// refined Synthetic Builder for `derive Trait` clauses on a type:
+// the trait must be a known compiler intrinsic, and `derive Bindable`
+// records the type name in l.bindableTypes for later sub-slices (B2b+)
+// to drive Draft / Dictionary synthesis. Unknown derive targets (anything
+// other than Bindable in MVP) are rejected.
+func (l *Lowerer) validateDeriveList(td TypeDecl) {
+	for _, d := range td.Derives {
+		if !intrinsicTraitNames[d.Name] {
+			l.addCompileError(ErrUnsupportedFeature, d.Pos, UnsupportedFeatureData{
+				Feature: fmt.Sprintf("derive %s", d.Name),
+				Context: "MVP supports `derive Bindable` only",
+			})
+			continue
+		}
+		if d.Name == "Bindable" {
+			l.bindableTypes[td.Name] = true
+		}
+	}
+}
+
 func (l *Lowerer) lowerTypeDecl(td TypeDecl) IRTypeDecl {
 	// Set currentTypeName so isTypeParam resolves generic params (e.g. A, B).
 	prev := l.currentTypeName
 	l.currentTypeName = td.Name
 	defer func() { l.currentTypeName = prev }()
+
+	l.validateDeriveList(td)
 
 	// Check field types exist in all constructors
 	for _, ctor := range td.Constructors {
@@ -1386,6 +1419,13 @@ func (l *Lowerer) lowerImplDecl(d ImplDecl) []IRFuncDecl {
 	td, ok := l.types[d.TypeName]
 	if !ok {
 		l.addCompileError(ErrUnknownType, d.Pos, UnknownTypeData{Name: d.TypeName})
+		return nil
+	}
+	if intrinsicTraitNames[d.TraitName] {
+		l.addCompileError(ErrUnsupportedFeature, d.Pos, UnsupportedFeatureData{
+			Feature: fmt.Sprintf("impl of compiler-intrinsic trait %s", d.TraitName),
+			Context: fmt.Sprintf("use `derive %s` on the type declaration", d.TraitName),
+		})
 		return nil
 	}
 	if _, ok := l.traits[d.TraitName]; !ok {

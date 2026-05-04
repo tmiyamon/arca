@@ -223,6 +223,10 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			}
 		}
 		p.advance() // skip ')'
+		derives, err := p.parseDeriveList()
+		if err != nil {
+			return nil, err
+		}
 		// Short record may have tags/methods block
 		var methods []FnDecl
 		var tags []TagRule
@@ -270,9 +274,13 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 			}
 			p.advance() // skip '}'
 		}
-		return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}, Methods: methods, Tags: tags}, nil
+		return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: []Constructor{{Name: name.Lit, Fields: fields}}, Methods: methods, Tags: tags, Derives: derives}, nil
 	}
 
+	derives, err := p.parseDeriveList()
+	if err != nil {
+		return nil, err
+	}
 	if _, err := p.expect(TkLBrace); err != nil {
 		return nil, err
 	}
@@ -331,7 +339,28 @@ func (p *Parser) parseTypeDecl() (Decl, error) {
 		}
 	}
 	p.advance() // skip '}'
-	return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags}, nil
+	return TypeDecl{Pos: namePos, Name: name.Lit, Params: params, Constructors: constructors, Methods: methods, Tags: tags, Derives: derives}, nil
+}
+
+// parseDeriveList parses an optional `derive Trait` clause attached to a type
+// declaration. Sits between the type header (name + optional [params] +
+// optional (fields)) and the optional `{ body }` block. MVP accepts a single
+// trait only; comma-separated multi-derive is rejected pending the
+// trait-composition syntax session (decisions/ffi.md 2026-05-04 refined).
+func (p *Parser) parseDeriveList() ([]Derive, error) {
+	if p.peek().Kind != TkDerive {
+		return nil, nil
+	}
+	p.advance() // skip 'derive'
+	name, err := p.expect(TkUpperIdent)
+	if err != nil {
+		return nil, err
+	}
+	derives := []Derive{{Pos: Pos{name.Line, name.Col}, Name: name.Lit}}
+	if p.peek().Kind == TkComma {
+		return nil, p.errUnsupported(p.peek(), "multi-trait `derive`", "MVP single trait; multi-trait bound deferred")
+	}
+	return derives, nil
 }
 
 func (p *Parser) parseTraitDecl() (Decl, error) {

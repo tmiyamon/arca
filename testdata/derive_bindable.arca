@@ -1,0 +1,15 @@
+import go "fmt"
+
+type Todo (
+  id: Int
+  body: String
+) derive Bindable {
+  fun describe() -> String {
+    self.body
+  }
+}
+
+fun main() {
+  let t = Todo(id: 1, body: "draft")
+  fmt.Println(t.describe())
+}
