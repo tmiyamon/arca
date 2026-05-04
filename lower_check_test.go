@@ -1148,6 +1148,71 @@ impl Box: Cloneable {
 	}
 }
 
+// `derive Bindable` on a sum (multi-constructor) type is rejected — Q10
+// in the 2026-05-04 refined entry defers sum-type Builder to B5.
+func TestLower_DeriveBindableOnSumType_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+type Status derive Bindable {
+  Active
+  Archived
+}
+`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for derive Bindable on sum type, got: %v", errs)
+	}
+}
+
+// B2b synthesises the prelude `BindableSlot[T any]` struct plus a
+// `<TypeName>Draft` IRStructDecl for each `derive Bindable` host, mirroring
+// the host's fields with BindableSlot[Inner] types. Both are normal
+// IRStructDecl entries so emit stays a pretty-printer.
+func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
+	t.Parallel()
+	src := `type Todo (id: Int, body: String) derive Bindable`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	var slot, draft *IRStructDecl
+	for i := range out.Types {
+		sd, ok := out.Types[i].(IRStructDecl)
+		if !ok {
+			continue
+		}
+		switch sd.GoName {
+		case "BindableSlot":
+			slot = &sd
+		case "TodoDraft":
+			draft = &sd
+		}
+	}
+	if slot == nil {
+		t.Fatalf("BindableSlot not synthesised; got types: %v", out.Types)
+	}
+	if len(slot.TypeParams) != 1 || slot.TypeParams[0] != "T" {
+		t.Errorf("BindableSlot type params: want [T], got %v", slot.TypeParams)
+	}
+	if draft == nil {
+		t.Fatalf("TodoDraft not synthesised; got types: %v", out.Types)
+	}
+	if len(draft.Fields) != 2 {
+		t.Fatalf("TodoDraft fields: want 2, got %d", len(draft.Fields))
+	}
+	for i, f := range draft.Fields {
+		named, ok := f.Type.(IRNamedType)
+		if !ok || named.GoName != "BindableSlot" || len(named.Params) != 1 {
+			t.Errorf("field %d (%s) type: want BindableSlot[T], got %T %v", i, f.GoName, f.Type, f.Type)
+		}
+	}
+}
+
 // `derive Bindable` registers the type as bindable; B2b+ consume the registry
 // to drive Draft / Dictionary synthesis. B2a only validates that the trait
 // name is recognised and tracks the type.

@@ -9,6 +9,16 @@ type Todo struct {
 	Body string
 }
 
+type BindableSlot[T any] struct {
+	Set   bool
+	Value T
+}
+
+type TodoDraft struct {
+	Id   BindableSlot[int]
+	Body BindableSlot[string]
+}
+
 func (t Todo) describe() string {
 	return t.Body
 }

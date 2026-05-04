@@ -850,6 +850,10 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 
 	l.checkMethodCollisions()
 
+	// Bindable Draft synthesis (B2b): for each `derive Bindable` host,
+	// emit a `<TypeName>Draft` struct with BindableSlot-wrapped fields.
+	types = append(types, l.synthesizeBindableTypes()...)
+
 	// Expand sum type methods to per-variant implementations
 	funcs = l.expandSumTypeMethods(funcs)
 
@@ -931,7 +935,8 @@ var intrinsicTraitNames = map[string]bool{
 // the trait must be a known compiler intrinsic, and `derive Bindable`
 // records the type name in l.bindableTypes for later sub-slices (B2b+)
 // to drive Draft / Dictionary synthesis. Unknown derive targets (anything
-// other than Bindable in MVP) are rejected.
+// other than Bindable in MVP) and shapes outside Bindable's MVP scope
+// (sum types — Q10 deferred to B5) are rejected.
 func (l *Lowerer) validateDeriveList(td TypeDecl) {
 	for _, d := range td.Derives {
 		if !intrinsicTraitNames[d.Name] {
@@ -942,9 +947,68 @@ func (l *Lowerer) validateDeriveList(td TypeDecl) {
 			continue
 		}
 		if d.Name == "Bindable" {
+			if len(td.Constructors) != 1 {
+				l.addCompileError(ErrUnsupportedFeature, d.Pos, UnsupportedFeatureData{
+					Feature: "derive Bindable on sum type",
+					Context: "MVP supports product (single-constructor) types only; sum types deferred to B5",
+				})
+				continue
+			}
 			l.bindableTypes[td.Name] = true
 		}
 	}
+}
+
+// synthesizeBindableTypes generates the prelude `BindableSlot[T any]` struct
+// plus a `<TypeName>Draft` IRStructDecl for each host type recorded in
+// l.bindableTypes (set by validateDeriveList). Each Draft mirrors the host's
+// fields with field types wrapped in BindableSlot[Inner]. Output is normal
+// IRStructDecl so emit stays a pretty-printer — no bindable-specific branch
+// in emit.go.
+//
+// Per decisions/ffi.md 2026-05-04 refined Synthetic Builder, this is B2b:
+// type synthesis only — factory (`Todo.draft()`), freeze, and dictionary
+// dispatch land in B2c through B2f.
+func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
+	if len(l.bindableTypes) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(l.bindableTypes))
+	for name := range l.bindableTypes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := []IRTypeDecl{
+		IRStructDecl{
+			GoName:     "BindableSlot",
+			TypeParams: []string{"T"},
+			Fields: []IRFieldDecl{
+				{GoName: "Set", Type: IRNamedType{GoName: "bool"}},
+				{GoName: "Value", Type: IRNamedType{GoName: "T"}},
+			},
+		},
+	}
+	for _, name := range names {
+		td, ok := l.types[name]
+		if !ok {
+			continue
+		}
+		ctor := td.Constructors[0]
+		fields := make([]IRFieldDecl, len(ctor.Fields))
+		for i, f := range ctor.Fields {
+			fields[i] = IRFieldDecl{
+				GoName: capitalize(f.Name),
+				Type:   IRNamedType{GoName: "BindableSlot", Params: []IRType{l.lowerType(f.Type)}},
+			}
+		}
+		out = append(out, IRStructDecl{
+			GoName:     td.Name + "Draft",
+			TypeParams: td.Params,
+			Fields:     fields,
+		})
+	}
+	return out
 }
 
 func (l *Lowerer) lowerTypeDecl(td TypeDecl) IRTypeDecl {
