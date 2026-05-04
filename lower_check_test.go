@@ -1277,6 +1277,48 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	}
 }
 
+// B2d: `fun f[T: Bindable](x: T) -> T` lowers cleanly, IRFn carries the
+// type-param names, the body resolves T as a type-var, and emit produces
+// `func f[T any](x T) T`. The call-site dictionary injection lands in B2e.
+func TestLower_FnTypeParams_BindableConstraint(t *testing.T) {
+	t.Parallel()
+	src := `fun freeze[T: Bindable](x: T) -> T { x }`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	if len(l.errors) != 0 {
+		t.Fatalf("unexpected errors: %v", l.errors)
+	}
+	var fn *IRFn
+	for i := range out.Funcs {
+		if out.Funcs[i].GoName == "freeze" {
+			fn = &out.Funcs[i]
+			break
+		}
+	}
+	if fn == nil {
+		t.Fatalf("freeze IRFn not found")
+	}
+	if len(fn.TypeParams) != 1 || fn.TypeParams[0] != "T" {
+		t.Errorf("TypeParams: want [T], got %v", fn.TypeParams)
+	}
+}
+
+func TestLower_FnUnknownConstraint_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun f[T: Cloneable](x: T) -> T { x }`)
+	if !hasErrorCode(errs, ErrUnsupportedFeature) {
+		t.Fatalf("expected ErrUnsupportedFeature for unknown constraint, got: %v", errs)
+	}
+}
+
 // `derive Bindable` registers the type as bindable; B2b+ consume the registry
 // to drive Draft / Dictionary synthesis. B2a only validates that the trait
 // name is recognised and tracks the type.

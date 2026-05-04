@@ -810,6 +810,10 @@ func (p *Parser) parseFnDecl(public bool) (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
+	typeParams, err := p.parseFnTypeParams()
+	if err != nil {
+		return nil, err
+	}
 	if _, err := p.expect(TkLParen); err != nil {
 		return nil, err
 	}
@@ -839,7 +843,46 @@ func (p *Parser) parseFnDecl(public bool) (Decl, error) {
 	if err != nil {
 		return nil, err
 	}
-	return FnDecl{Pos: pos, NamePos: Pos{name.Line, name.Col}, Name: name.Lit, Public: public, Params: params, ReturnType: retType, Body: body}, nil
+	return FnDecl{Pos: pos, NamePos: Pos{name.Line, name.Col}, Name: name.Lit, Public: public, TypeParams: typeParams, Params: params, ReturnType: retType, Body: body}, nil
+}
+
+// parseFnTypeParams parses an optional `[T]` / `[T, U]` / `[T: Bindable]`
+// list immediately after a function name. Single trait constraint per param;
+// multi-trait `[T: A + B]` is rejected pending the trait-composition session
+// (decisions/ffi.md 2026-05-04 refined Synthetic Builder).
+func (p *Parser) parseFnTypeParams() ([]TypeParamDecl, error) {
+	if p.peek().Kind != TkLBracket {
+		return nil, nil
+	}
+	p.advance() // skip '['
+	var out []TypeParamDecl
+	for p.peek().Kind != TkRBracket {
+		nameTok, err := p.expect(TkUpperIdent)
+		if err != nil {
+			return nil, err
+		}
+		tp := TypeParamDecl{
+			Pos:  Pos{nameTok.Line, nameTok.Col},
+			Name: nameTok.Lit,
+		}
+		if p.peek().Kind == TkColon {
+			p.advance() // skip ':'
+			constraint, err := p.expect(TkUpperIdent)
+			if err != nil {
+				return nil, err
+			}
+			tp.Constraint = constraint.Lit
+			if p.peek().Kind == TkPlus {
+				return nil, p.errUnsupported(p.peek(), "multi-trait constraint", "MVP single trait; multi-trait bound deferred")
+			}
+		}
+		out = append(out, tp)
+		if p.peek().Kind == TkComma {
+			p.advance()
+		}
+	}
+	p.advance() // skip ']'
+	return out, nil
 }
 
 func (p *Parser) parseFnParam() (FnParam, error) {

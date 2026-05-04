@@ -23,11 +23,12 @@ type Lowerer struct {
 	goPackages    map[string]*GoPackage // short name → Go package info (carries Pos/SideEffect/Used)
 
 	// Per-function state
-	currentRetType    Type
-	currentIRRetType  IRType // overrides currentRetType when set (for try blocks with type vars)
-	currentReceiver   string
-	currentTypeName   string
-	matchHint         IRType // type hint for match arm bodies
+	currentRetType      Type
+	currentIRRetType    IRType // overrides currentRetType when set (for try blocks with type vars)
+	currentReceiver     string
+	currentTypeName     string
+	currentFnTypeParams []string // names of [T, U, ...] declared on the enclosing fn
+	matchHint           IRType   // type hint for match arm bodies
 
 	// Collected during lowering
 	imports      []IRImport
@@ -1412,9 +1413,40 @@ type loweredFn struct {
 
 // lowerFnCommon lowers the signature and body of a function-like declaration,
 // managing per-function state (currentRetType, currentReceiver, currentTypeName,
-// lexical scope, type inference scope).
+// currentFnTypeParams, lexical scope, type inference scope). B2d validates
+// any `[T: Bindable]` constraint annotations: only the Bindable intrinsic is
+// accepted in MVP, anything else surfaces as ErrUnsupportedFeature.
 func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn {
-	// Check parameter and return types exist
+	for _, tp := range fd.TypeParams {
+		if tp.Constraint == "" {
+			continue
+		}
+		if !intrinsicTraitNames[tp.Constraint] {
+			l.addCompileError(ErrUnsupportedFeature, tp.Pos, UnsupportedFeatureData{
+				Feature: fmt.Sprintf("type-param constraint %s", tp.Constraint),
+				Context: "MVP supports `: Bindable` only",
+			})
+		}
+	}
+
+	prevRet := l.currentRetType
+	prevRecv := l.currentReceiver
+	prevType := l.currentTypeName
+	prevTypeParams := l.currentFnTypeParams
+
+	l.currentRetType = fd.ReturnType
+	l.currentReceiver = receiver
+	if typeName != "" {
+		l.currentTypeName = typeName
+	}
+	tpNames := make([]string, len(fd.TypeParams))
+	for i, tp := range fd.TypeParams {
+		tpNames[i] = tp.Name
+	}
+	l.currentFnTypeParams = tpNames
+
+	// Check parameter and return types exist (after type-params are in scope
+	// so signatures referencing T resolve as type-vars rather than unknowns).
 	for _, p := range fd.Params {
 		if p.Type != nil {
 			l.checkTypeExists(p.Type)
@@ -1422,16 +1454,6 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	}
 	if fd.ReturnType != nil {
 		l.checkTypeExists(fd.ReturnType)
-	}
-
-	prevRet := l.currentRetType
-	prevRecv := l.currentReceiver
-	prevType := l.currentTypeName
-
-	l.currentRetType = fd.ReturnType
-	l.currentReceiver = receiver
-	if typeName != "" {
-		l.currentTypeName = typeName
 	}
 
 	params := l.lowerParams(fd.Params)
@@ -1465,6 +1487,7 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	l.currentRetType = prevRet
 	l.currentReceiver = prevRecv
 	l.currentTypeName = prevType
+	l.currentFnTypeParams = prevTypeParams
 
 	return loweredFn{params: params, retType: retType, body: body}
 }
@@ -1487,12 +1510,17 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 		}
 	}
 
+	tpNames := make([]string, len(fd.TypeParams))
+	for i, tp := range fd.TypeParams {
+		tpNames[i] = tp.Name
+	}
 	return IRFuncDecl{
-		GoName: name,
-		Params: lf.params,
-		Ret:    lf.retType,
-		Body:   lf.body,
-		Source: SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
+		GoName:     name,
+		TypeParams: tpNames,
+		Params:     lf.params,
+		Ret:        lf.retType,
+		Body:       lf.body,
+		Source:     SourceInfo{Pos: fd.Pos, Name: fd.Name, ReturnType: fd.ReturnType},
 	}
 }
 
@@ -2107,12 +2135,18 @@ func (l *Lowerer) isKnownTypeName(name string) bool {
 	return false
 }
 
-// isTypeParam checks if a name is a type parameter of the current type.
-// Only looks at the enclosing type's declaration so method bodies resolve
-// their own params consistently. External constructor calls never hit this
+// isTypeParam checks if a name is a type parameter of the current type
+// or the enclosing function. Type-level params come from the type's decl;
+// function-level params come from `currentFnTypeParams` set by
+// lowerFnCommon (B2d). External constructor / call sites never hit this
 // path: lowerUserConstructorCall instantiates fresh type vars per call via
 // instantiateGenericType.
 func (l *Lowerer) isTypeParam(name string) bool {
+	for _, p := range l.currentFnTypeParams {
+		if p == name {
+			return true
+		}
+	}
 	if l.currentTypeName == "" {
 		return false
 	}

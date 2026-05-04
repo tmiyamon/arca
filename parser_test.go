@@ -195,6 +195,78 @@ func TestParseDeriveBindable(t *testing.T) {
 	}
 }
 
+func TestParseFnTypeParams(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		src     string
+		fnName  string
+		params  []TypeParamDecl
+	}{
+		{
+			"single unconstrained",
+			`fun identity[T](x: T) -> T { x }`,
+			"identity",
+			[]TypeParamDecl{{Name: "T"}},
+		},
+		{
+			"single Bindable constraint",
+			`fun freeze[T: Bindable](d: T) -> T { d }`,
+			"freeze",
+			[]TypeParamDecl{{Name: "T", Constraint: "Bindable"}},
+		},
+		{
+			"multiple unconstrained",
+			`fun pair[A, B](a: A, b: B) -> A { a }`,
+			"pair",
+			[]TypeParamDecl{{Name: "A"}, {Name: "B"}},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prog, err := parseSource(t, tc.src)
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			var fn *FnDecl
+			for _, d := range prog.Decls {
+				if fd, ok := d.(FnDecl); ok && fd.Name == tc.fnName {
+					fn = &fd
+					break
+				}
+			}
+			if fn == nil {
+				t.Fatalf("FnDecl %s not found", tc.fnName)
+			}
+			if len(fn.TypeParams) != len(tc.params) {
+				t.Fatalf("TypeParams: want %d, got %d", len(tc.params), len(fn.TypeParams))
+			}
+			for i, want := range tc.params {
+				got := fn.TypeParams[i]
+				if got.Name != want.Name {
+					t.Errorf("TypeParams[%d].Name: want %s, got %s", i, want.Name, got.Name)
+				}
+				if got.Constraint != want.Constraint {
+					t.Errorf("TypeParams[%d].Constraint: want %q, got %q", i, want.Constraint, got.Constraint)
+				}
+			}
+		})
+	}
+}
+
+func TestParseFnMultiConstraintRejected(t *testing.T) {
+	t.Parallel()
+	_, err := parseSource(t, `fun freeze[T: Bindable + Cloneable](d: T) -> T { d }`)
+	if err == nil {
+		t.Fatal("expected error for multi-trait constraint, got nil")
+	}
+	if !strings.Contains(err.Error(), "multi-trait constraint") {
+		t.Errorf("error should mention multi-trait constraint; got: %s", err.Error())
+	}
+}
+
 func TestParseDeriveMultiRejected(t *testing.T) {
 	t.Parallel()
 	_, err := parseSource(t, `type Todo (id: Int) derive Bindable, Cloneable`)

@@ -332,11 +332,12 @@ func (em *Emitter) emitFn(fd IRFn) {
 		}
 	}
 
+	name := fd.GoName + em.goTypeParams(fd.TypeParams)
 	if fd.Receiver != nil {
 		w.Method(fmt.Sprintf("%s %s", fd.Receiver.GoName, fd.Receiver.Type),
-			fd.GoName, strings.Join(params, ", "), retType, body)
+			name, strings.Join(params, ", "), retType, body)
 	} else {
-		w.Func(fd.GoName, strings.Join(params, ", "), retType, body)
+		w.Func(name, strings.Join(params, ", "), retType, body)
 	}
 }
 

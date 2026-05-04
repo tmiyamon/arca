@@ -389,9 +389,19 @@ type FnDecl struct {
 	Public       bool
 	Static       bool   // static fun = associated function (no self)
 	ReceiverType string // "" for free functions, "User" for fn User.method(self)
+	TypeParams   []TypeParamDecl // [T], [T, U], [T: Bindable] etc.
 	Params       []FnParam
 	ReturnType   Type // nil = no return type (void)
 	Body         Expr // nil for trait method signatures
+}
+
+// TypeParamDecl is one entry in a function's `[T]` / `[T: Bindable]`
+// type-parameter list. Constraint is empty when no `: Trait` clause is
+// present. Pos points at the parameter name for diagnostics.
+type TypeParamDecl struct {
+	Pos        Pos
+	Name       string
+	Constraint string // "" if unconstrained, else trait name (e.g. "Bindable")
 }
 
 type TraitDecl struct {

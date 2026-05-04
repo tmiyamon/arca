@@ -237,12 +237,13 @@ type SourceInfo struct {
 // as `func(...) { ... }`). IRFuncDecl is retained as an alias for readability
 // in declaration contexts; both names denote the same type.
 type IRFn struct {
-	GoName   string       // "" for anonymous (lambda literal)
-	Receiver *IRReceiver  // nil for free functions and lambdas
-	Params   []IRParamDecl
-	Ret      IRType       // nil for void
-	Body     IRExpr
-	Source   SourceInfo
+	GoName     string       // "" for anonymous (lambda literal)
+	Receiver   *IRReceiver  // nil for free functions and lambdas
+	TypeParams []string     // Go type-param names for `func F[T any](...)`; constraint info lives at the lowerer level
+	Params     []IRParamDecl
+	Ret        IRType       // nil for void
+	Body       IRExpr
+	Source     SourceInfo
 }
 
 type IRFuncDecl = IRFn
