@@ -1163,10 +1163,10 @@ type Status derive Bindable {
 	}
 }
 
-// B2b synthesises the prelude `BindableSlot[T any]` struct plus a
-// `<TypeName>Draft` IRStructDecl for each `derive Bindable` host, mirroring
-// the host's fields with BindableSlot[Inner] types. Both are normal
-// IRStructDecl entries so emit stays a pretty-printer.
+// B2b/B3a synthesises a `<TypeName>Draft` IRStructDecl for each
+// `derive Bindable` host, with field types referencing the stdlib-shared
+// `stdlib.BindableSlot[Inner]`. BindableSlot itself is no longer
+// compiler-emitted — it lives in `stdlib/bindable.go`.
 func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
 	t.Parallel()
 	src := `type Todo (id: Int, body: String) derive Bindable`
@@ -1180,24 +1180,12 @@ func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
 	}
 	l := NewLowerer(prog, "main", &NullTypeResolver{})
 	out := l.Lower(prog, "main", false)
-	var slot, draft *IRStructDecl
+	var draft *IRStructDecl
 	for i := range out.Types {
-		sd, ok := out.Types[i].(IRStructDecl)
-		if !ok {
-			continue
-		}
-		switch sd.GoName {
-		case "BindableSlot":
-			slot = &sd
-		case "TodoDraft":
+		if sd, ok := out.Types[i].(IRStructDecl); ok && sd.GoName == "TodoDraft" {
 			draft = &sd
+			break
 		}
-	}
-	if slot == nil {
-		t.Fatalf("BindableSlot not synthesised; got types: %v", out.Types)
-	}
-	if len(slot.TypeParams) != 1 || slot.TypeParams[0] != "T" {
-		t.Errorf("BindableSlot type params: want [T], got %v", slot.TypeParams)
 	}
 	if draft == nil {
 		t.Fatalf("TodoDraft not synthesised; got types: %v", out.Types)
@@ -1207,8 +1195,8 @@ func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
 	}
 	for i, f := range draft.Fields {
 		named, ok := f.Type.(IRNamedType)
-		if !ok || named.GoName != "BindableSlot" || len(named.Params) != 1 {
-			t.Errorf("field %d (%s) type: want BindableSlot[T], got %T %v", i, f.GoName, f.Type, f.Type)
+		if !ok || named.GoName != "stdlib.BindableSlot" || len(named.Params) != 1 {
+			t.Errorf("field %d (%s) type: want stdlib.BindableSlot[T], got %T %v", i, f.GoName, f.Type, f.Type)
 		}
 	}
 }
@@ -1231,20 +1219,8 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	l := NewLowerer(prog, "main", &NullTypeResolver{})
 	out := l.Lower(prog, "main", false)
 
-	var dict *IRStructDecl
-	for i := range out.Types {
-		if sd, ok := out.Types[i].(IRStructDecl); ok && sd.GoName == "BindableDict" {
-			dict = &sd
-			break
-		}
-	}
-	if dict == nil {
-		t.Fatalf("BindableDict not synthesised")
-	}
-	if len(dict.TypeParams) != 2 || dict.TypeParams[0] != "T" || dict.TypeParams[1] != "B" {
-		t.Errorf("BindableDict type params: want [T, B], got %v", dict.TypeParams)
-	}
-
+	// BindableDict now lives in stdlib; only the Draft + Freeze + factory
+	// + dict-instance global are synthesised in user code.
 	var freezeFn, factoryFn *IRFn
 	for i := range out.Funcs {
 		fn := out.Funcs[i]
@@ -1277,8 +1253,8 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 		t.Errorf("global name: want __TodoBindable, got %s", gv.GoName)
 	}
 	cc, ok := gv.Init.(IRConstructorCall)
-	if !ok || cc.GoName != "BindableDict" {
-		t.Errorf("global init: want BindableDict ctor, got %T %v", gv.Init, gv.Init)
+	if !ok || cc.GoName != "stdlib.BindableDict" {
+		t.Errorf("global init: want stdlib.BindableDict ctor, got %T %v", gv.Init, gv.Init)
 	}
 }
 

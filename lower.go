@@ -939,6 +939,41 @@ func (l *Lowerer) hasImport(pkg string) bool {
 
 // --- Type Declarations ---
 
+// bindableStdlibFns lists Go FFI helpers whose first parameter is the
+// hidden `stdlib.BindableDict[T, B]`. The compiler injects the user's
+// derive-Bindable dictionary at the call site, so users only write
+// `stdlib.Decode[Todo](data)` — they never pass the dict explicitly.
+var bindableStdlibFns = map[string]bool{
+	"stdlib.Decode":   true,
+	"stdlib.BindJSON": true,
+}
+
+// maybeInjectBindableStdlibArg returns the hidden dictionary IRIdent and
+// the synthesised Draft type arg when a Go FFI call targets one of the
+// `bindableStdlibFns` helpers and the user supplied a derive-Bindable type
+// as the first explicit type argument. Returns ok=false otherwise.
+func (l *Lowerer) maybeInjectBindableStdlibArg(goCallName string, e FnCall) (IRExpr, Type, bool) {
+	if !bindableStdlibFns[goCallName] || len(e.TypeArgs) < 1 {
+		return nil, nil, false
+	}
+	concrete, ok := e.TypeArgs[0].(NamedType)
+	if !ok {
+		return nil, nil, false
+	}
+	if !l.bindableTypes[concrete.Name] {
+		l.addCompileError(ErrUnsupportedFeature, e.Pos, UnsupportedFeatureData{
+			Feature: fmt.Sprintf("Bindable type argument %s", concrete.Name),
+			Context: "type must be declared with `derive Bindable`",
+		})
+		return nil, nil, false
+	}
+	dictArg := IRIdent{
+		GoName: "__" + concrete.Name + "Bindable",
+		Type:   IRNamedType{GoName: "stdlib.BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: concrete.Name + "Draft"}}},
+	}
+	return dictArg, NamedType{Name: concrete.Name + "Draft"}, true
+}
+
 // substType walks an AST Type and substitutes any NamedType whose name is
 // a key in subst with the substitution target. Used at generic-fn call
 // sites (B2e) to specialise the callee's signature against explicit type
@@ -1025,27 +1060,14 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 	}
 	sort.Strings(names)
 
-	out := []IRTypeDecl{
-		IRStructDecl{
-			GoName:     "BindableSlot",
-			TypeParams: []string{"T"},
-			Fields: []IRFieldDecl{
-				{GoName: "Set", Type: IRNamedType{GoName: "bool"}},
-				{GoName: "Value", Type: IRNamedType{GoName: "T"}},
-			},
-		},
-		IRStructDecl{
-			GoName:     "BindableDict",
-			TypeParams: []string{"T", "B"},
-			Fields: []IRFieldDecl{
-				{GoName: "Draft", Type: IRFnType{Ret: IRNamedType{GoName: "B"}}},
-				{GoName: "Freeze", Type: IRFnType{
-					Params: []IRType{IRNamedType{GoName: "B"}},
-					Ret:    IRResultType{Ok: IRNamedType{GoName: "T"}, Err: IRNamedType{GoName: "error"}},
-				}},
-			},
-		},
-	}
+	// BindableSlot and BindableDict live in the stdlib package
+	// (`stdlib/bindable.go`), so synthesis emits only the per-host Draft
+	// struct and references the shared types via `stdlib.<Name>`. Auto-
+	// register stdlib so emit's import block + receiver-type lookup pick
+	// it up (B3a).
+	l.ensureStdlibImported()
+
+	var out []IRTypeDecl
 	for _, name := range names {
 		td, ok := l.types[name]
 		if !ok {
@@ -1056,7 +1078,7 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 		for i, f := range ctor.Fields {
 			fields[i] = IRFieldDecl{
 				GoName: capitalize(f.Name),
-				Type:   IRNamedType{GoName: "BindableSlot", Params: []IRType{l.lowerType(f.Type)}},
+				Type:   IRNamedType{GoName: "stdlib.BindableSlot", Params: []IRType{l.lowerType(f.Type)}},
 			}
 		}
 		out = append(out, IRStructDecl{
@@ -1066,6 +1088,25 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 		})
 	}
 	return out
+}
+
+// ensureStdlibImported registers the Arca built-in stdlib package + its Go
+// import path so emit picks them up. Idempotent.
+func (l *Lowerer) ensureStdlibImported() {
+	if _, ok := l.goPackages["stdlib"]; ok {
+		return
+	}
+	pkg := lookupArcaPackage("stdlib")
+	if pkg == nil {
+		return
+	}
+	if l.goPackages == nil {
+		l.goPackages = make(map[string]*GoPackage)
+	}
+	goPkg := NewGoPackage(pkg.GoModPath)
+	goPkg.Used = true
+	l.goPackages[pkg.Name] = goPkg
+	l.imports = append(l.imports, IRImport{Path: pkg.GoModPath})
 }
 
 // synthesizeBindableDispatch generates the per-host BindableDict instance
@@ -1176,11 +1217,11 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 			}},
 		})
 
-		dictType := IRNamedType{GoName: "BindableDict", Params: []IRType{hostType, draftType}}
+		dictType := IRNamedType{GoName: "stdlib.BindableDict", Params: []IRType{hostType, draftType}}
 		globals = append(globals, IRGlobalVar{
 			GoName: "__" + name + "Bindable",
 			Init: IRConstructorCall{
-				GoName:   "BindableDict",
+				GoName:   "stdlib.BindableDict",
 				TypeArgs: fmt.Sprintf("[%s, %s]", name, name+"Draft"),
 				Fields: []IRFieldValue{
 					{GoName: "Draft", Value: IRIdent{GoName: factoryName}},
@@ -1500,7 +1541,7 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 			hiddenParams = append(hiddenParams, FnParam{
 				Pos:  tp.Pos,
 				Name: "__bindable" + tp.Name,
-				Type: NamedType{Name: "BindableDict", Params: []Type{
+				Type: NamedType{Name: "stdlib.BindableDict", Params: []Type{
 					NamedType{Name: tp.Name},
 					NamedType{Name: draftName},
 				}},
@@ -2854,21 +2895,32 @@ func (l *Lowerer) explicitTypeArgsStr(typeArgs []Type) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// buildGoTypeArgsStr builds the Go generic type args string "[T1, T2, ...]"
-// from a generic call's type vars map (after unification). Explicit type args
-// take precedence if provided.
-func (l *Lowerer) buildGoTypeArgsStr(vars map[string]IRType, explicit []Type) string {
-	if len(explicit) > 0 {
-		return l.explicitTypeArgsStr(explicit)
-	}
-	if len(vars) == 0 {
-		return ""
+// orderedTypeParamNames returns the type-param names of a generic call in
+// declaration order when available (B3a, sourced from goReturnInfo), falling
+// back to sorted-by-name for callers that haven't been updated yet.
+func orderedTypeParamNames(vars map[string]IRType, order []string) []string {
+	if len(order) > 0 {
+		return order
 	}
 	names := make([]string, 0, len(vars))
 	for name := range vars {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	return names
+}
+
+// buildGoTypeArgsStr builds the Go generic type args string "[T1, T2, ...]"
+// from a generic call's type vars map (after unification). Explicit type args
+// take precedence if provided.
+func (l *Lowerer) buildGoTypeArgsStr(vars map[string]IRType, order []string, explicit []Type) string {
+	if len(explicit) > 0 {
+		return l.explicitTypeArgsStr(explicit)
+	}
+	if len(vars) == 0 {
+		return ""
+	}
+	names := orderedTypeParamNames(vars, order)
 	parts := make([]string, len(names))
 	for i, name := range names {
 		resolved := l.resolveDeep(vars[name])
@@ -2878,17 +2930,12 @@ func (l *Lowerer) buildGoTypeArgsStr(vars map[string]IRType, explicit []Type) st
 }
 
 // unifyExplicitTypeArgs unifies explicit type arguments with a generic call's
-// type parameter variables. Type params are ordered by declaration.
-func (l *Lowerer) unifyExplicitTypeArgs(vars map[string]IRType, typeArgs []Type) {
+// type parameter variables in declaration order.
+func (l *Lowerer) unifyExplicitTypeArgs(vars map[string]IRType, order []string, typeArgs []Type) {
 	if len(typeArgs) == 0 || len(vars) == 0 {
 		return
 	}
-	// Order by name for deterministic mapping
-	names := make([]string, 0, len(vars))
-	for name := range vars {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := orderedTypeParamNames(vars, order)
 	for i, name := range names {
 		if i >= len(typeArgs) {
 			break
@@ -2968,17 +3015,20 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 			if _, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
 				goCallName := ident.Name + "." + fa.Field
 				args := l.lowerCallArgs(e)
+				typeArgs := e.TypeArgs
+				// B3a: stdlib helpers taking `BindableDict[T, B]` as their
+				// hidden first arg get the dictionary instance + Draft type
+				// injected from the user's explicit type arg.
+				if dictArg, draftType, ok := l.maybeInjectBindableStdlibArg(goCallName, e); ok {
+					args = append([]IRExpr{dictArg}, args...)
+					typeArgs = append(typeArgs, draftType)
+				}
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
-				// Unify explicit type args with type vars from generic instantiation
-				l.unifyExplicitTypeArgs(ret.TypeVars, e.TypeArgs)
-				// Propagate hint into the generic return type so fresh type
-				// vars bind for buildGoTypeArgsStr. Real mismatches are
-				// reported later by the outer checkTypeHint pass, so this
-				// must stay as raw HM substitution to avoid double-reporting.
+				l.unifyExplicitTypeArgs(ret.TypeVars, ret.TypeParamOrder, typeArgs)
 				if hint != nil {
 					l.infer.unify(ret.Type, hint)
 				}
-				typeArgsStr := l.buildGoTypeArgsStr(ret.TypeVars, e.TypeArgs)
+				typeArgsStr := l.buildGoTypeArgsStr(ret.TypeVars, ret.TypeParamOrder, typeArgs)
 				return IRFnCall{Fn: IRIdent{GoName: goCallName}, Args: args, Type: l.resolveDeep(ret.Type), TypeArgs: typeArgsStr, GoMultiReturn: ret.GoMultiReturn, Source: SourceInfo{Pos: e.Pos}}
 			}
 		}
@@ -3080,7 +3130,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 							allTypeArgs = append(allTypeArgs, "__draft"+concrete.Name)
 							hiddenArgs = append(hiddenArgs, IRIdent{
 								GoName: "__bindable" + concrete.Name,
-								Type:   IRNamedType{GoName: "BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: "__draft" + concrete.Name}}},
+								Type:   IRNamedType{GoName: "stdlib.BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: "__draft" + concrete.Name}}},
 							})
 							continue
 						}
@@ -3094,7 +3144,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 						allTypeArgs = append(allTypeArgs, concrete.Name+"Draft")
 						hiddenArgs = append(hiddenArgs, IRIdent{
 							GoName: "__" + concrete.Name + "Bindable",
-							Type:   IRNamedType{GoName: "BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: concrete.Name + "Draft"}}},
+							Type:   IRNamedType{GoName: "stdlib.BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: concrete.Name + "Draft"}}},
 						})
 					}
 					arcaTypeArgsStr = "[" + strings.Join(allTypeArgs, ", ") + "]"
@@ -3109,12 +3159,14 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		}
 		// Fall back to Go FFI resolution
 		var goTypeVars map[string]IRType
+		var goTypeParamOrder []string
 		if _, isInterface := fnType.(IRInterfaceType); isInterface {
 			ret := l.resolveGoCall(ident.GoName, args, e.Pos)
 			fnType = ret.Type
 			goMultiReturn = ret.GoMultiReturn
 			goTypeVars = ret.TypeVars
-			l.unifyExplicitTypeArgs(goTypeVars, e.TypeArgs)
+			goTypeParamOrder = ret.TypeParamOrder
+			l.unifyExplicitTypeArgs(goTypeVars, goTypeParamOrder, e.TypeArgs)
 			// Same as the FieldAccess path above: raw substitution only,
 			// outer checkTypeHint owns the reporting.
 			if hint != nil {
@@ -3123,7 +3175,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		}
 		typeArgsStr := arcaTypeArgsStr
 		if typeArgsStr == "" {
-			typeArgsStr = l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
+			typeArgsStr = l.buildGoTypeArgsStr(goTypeVars, goTypeParamOrder, e.TypeArgs)
 		}
 		return IRFnCall{Fn: ident, Args: args, Type: l.resolveDeep(fnType), TypeArgs: typeArgsStr, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
@@ -3181,6 +3233,7 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 			l.unify(arg.irType(), paramTypes[i], pos)
 		}
 		ret.TypeVars = vars
+		ret.TypeParamOrder = info.TypeParams
 		return ret
 	}
 
@@ -3263,9 +3316,10 @@ func goTypesCompatible(arcaType, goParam string) bool {
 
 // goReturnInfo holds the resolved Arca type and whether the Go function returns multiple values.
 type goReturnInfo struct {
-	Type          IRType
-	GoMultiReturn bool               // true if Go func returns multiple values (needs multi-value receive)
-	TypeVars      map[string]IRType  // type param name → fresh IRTypeVar (for generic calls)
+	Type           IRType
+	GoMultiReturn  bool              // true if Go func returns multiple values (needs multi-value receive)
+	TypeVars       map[string]IRType // type param name → fresh IRTypeVar (for generic calls)
+	TypeParamOrder []string          // declaration order of type params; used for explicit-type-arg alignment
 }
 
 // goFuncReturnType converts a FuncInfo's return types to an Arca IR type.
@@ -3401,6 +3455,33 @@ func goTypeToIRWithVars(goType string, vars map[string]IRType) IRType {
 	// Arca side.
 	if goType == "any" || goType == "interface{}" {
 		return IRInterfaceType{}
+	}
+	// Generic instantiation: "<pkg>.<Type>[<arg>, <arg>, ...]" (B3a).
+	// go/types renders parametrised types this way, and unify needs the
+	// inner type args carried as IRType params (not embedded in GoName).
+	if idx := strings.Index(goType, "["); idx > 0 && strings.HasSuffix(goType, "]") {
+		base := goType[:idx]
+		paramsStr := goType[idx+1 : len(goType)-1]
+		var params []IRType
+		depth := 0
+		start := 0
+		for i := 0; i < len(paramsStr); i++ {
+			switch paramsStr[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+			case ',':
+				if depth == 0 {
+					params = append(params, goTypeToIRWithVars(strings.TrimSpace(paramsStr[start:i]), vars))
+					start = i + 1
+				}
+			}
+		}
+		if start <= len(paramsStr) {
+			params = append(params, goTypeToIRWithVars(strings.TrimSpace(paramsStr[start:]), vars))
+		}
+		return IRNamedType{GoName: goTypeToIRName(base), Params: params}
 	}
 	return IRNamedType{GoName: goTypeToIRName(goType)}
 }
@@ -3906,6 +3987,16 @@ func (l *Lowerer) resolveReceiverArcaType(expr IRExpr) string {
 		if !strings.Contains(named.GoName, ".") {
 			return named.GoName
 		}
+		// Stdlib-shared compiler-known types (BindableDict, BindableSlot)
+		// are registered in l.types under their simple name and emitted as
+		// `stdlib.<Name>` in Go. Field/method access goes through the Arca
+		// path so the type-param substitution machinery can fill in T / B.
+		if strings.HasPrefix(named.GoName, "stdlib.") {
+			suffix := strings.TrimPrefix(named.GoName, "stdlib.")
+			if _, ok := l.types[suffix]; ok {
+				return suffix
+			}
+		}
 	}
 	return ""
 }
@@ -4014,6 +4105,12 @@ func (l *Lowerer) resolveCallParamIRType(call FnCall, argIndex int) IRType {
 		}
 		if goPkg, isGoPkg := l.lookupGoPackage(ident.Name); isGoPkg {
 			if info := l.typeResolver.ResolveFunc(goPkg.FullPath, fa.Field); info != nil {
+				goCallName := ident.Name + "." + fa.Field
+				// B3a: stdlib Bindable helpers prepend a hidden dict at
+				// param[0], so the user's argIndex maps to params[argIndex+1].
+				if bindableStdlibFns[goCallName] {
+					argIndex++
+				}
 				return l.goParamTypeHint(resolveGoParamGoType(info, argIndex))
 			}
 			return nil

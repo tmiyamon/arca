@@ -649,6 +649,7 @@ let todo = roundtrip[Todo](raw)?
 - `[T: Bindable]` is the only constraint accepted at MVP. Unknown traits (`[T: Cloneable]`) and multi-trait bounds (`[T: A + B]`) are rejected.
 - Call sites with explicit type args inject the matching dispatch dictionary automatically; transitive generic calls (`outer[T: Bindable]` calling `inner[T]()`) forward the caller's hidden parameter.
 - `Bindable` is reserved — `trait Bindable { ... }` and `impl X: Bindable` are both compile errors.
+- The concept is intrinsic but the runtime types `BindableSlot[T]` and `BindableDict[T, B]` are hosted in the stdlib package (so stdlib helpers can share a single definition). The compiler auto-imports stdlib whenever a `derive Bindable` host appears; user code never writes the import or names the types directly.
 
 ### Associated Functions (static fun)
 

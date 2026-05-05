@@ -405,14 +405,18 @@ fun handle(r: *http.Request) -> Result[Int, Error] {
 
 	t.Run("unresolved_type_param_fixed_by_explicit_args", func(t *testing.T) {
 		t.Parallel()
-		// Same call but with explicit [Int]: T is pinned, no error.
+		// Same call but with explicit [Todo]: T is pinned, no error.
+		// BindJSON is now Bindable-constrained (B3a), so T must be a
+		// `derive Bindable` host.
 		_, err := transpileSource(`
 import go "net/http"
 import stdlib
 
-fun handle(r: *http.Request) -> Result[Int, Error] {
-  let n = stdlib.BindJSON[Int](r)?
-  Ok(n)
+type Todo (id: Int, body: String) derive Bindable
+
+fun handle(r: *http.Request) -> Result[Todo, Error] {
+  let t = stdlib.BindJSON[Todo](r)?
+  Ok(t)
 }
 `)
 		if err != nil {

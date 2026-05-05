@@ -6,20 +6,20 @@ import (
 	"net/http"
 )
 
-// BindJSON reads JSON from an HTTP request body and decodes it into T.
-// If T implements Validatable, the result is validated after decoding.
-func BindJSON[T any](r *http.Request) (T, error) {
-	var v T
+// BindJSON reads JSON from an HTTP request body and decodes it into T via
+// the Bindable dictionary (see Decode for the populate → freeze flow).
+// `dict` is injected by the Arca compiler.
+func BindJSON[T any, B any](dict BindableDict[T, B], r *http.Request) (T, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		return v, err
+		var zero T
+		return zero, err
 	}
 	defer r.Body.Close()
-	if err := json.Unmarshal(body, &v); err != nil {
-		return v, err
+	d := dict.Draft()
+	if err := json.Unmarshal(body, &d); err != nil {
+		var zero T
+		return zero, err
 	}
-	if err := ArcaValidateIfPossible(&v); err != nil {
-		return v, err
-	}
-	return v, nil
+	return dict.Freeze(d)
 }

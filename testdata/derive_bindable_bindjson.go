@@ -2,9 +2,8 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"github.com/tmiyamon/arca/stdlib"
-	"os"
+	"net/http"
 )
 
 type Todo struct {
@@ -17,18 +16,13 @@ type TodoDraft struct {
 	Body stdlib.BindableSlot[string]
 }
 
-func main() {
-	if err := func() error {
-		d := todoDraft()
-		_, __err1 := d.Freeze()
-		if __err1 != nil {
-			return __err1
-		}
-		return nil
-	}(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+func Handle(r *http.Request) (Todo, error) {
+	__val1, __err1 := stdlib.BindJSON[Todo, TodoDraft](__TodoBindable, r)
+	if __err1 != nil {
+		return Todo{}, __err1
 	}
+	t := __val1
+	return t, nil
 }
 
 func (d TodoDraft) Freeze() (Todo, error) {
@@ -46,3 +40,14 @@ func todoDraft() TodoDraft {
 }
 
 var __TodoBindable = stdlib.BindableDict[Todo, TodoDraft]{Draft: todoDraft, Freeze: TodoDraft.Freeze}
+
+func __ptrOf[T any](v T) *T {
+	return &v
+}
+
+func __optFrom[T any](v T, ok bool) *T {
+	if ok {
+		return &v
+	}
+	return nil
+}

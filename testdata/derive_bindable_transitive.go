@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/tmiyamon/arca/stdlib"
 	"os"
 )
 
@@ -11,27 +12,17 @@ type Todo struct {
 	Body string
 }
 
-type BindableSlot[T any] struct {
-	Set   bool
-	Value T
-}
-
-type BindableDict[T any, B any] struct {
-	Draft  func() B
-	Freeze func(B) (T, error)
-}
-
 type TodoDraft struct {
-	Id   BindableSlot[int]
-	Body BindableSlot[string]
+	Id   stdlib.BindableSlot[int]
+	Body stdlib.BindableSlot[string]
 }
 
-func inner[U any, __draftU any](__bindableU BindableDict[U, __draftU]) (U, error) {
+func inner[U any, __draftU any](__bindableU stdlib.BindableDict[U, __draftU]) (U, error) {
 	d := __bindableU.Draft()
 	return __bindableU.Freeze(d)
 }
 
-func outer[T any, __draftT any](__bindableT BindableDict[T, __draftT]) (T, error) {
+func outer[T any, __draftT any](__bindableT stdlib.BindableDict[T, __draftT]) (T, error) {
 	return inner[T, __draftT](__bindableT)
 }
 
@@ -62,4 +53,4 @@ func todoDraft() TodoDraft {
 	return TodoDraft{}
 }
 
-var __TodoBindable = BindableDict[Todo, TodoDraft]{Draft: todoDraft, Freeze: TodoDraft.Freeze}
+var __TodoBindable = stdlib.BindableDict[Todo, TodoDraft]{Draft: todoDraft, Freeze: TodoDraft.Freeze}

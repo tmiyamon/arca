@@ -1,0 +1,12 @@
+import go "net/http"
+import stdlib
+
+type Todo (
+  id: Int
+  body: String
+) derive Bindable
+
+pub fun handle(r: *http.Request) -> Result[Todo, Error] {
+  let t = stdlib.BindJSON[Todo](r)?
+  Ok(t)
+}
