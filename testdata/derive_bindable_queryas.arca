@@ -1,0 +1,13 @@
+import go "database/sql"
+import stdlib
+
+type Todo (
+  id: Int
+  body: String
+) derive Bindable {
+  tags { db(snake) }
+}
+
+pub fun listTodos(db: *sql.DB) -> Result[List[Todo], Error] {
+  stdlib.QueryAs[Todo](db, "SELECT id, body FROM todos")
+}

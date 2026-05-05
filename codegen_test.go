@@ -311,26 +311,27 @@ fun main() {
 		}
 	})
 
-	t.Run("generic_type_param_bound_from_hint", func(t *testing.T) {
+	t.Run("generic_type_param_bound_from_explicit_args", func(t *testing.T) {
 		t.Parallel()
-		// Without explicit type args, the generic type parameter T of a
-		// Go FFI call must bind from the surrounding hint (return type
-		// here). If the inner hint propagation unify is skipped, T leaks
-		// as interface{} and codegen produces QueryOneAs[interface{}]
-		// even though there's no Arca-level error.
+		// QueryOneAs is now Bindable-constrained (B3c) — T must be a
+		// `derive Bindable` host and must be supplied explicitly so the
+		// compiler can inject `__<Type>Bindable` and `<Type>Draft`. This
+		// replaces the pre-B3c hint-based binding test.
 		result, err := transpileSource(`
 import go "database/sql"
 import stdlib
 
-fun test(db: *sql.DB) -> Result[Int, Error] {
-  stdlib.QueryOneAs(db, "select 1")
+type Todo (id: Int, body: String) derive Bindable
+
+fun test(db: *sql.DB) -> Result[Todo, Error] {
+  stdlib.QueryOneAs[Todo](db, "select id, body from todos limit 1")
 }
 `)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(result.goCode, "stdlib.QueryOneAs[int]") {
-			t.Errorf("expected generated code to use QueryOneAs[int], got:\n%s", result.goCode)
+		if !strings.Contains(result.goCode, "stdlib.QueryOneAs[Todo, TodoDraft]") {
+			t.Errorf("expected QueryOneAs[Todo, TodoDraft], got:\n%s", result.goCode)
 		}
 	})
 

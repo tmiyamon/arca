@@ -944,8 +944,10 @@ func (l *Lowerer) hasImport(pkg string) bool {
 // derive-Bindable dictionary at the call site, so users only write
 // `stdlib.Decode[Todo](data)` — they never pass the dict explicitly.
 var bindableStdlibFns = map[string]bool{
-	"stdlib.Decode":   true,
-	"stdlib.BindJSON": true,
+	"stdlib.Decode":     true,
+	"stdlib.BindJSON":   true,
+	"stdlib.QueryAs":    true,
+	"stdlib.QueryOneAs": true,
 }
 
 // maybeInjectBindableStdlibArg returns the hidden dictionary IRIdent and

@@ -109,7 +109,7 @@ Total ~1650, 3-4 sessions. Slice boundaries keep test suite green.
 
 See `design_bindable_type_ideas.md` for nine deferred ideas surfaced in this discussion (BindableSlot as general "presence tracking" abstraction, compiler-intrinsic trait category, R3 sister-trait shape, trait-as-namespace syntax, type composition syntax, phantom-type rejection rationale, user-facing builder promotion, `type[X]` fusion re-evaluation, 3-layer invariant model).
 
-**Status:** Design refined. B1 + B2 landed end-to-end (B1a–B1d, B2a–B2f). Stdlib JSON path migrated to dictionary dispatch (B3a `stdlib.Decode`, B3b `stdlib.BindJSON`, with `BindableSlot` / `BindableDict` moved into the stdlib package and auto-imported). Remaining: B3c (`stdlib.QueryAs` reflection retirement), B4 (examples/todo migration), B5 (sum-type Builder demo).
+**Status:** Design refined. B1 + B2 landed end-to-end (B1a–B1d, B2a–B2f). Stdlib migrated to dictionary dispatch — JSON path (B3a `stdlib.Decode` / B3b `stdlib.BindJSON`) and DB path (B3c `stdlib.QueryAs` / `QueryOneAs` via `BindableSlot.Scan` sql.Scanner; reflection narrowed to column→field mapping, `ArcaValidateIfPossible` retired). `BindableSlot` / `BindableDict` live in the stdlib package and auto-import; tag mirroring from host to Draft is mechanical and format-agnostic (B2b-tag, see memory `design_tag_system.md` for the deferred tag-system design). Remaining: B4 (examples/todo migration), B5 (sum-type Builder demo).
 
 ---
 
