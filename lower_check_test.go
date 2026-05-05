@@ -1258,6 +1258,46 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	}
 }
 
+// B2b-tag: `tags { json(snake) }` on a derive-Bindable host mirrors to the
+// synthesised Draft fields so external bindings (json, db, validate, ...)
+// see the same struct tags as the host. Bindable carries no tag policy of
+// its own — the mirror is purely mechanical (decisions/ffi.md 2026-05-04
+// refined Synthetic Builder + memory `design_tag_system.md`).
+func TestLower_DeriveBindable_MirrorsTags(t *testing.T) {
+	t.Parallel()
+	src := `
+type User (userId: Int, fullName: String) derive Bindable {
+  tags { json(snake) }
+}
+`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	var draft *IRStructDecl
+	for i := range out.Types {
+		if sd, ok := out.Types[i].(IRStructDecl); ok && sd.GoName == "UserDraft" {
+			draft = &sd
+			break
+		}
+	}
+	if draft == nil {
+		t.Fatalf("UserDraft not synthesised")
+	}
+	want := []string{"`json:\"user_id\"`", "`json:\"full_name\"`"}
+	for i, f := range draft.Fields {
+		if f.Tag != want[i] {
+			t.Errorf("Draft.Fields[%d].Tag: want %q, got %q", i, want[i], f.Tag)
+		}
+	}
+}
+
 // B2d/B2e: `fun f[T: Bindable](x: T) -> T` lowers cleanly. After B2e, the
 // IRFn carries the expanded type-param list `[T, __draftT]` and gains a
 // hidden `__bindableT BindableDict[T, __draftT]` value param so emit

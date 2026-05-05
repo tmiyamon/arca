@@ -1079,12 +1079,14 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 			fields[i] = IRFieldDecl{
 				GoName: capitalize(f.Name),
 				Type:   IRNamedType{GoName: "stdlib.BindableSlot", Params: []IRType{l.lowerType(f.Type)}},
+				Tag:    l.genStructTagFromRules(f.Name, td.Tags),
 			}
 		}
 		out = append(out, IRStructDecl{
 			GoName:     td.Name + "Draft",
 			TypeParams: td.Params,
 			Fields:     fields,
+			Tags:       td.Tags,
 		})
 	}
 	return out
