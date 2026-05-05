@@ -23,12 +23,13 @@ type Lowerer struct {
 	goPackages    map[string]*GoPackage // short name → Go package info (carries Pos/SideEffect/Used)
 
 	// Per-function state
-	currentRetType      Type
-	currentIRRetType    IRType // overrides currentRetType when set (for try blocks with type vars)
-	currentReceiver     string
-	currentTypeName     string
-	currentFnTypeParams []string // names of [T, U, ...] declared on the enclosing fn
-	matchHint           IRType   // type hint for match arm bodies
+	currentRetType         Type
+	currentIRRetType       IRType // overrides currentRetType when set (for try blocks with type vars)
+	currentReceiver        string
+	currentTypeName        string
+	currentFnTypeParams    []string        // names of [T, U, ...] declared on the enclosing fn
+	currentFnBindableParams map[string]bool // subset whose constraint is Bindable; B2e dispatch passes these through transitively
+	matchHint              IRType // type hint for match arm bodies
 
 	// Collected during lowering
 	imports      []IRImport
@@ -128,6 +129,9 @@ func (s *InferScope) unify(a, b IRType) bool {
 	}
 
 	if av, ok := a.(IRTypeVar); ok {
+		if bv, ok := b.(IRTypeVar); ok && av.ID == bv.ID {
+			return true // identical type-var: no binding needed (avoids self-cycle)
+		}
 		s.substitution[av.ID] = b
 		return true
 	}
@@ -754,6 +758,7 @@ func NewLowerer(prog *Program, goModule string, resolver TypeResolver) *Lowerer 
 		currentScope: root,
 	}
 	registerPreludeTraits(l)
+	registerPreludeBindable(l)
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case TypeDecl:
@@ -933,6 +938,35 @@ func (l *Lowerer) hasImport(pkg string) bool {
 }
 
 // --- Type Declarations ---
+
+// substType walks an AST Type and substitutes any NamedType whose name is
+// a key in subst with the substitution target. Used at generic-fn call
+// sites (B2e) to specialise the callee's signature against explicit type
+// args before lowering. Pure structural rewrite — no scope side effects.
+func substType(t Type, subst map[string]Type) Type {
+	if t == nil {
+		return nil
+	}
+	switch tt := t.(type) {
+	case NamedType:
+		if rep, ok := subst[tt.Name]; ok && len(tt.Params) == 0 {
+			return rep
+		}
+		params := make([]Type, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = substType(p, subst)
+		}
+		return NamedType{Pos: tt.Pos, Name: tt.Name, Params: params}
+	case FunctionType:
+		params := make([]Type, len(tt.Params))
+		for i, p := range tt.Params {
+			params[i] = substType(p, subst)
+		}
+		return FunctionType{Params: params, Ret: substType(tt.Ret, subst)}
+	default:
+		return t
+	}
+}
 
 // intrinsicTraitNames lists trait names reserved for compiler synthesis;
 // users cannot `impl` them and `derive` is the only way to associate one
@@ -1406,9 +1440,10 @@ func (l *Lowerer) genStructTagFromRules(fieldName string, rules []TagRule) strin
 
 // loweredFn holds the common lowered parts of a function declaration.
 type loweredFn struct {
-	params  []IRParamDecl
-	retType IRType
-	body    IRExpr
+	params     []IRParamDecl
+	retType    IRType
+	body       IRExpr
+	typeParams []string // expanded Go type-param list (includes hidden Draft params for Bindable)
 }
 
 // lowerFnCommon lowers the signature and body of a function-like declaration,
@@ -1433,21 +1468,44 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	prevRecv := l.currentReceiver
 	prevType := l.currentTypeName
 	prevTypeParams := l.currentFnTypeParams
+	prevBindable := l.currentFnBindableParams
 
 	l.currentRetType = fd.ReturnType
 	l.currentReceiver = receiver
 	if typeName != "" {
 		l.currentTypeName = typeName
 	}
-	tpNames := make([]string, len(fd.TypeParams))
-	for i, tp := range fd.TypeParams {
-		tpNames[i] = tp.Name
+
+	// B2e: expand the type-param list with hidden Draft type params and
+	// build hidden BindableDict value params for each Bindable-constrained
+	// type param. `[T: Bindable]` becomes Go `[T any, __draftT any]` plus
+	// a leading `__bindableT BindableDict[T, __draftT]` value param.
+	tpNames := make([]string, 0, len(fd.TypeParams)*2)
+	bindable := make(map[string]bool)
+	var hiddenParams []FnParam
+	for _, tp := range fd.TypeParams {
+		tpNames = append(tpNames, tp.Name)
+		if tp.Constraint == "Bindable" {
+			bindable[tp.Name] = true
+			draftName := "__draft" + tp.Name
+			tpNames = append(tpNames, draftName)
+			hiddenParams = append(hiddenParams, FnParam{
+				Pos:  tp.Pos,
+				Name: "__bindable" + tp.Name,
+				Type: NamedType{Name: "BindableDict", Params: []Type{
+					NamedType{Name: tp.Name},
+					NamedType{Name: draftName},
+				}},
+			})
+		}
 	}
 	l.currentFnTypeParams = tpNames
+	l.currentFnBindableParams = bindable
+	expandedFnParams := append(hiddenParams, fd.Params...)
 
 	// Check parameter and return types exist (after type-params are in scope
 	// so signatures referencing T resolve as type-vars rather than unknowns).
-	for _, p := range fd.Params {
+	for _, p := range expandedFnParams {
 		if p.Type != nil {
 			l.checkTypeExists(p.Type)
 		}
@@ -1456,7 +1514,7 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 		l.checkTypeExists(fd.ReturnType)
 	}
 
-	params := l.lowerParams(fd.Params)
+	params := l.lowerParams(expandedFnParams)
 	var retType IRType
 	if fd.ReturnType != nil {
 		retType = l.lowerType(fd.ReturnType)
@@ -1466,7 +1524,7 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	// hover-able in the signature) through the body end.
 	_, ep := bodyPos(fd.Body)
 	sp := fd.Pos
-	symbols := l.paramsToSymbols(fd.Params)
+	symbols := l.paramsToSymbols(expandedFnParams)
 	// Method body: register `self` as a symbol with the receiver type
 	if receiver != "" && typeName != "" {
 		symbols = append(symbols, SymbolRegInfo{
@@ -1488,8 +1546,9 @@ func (l *Lowerer) lowerFnCommon(fd FnDecl, typeName, receiver string) loweredFn 
 	l.currentReceiver = prevRecv
 	l.currentTypeName = prevType
 	l.currentFnTypeParams = prevTypeParams
+	l.currentFnBindableParams = prevBindable
 
-	return loweredFn{params: params, retType: retType, body: body}
+	return loweredFn{params: params, retType: retType, body: body, typeParams: tpNames}
 }
 
 func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
@@ -1510,13 +1569,9 @@ func (l *Lowerer) lowerFnDecl(fd FnDecl) IRFuncDecl {
 		}
 	}
 
-	tpNames := make([]string, len(fd.TypeParams))
-	for i, tp := range fd.TypeParams {
-		tpNames[i] = tp.Name
-	}
 	return IRFuncDecl{
 		GoName:     name,
-		TypeParams: tpNames,
+		TypeParams: lf.typeParams,
 		Params:     lf.params,
 		Ret:        lf.retType,
 		Body:       lf.body,
@@ -1532,6 +1587,27 @@ func traitGoName(name string) string { return "Arca" + name }
 // import or declaration. Currently just `trait Error { fun message() -> String }`.
 // The IRTraitDecl for Error is emitted only when the file actually references
 // the trait (gated via l.builtins["error_trait"]).
+// registerPreludeBindable seeds the Arca-side TypeDecl for BindableDict so
+// field access on `__bindableT` (the hidden param injected by B2e for
+// `[T: Bindable]`-constrained functions) resolves through the normal
+// lower path. The IR-level BindableDict is emitted separately by
+// synthesizeBindableTypes — these two views must stay structurally
+// aligned: same type-param order (T, B), same field names + signatures.
+func registerPreludeBindable(l *Lowerer) {
+	resultTB := NamedType{Name: "Result", Params: []Type{NamedType{Name: "T"}, NamedType{Name: "Error"}}}
+	l.types["BindableDict"] = TypeDecl{
+		Name:   "BindableDict",
+		Params: []string{"T", "B"},
+		Constructors: []Constructor{{
+			Name: "BindableDict",
+			Fields: []Field{
+				{Name: "draft", Type: FunctionType{Ret: NamedType{Name: "B"}}},
+				{Name: "freeze", Type: FunctionType{Params: []Type{NamedType{Name: "B"}}, Ret: resultTB}},
+			},
+		}},
+	}
+}
+
 func registerPreludeTraits(l *Lowerer) {
 	l.traits["Error"] = TraitDecl{
 		Name: "Error",
@@ -2942,6 +3018,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		// Try Arca function return type first
 		var fnType IRType = IRInterfaceType{}
 		var goMultiReturn bool
+		var arcaTypeArgsStr string
 		if id, ok := e.Fn.(Ident); ok {
 			if fn, ok := l.functions[id.Name]; ok {
 				if len(args) != len(fn.Params) {
@@ -2949,7 +3026,70 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 						Func: id.Name, Expected: len(fn.Params), Actual: len(args),
 					})
 				}
-				if fn.ReturnType != nil {
+				// B2e: generic Arca fn called with explicit type args.
+				// Substitute the callee's TypeParams into its signature, and
+				// for each Bindable-constrained param inject the matching
+				// `__<Type>Bindable` global as a hidden value arg + the
+				// `<Type>Draft` Go type arg. Implicit-arg inference deferred.
+				if len(fn.TypeParams) > 0 && len(e.TypeArgs) == len(fn.TypeParams) {
+					subst := make(map[string]Type, len(fn.TypeParams))
+					for i, tp := range fn.TypeParams {
+						subst[tp.Name] = e.TypeArgs[i]
+					}
+					var hiddenArgs []IRExpr
+					var allTypeArgs []string
+					for _, tp := range fn.TypeParams {
+						// Direct AST→Go-name path for the common simple-name
+						// case so type-param-as-arg (transitive Bindable
+						// dispatch) emits as `T` rather than the IRTypeVar
+						// fallback `interface{}`.
+						if nt, ok := subst[tp.Name].(NamedType); ok && len(nt.Params) == 0 {
+							allTypeArgs = append(allTypeArgs, nt.Name)
+						} else {
+							allTypeArgs = append(allTypeArgs, irTypeEmitStr(l.lowerType(subst[tp.Name])))
+						}
+						if tp.Constraint != "Bindable" {
+							continue
+						}
+						concrete, ok := subst[tp.Name].(NamedType)
+						if !ok {
+							l.addCompileError(ErrUnsupportedFeature, e.Pos, UnsupportedFeatureData{
+								Feature: "non-named type as Bindable type argument",
+								Context: "Bindable dispatch requires a concrete derive-Bindable type or a forwarded `[T: Bindable]` parameter",
+							})
+							continue
+						}
+						// Transitive case: explicit type arg is the caller's
+						// own Bindable-constrained type-param. Pass through
+						// the caller's hidden `__bindable<T>` and `__draft<T>`
+						// rather than looking up a concrete dictionary.
+						if l.currentFnBindableParams[concrete.Name] {
+							allTypeArgs = append(allTypeArgs, "__draft"+concrete.Name)
+							hiddenArgs = append(hiddenArgs, IRIdent{
+								GoName: "__bindable" + concrete.Name,
+								Type:   IRNamedType{GoName: "BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: "__draft" + concrete.Name}}},
+							})
+							continue
+						}
+						if !l.bindableTypes[concrete.Name] {
+							l.addCompileError(ErrUnsupportedFeature, e.Pos, UnsupportedFeatureData{
+								Feature: fmt.Sprintf("Bindable type argument %s", concrete.Name),
+								Context: "type must be declared with `derive Bindable`",
+							})
+							continue
+						}
+						allTypeArgs = append(allTypeArgs, concrete.Name+"Draft")
+						hiddenArgs = append(hiddenArgs, IRIdent{
+							GoName: "__" + concrete.Name + "Bindable",
+							Type:   IRNamedType{GoName: "BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: concrete.Name + "Draft"}}},
+						})
+					}
+					arcaTypeArgsStr = "[" + strings.Join(allTypeArgs, ", ") + "]"
+					args = append(hiddenArgs, args...)
+					if fn.ReturnType != nil {
+						fnType = l.lowerType(substType(fn.ReturnType, subst))
+					}
+				} else if fn.ReturnType != nil {
 					fnType = l.lowerType(fn.ReturnType)
 				}
 			}
@@ -2968,7 +3108,10 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 				l.infer.unify(fnType, hint)
 			}
 		}
-		typeArgsStr := l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
+		typeArgsStr := arcaTypeArgsStr
+		if typeArgsStr == "" {
+			typeArgsStr = l.buildGoTypeArgsStr(goTypeVars, e.TypeArgs)
+		}
 		return IRFnCall{Fn: ident, Args: args, Type: l.resolveDeep(fnType), TypeArgs: typeArgsStr, GoMultiReturn: goMultiReturn, Source: SourceInfo{Pos: e.Pos, Name: arcaName}}
 	}
 	// Function-valued expression as callee: inline lambda (`(x => ...)(v)`,

@@ -332,7 +332,7 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			} else {
 				return nil, l.errUnexpectedChar(line, col, "|")
 			}
-		case ch == '_' && (l.pos+1 >= len(l.input) || !unicode.IsLetter(l.input[l.pos+1])):
+		case ch == '_' && (l.pos+1 >= len(l.input) || (!unicode.IsLetter(l.input[l.pos+1]) && l.input[l.pos+1] != '_')):
 			l.advance()
 			tokens = append(tokens, Token{TkUnderscore, "_", line, col})
 		case ch == '"':

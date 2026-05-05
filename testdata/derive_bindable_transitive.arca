@@ -1,0 +1,18 @@
+type Todo (
+  id: Int
+  body: String
+) derive Bindable
+
+fun inner[U: Bindable]() -> Result[U, Error] {
+  let d = __bindableU.draft()
+  __bindableU.freeze(d)
+}
+
+fun outer[T: Bindable]() -> Result[T, Error] {
+  inner[T]()
+}
+
+fun main() -> Result[Unit, Error] {
+  let _ = outer[Todo]()?
+  Ok(())
+}

@@ -1,0 +1,14 @@
+type Todo (
+  id: Int
+  body: String
+) derive Bindable
+
+fun makeIt[T: Bindable]() -> Result[T, Error] {
+  let d = __bindableT.draft()
+  __bindableT.freeze(d)
+}
+
+fun main() -> Result[Unit, Error] {
+  let _ = makeIt[Todo]()?
+  Ok(())
+}

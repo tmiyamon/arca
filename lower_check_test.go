@@ -1277,9 +1277,10 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	}
 }
 
-// B2d: `fun f[T: Bindable](x: T) -> T` lowers cleanly, IRFn carries the
-// type-param names, the body resolves T as a type-var, and emit produces
-// `func f[T any](x T) T`. The call-site dictionary injection lands in B2e.
+// B2d/B2e: `fun f[T: Bindable](x: T) -> T` lowers cleanly. After B2e, the
+// IRFn carries the expanded type-param list `[T, __draftT]` and gains a
+// hidden `__bindableT BindableDict[T, __draftT]` value param so emit
+// produces a Go signature ready for dictionary dispatch.
 func TestLower_FnTypeParams_BindableConstraint(t *testing.T) {
 	t.Parallel()
 	src := `fun freeze[T: Bindable](x: T) -> T { x }`
@@ -1306,9 +1307,98 @@ func TestLower_FnTypeParams_BindableConstraint(t *testing.T) {
 	if fn == nil {
 		t.Fatalf("freeze IRFn not found")
 	}
-	if len(fn.TypeParams) != 1 || fn.TypeParams[0] != "T" {
-		t.Errorf("TypeParams: want [T], got %v", fn.TypeParams)
+	wantTP := []string{"T", "__draftT"}
+	if len(fn.TypeParams) != len(wantTP) || fn.TypeParams[0] != wantTP[0] || fn.TypeParams[1] != wantTP[1] {
+		t.Errorf("TypeParams: want %v, got %v", wantTP, fn.TypeParams)
 	}
+	if len(fn.Params) < 1 || fn.Params[0].GoName != "__bindableT" {
+		t.Errorf("first param: want __bindableT, got %+v", fn.Params)
+	}
+}
+
+// B2e: calling a `[T: Bindable]`-constrained Arca fn with explicit type
+// args rewrites the call to inject `__<Type>Bindable` as a hidden value
+// arg and `<Type>Draft` into the type-args string.
+func TestLower_BindableCallSite_InjectsDict(t *testing.T) {
+	t.Parallel()
+	src := `
+type Todo (id: Int, body: String) derive Bindable
+fun makeIt[T: Bindable]() -> Int { 0 }
+fun main() {
+  let _ = makeIt[Todo]()
+}
+`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	out := l.Lower(prog, "main", false)
+	if len(l.errors) != 0 {
+		t.Fatalf("unexpected errors: %v", l.errors)
+	}
+	// Locate the call inside main's body.
+	var mainFn *IRFn
+	for i := range out.Funcs {
+		if out.Funcs[i].GoName == "main" {
+			mainFn = &out.Funcs[i]
+			break
+		}
+	}
+	if mainFn == nil {
+		t.Fatalf("main IRFn not found")
+	}
+	call := findFirstFnCall(mainFn.Body, "makeIt")
+	if call == nil {
+		t.Fatalf("makeIt call not found in main")
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("call.Args: want 1 (hidden dict), got %d", len(call.Args))
+	}
+	dict, ok := call.Args[0].(IRIdent)
+	if !ok || dict.GoName != "__TodoBindable" {
+		t.Errorf("hidden arg: want IRIdent __TodoBindable, got %T %v", call.Args[0], call.Args[0])
+	}
+	if call.TypeArgs != "[Todo, TodoDraft]" {
+		t.Errorf("TypeArgs: want [Todo, TodoDraft], got %q", call.TypeArgs)
+	}
+}
+
+// findFirstFnCall walks an IR expression looking for the first IRFnCall
+// whose Source.Name (the Arca-surface name) matches `name`.
+func findFirstFnCall(e IRExpr, name string) *IRFnCall {
+	switch x := e.(type) {
+	case IRFnCall:
+		if x.Source.Name == name {
+			return &x
+		}
+		for _, a := range x.Args {
+			if c := findFirstFnCall(a, name); c != nil {
+				return c
+			}
+		}
+	case IRBlock:
+		for _, s := range x.Stmts {
+			if ls, ok := s.(IRLetStmt); ok {
+				if c := findFirstFnCall(ls.Value, name); c != nil {
+					return c
+				}
+			}
+			if es, ok := s.(IRExprStmt); ok {
+				if c := findFirstFnCall(es.Expr, name); c != nil {
+					return c
+				}
+			}
+		}
+		if x.Expr != nil {
+			return findFirstFnCall(x.Expr, name)
+		}
+	}
+	return nil
 }
 
 func TestLower_FnUnknownConstraint_Errors(t *testing.T) {
