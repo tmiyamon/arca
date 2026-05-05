@@ -1155,19 +1155,27 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 		}
 		stmts = append(stmts, GoReturn{Values: successValues})
 
+		// `(d <Type>Draft) Freeze` — user-facing inherent method (B2f)
+		// that also serves as the dictionary's Freeze function pointer via
+		// a Go method expression `<Type>Draft.Freeze`.
 		funcs = append(funcs, IRFn{
-			GoName: "__" + name + "Freeze",
-			Params: []IRParamDecl{{GoName: "d", Type: draftType}},
-			Ret:    IRResultType{Ok: hostType, Err: errorType},
-			Body:   IRBlock{Stmts: stmts},
+			GoName:   "Freeze",
+			Receiver: &IRReceiver{GoName: "d", Type: name + "Draft"},
+			Ret:      IRResultType{Ok: hostType, Err: errorType},
+			Body:     IRBlock{Stmts: stmts},
 		})
 
-		draftLambda := IRFn{
-			Ret: draftType,
+		// `<typeName>Draft()` — user-facing factory (B2f) returning an
+		// empty Draft. Also referenced by the dictionary's Draft field.
+		factoryName := strings.ToLower(name[:1]) + name[1:] + "Draft"
+		funcs = append(funcs, IRFn{
+			GoName: factoryName,
+			Ret:    draftType,
 			Body: IRBlock{Stmts: []IRStmt{
 				GoReturn{Values: []IRExpr{IRConstructorCall{GoName: name + "Draft", Type: draftType}}},
 			}},
-		}
+		})
+
 		dictType := IRNamedType{GoName: "BindableDict", Params: []IRType{hostType, draftType}}
 		globals = append(globals, IRGlobalVar{
 			GoName: "__" + name + "Bindable",
@@ -1175,8 +1183,8 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 				GoName:   "BindableDict",
 				TypeArgs: fmt.Sprintf("[%s, %s]", name, name+"Draft"),
 				Fields: []IRFieldValue{
-					{GoName: "Draft", Value: draftLambda},
-					{GoName: "Freeze", Value: IRIdent{GoName: "__" + name + "Freeze"}},
+					{GoName: "Draft", Value: IRIdent{GoName: factoryName}},
+					{GoName: "Freeze", Value: IRIdent{GoName: name + "Draft.Freeze"}},
 				},
 				Type: dictType,
 			},
@@ -2774,6 +2782,11 @@ func (l *Lowerer) lowerIdent(e Ident) IRExpr {
 				}
 			}
 		}
+		// B2f: synthesised `<Type>.draft()` factory for derive Bindable hosts.
+		if l.bindableTypes[parts[0]] && parts[1] == "draft" {
+			factoryName := strings.ToLower(parts[0][:1]) + parts[0][1:] + "Draft"
+			return IRIdent{GoName: factoryName, Type: IRFnType{Ret: IRNamedType{GoName: parts[0] + "Draft"}}}
+		}
 		return IRIdent{GoName: e.Name, Type: IRInterfaceType{}}
 	}
 	// Bare reference to a Go/Arca package (e.g. `http` in `http.StatusOK`)
@@ -3802,6 +3815,16 @@ func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goRetu
 		for _, impl := range l.impls[arcaTypeName] {
 			if info := l.lookupArcaMethodReturn(impl.Methods, method); info != nil {
 				return *info
+			}
+		}
+		// B2f: synthesised `(d <Host>Draft) freeze()` for derive Bindable hosts.
+		if method == "freeze" && strings.HasSuffix(arcaTypeName, "Draft") {
+			host := strings.TrimSuffix(arcaTypeName, "Draft")
+			if l.bindableTypes[host] {
+				return goReturnInfo{
+					Type:          IRResultType{Ok: IRNamedType{GoName: host}, Err: IRNamedType{GoName: "error"}},
+					GoMultiReturn: true,
+				}
 			}
 		}
 	}

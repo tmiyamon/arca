@@ -26,14 +26,10 @@ type TodoDraft struct {
 	Body BindableSlot[string]
 }
 
-func makeIt[T any, __draftT any](__bindableT BindableDict[T, __draftT]) (T, error) {
-	d := __bindableT.Draft()
-	return __bindableT.Freeze(d)
-}
-
 func main() {
 	if err := func() error {
-		_, __err1 := makeIt[Todo, TodoDraft](__TodoBindable)
+		d := todoDraft()
+		_, __err1 := d.Freeze()
 		if __err1 != nil {
 			return __err1
 		}

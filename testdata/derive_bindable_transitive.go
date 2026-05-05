@@ -48,7 +48,7 @@ func main() {
 	}
 }
 
-func __TodoFreeze(d TodoDraft) (Todo, error) {
+func (d TodoDraft) Freeze() (Todo, error) {
 	if d.Id.Set == false {
 		return Todo{}, errors.New("Todo.id is unset")
 	}
@@ -58,6 +58,8 @@ func __TodoFreeze(d TodoDraft) (Todo, error) {
 	return Todo{Id: d.Id.Value, Body: d.Body.Value}, nil
 }
 
-var __TodoBindable = BindableDict[Todo, TodoDraft]{Draft: func() TodoDraft {
+func todoDraft() TodoDraft {
 	return TodoDraft{}
-}, Freeze: __TodoFreeze}
+}
+
+var __TodoBindable = BindableDict[Todo, TodoDraft]{Draft: todoDraft, Freeze: TodoDraft.Freeze}

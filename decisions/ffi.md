@@ -103,13 +103,13 @@ let todo = bindJSON[Todo](r)?    // lower rewrites to bindJSON(__TodoBindable, r
 | B2c (landed) | `BindableDict[T, B]` struct emission + `__TodoBindable` instance | ~300 |
 | B2d (landed) | `[T: Bindable]` constraint parser + IR + lower resolution | ~150 |
 | B2e (landed) | `__bindableT` hidden-param injection + call site rewrite + transitive chain | ~400 |
-| B2f | `Todo.draft()` factory + `d.freeze()` synthesis + `NewTodo` integration | ~200 |
+| B2f (landed) | `Todo.draft()` factory + `d.freeze()` synthesis + `NewTodo` integration | ~200 |
 
 Total ~1650, 3-4 sessions. Slice boundaries keep test suite green.
 
 See `design_bindable_type_ideas.md` for nine deferred ideas surfaced in this discussion (BindableSlot as general "presence tracking" abstraction, compiler-intrinsic trait category, R3 sister-trait shape, trait-as-namespace syntax, type composition syntax, phantom-type rejection rationale, user-facing builder promotion, `type[X]` fusion re-evaluation, 3-layer invariant model).
 
-**Status:** Design refined. B1 landed end-to-end (B1a + B1b + B1c + B1d); B2a–B2e landed; B2f next.
+**Status:** Design refined. B1 + B2 landed end-to-end (B1a–B1d, B2a–B2f). Stdlib refactor (B3) and examples/todo migration (B4–B5) remain.
 
 ---
 

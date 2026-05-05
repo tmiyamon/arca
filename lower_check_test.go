@@ -1213,9 +1213,10 @@ func TestLower_DeriveBindable_SynthesisesDraft(t *testing.T) {
 	}
 }
 
-// B2c synthesises the BindableDict struct, a `__<Type>Freeze` function with
-// per-field unset checks, and a `__<Type>Bindable` global var wiring Draft
-// (anonymous closure) and Freeze (named func reference).
+// B2c+B2f: synthesises the BindableDict struct, a `(d TodoDraft) Freeze`
+// method with per-field unset checks, a `todoDraft()` factory, and a
+// `__TodoBindable` global var that references both via fn-name + method
+// expression.
 func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	t.Parallel()
 	src := `type Todo (id: Int, body: String) derive Bindable`
@@ -1244,24 +1245,28 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 		t.Errorf("BindableDict type params: want [T, B], got %v", dict.TypeParams)
 	}
 
-	var freezeFn *IRFn
+	var freezeFn, factoryFn *IRFn
 	for i := range out.Funcs {
-		if out.Funcs[i].GoName == "__TodoFreeze" {
-			fn := out.Funcs[i]
+		fn := out.Funcs[i]
+		if fn.GoName == "Freeze" && fn.Receiver != nil && fn.Receiver.Type == "TodoDraft" {
 			freezeFn = &fn
-			break
+		}
+		if fn.GoName == "todoDraft" {
+			factoryFn = &fn
 		}
 	}
 	if freezeFn == nil {
-		t.Fatalf("__TodoFreeze not synthesised")
+		t.Fatalf("(TodoDraft) Freeze method not synthesised")
 	}
 	body, ok := freezeFn.Body.(IRBlock)
 	if !ok {
-		t.Fatalf("__TodoFreeze body: want IRBlock, got %T", freezeFn.Body)
+		t.Fatalf("Freeze body: want IRBlock, got %T", freezeFn.Body)
 	}
-	// Two unset checks (one per field) + one success return.
 	if len(body.Stmts) != 3 {
-		t.Errorf("__TodoFreeze body stmts: want 3, got %d", len(body.Stmts))
+		t.Errorf("Freeze body stmts: want 3, got %d", len(body.Stmts))
+	}
+	if factoryFn == nil {
+		t.Fatalf("todoDraft factory not synthesised")
 	}
 
 	if len(out.Globals) != 1 {
@@ -1406,6 +1411,33 @@ func TestLower_FnUnknownConstraint_Errors(t *testing.T) {
 	errs := validateSource(`fun f[T: Cloneable](x: T) -> T { x }`)
 	if !hasErrorCode(errs, ErrUnsupportedFeature) {
 		t.Fatalf("expected ErrUnsupportedFeature for unknown constraint, got: %v", errs)
+	}
+}
+
+// B2f: `Todo.draft()` resolves to the synthesised factory and `d.freeze()`
+// to the Draft inherent method, completing the user-facing Bindable surface.
+func TestLower_DeriveBindable_UserSurface(t *testing.T) {
+	t.Parallel()
+	src := `
+type Todo (id: Int, body: String) derive Bindable
+fun main() -> Result[Unit, Error] {
+  let d = Todo.draft()
+  let _ = d.freeze()?
+  Ok(())
+}
+`
+	tokens, err := NewLexer(src).Tokenize()
+	if err != nil {
+		t.Fatalf("lex: %v", err)
+	}
+	prog, err := NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	l := NewLowerer(prog, "main", &NullTypeResolver{})
+	l.Lower(prog, "main", false)
+	if len(l.errors) != 0 {
+		t.Fatalf("unexpected errors: %v", l.errors)
 	}
 }
 
