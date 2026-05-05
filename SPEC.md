@@ -613,6 +613,43 @@ trait Error {
 - Go FFI `(T, error)` returns surface as `Result[T, Error]` on the Arca side. Match `Err` bindings are wrapped via an internal `__goError` adapter so trait methods (`.message()`) resolve on the bound value regardless of source.
 - Lowercase `error` is **not** a user-writable type name; always write `Error`.
 
+### Bindable (compiler intrinsic)
+
+`Bindable` is a built-in trait reserved for compiler-synthesised dictionary dispatch — used by stdlib helpers (`BindJSON`, `QueryAs`, `Decode`) to absorb Go-side mutation across the FFI boundary. Manual `impl T: Bindable` is a compile error; activation is via `derive Bindable` on the type declaration.
+
+```
+type Todo (
+  id: Int
+  body: String
+) derive Bindable
+
+let d = Todo.draft()
+let todo = d.freeze()?    // -> Result[Todo, Error]
+```
+
+Compiler synthesises (per derive-marked type T):
+
+- `T.Draft` — mutable shadow type with `BindableSlot[FieldType]` fields (`Set(v) | Unset` sum)
+- `T.draft()` — factory returning a fresh empty `T.Draft`
+- `(d T.Draft) freeze() -> Result[T, Error]` — returns `Err("<T>.<field> is unset")` for the first unset slot, otherwise calls `NewT` (constrained types) or builds `T{...}` directly (unconstrained)
+
+Generic functions accept Bindable types via `[T: Bindable]`:
+
+```
+fun roundtrip[T: Bindable](raw: String) -> Result[T, Error] {
+  let d = __bindableT.draft()
+  // populate d via FFI (json.Unmarshal, rows.Scan, ...)
+  __bindableT.freeze(d)
+}
+
+let todo = roundtrip[Todo](raw)?
+```
+
+- `derive` sits between the type header and any body block; if no block, it goes at the tail. Product (single-constructor) types only — sum-type `derive Bindable` is a compile error.
+- `[T: Bindable]` is the only constraint accepted at MVP. Unknown traits (`[T: Cloneable]`) and multi-trait bounds (`[T: A + B]`) are rejected.
+- Call sites with explicit type args inject the matching dispatch dictionary automatically; transitive generic calls (`outer[T: Bindable]` calling `inner[T]()`) forward the caller's hidden parameter.
+- `Bindable` is reserved — `trait Bindable { ... }` and `impl X: Bindable` are both compile errors.
+
 ### Associated Functions (static fun)
 
 ```
