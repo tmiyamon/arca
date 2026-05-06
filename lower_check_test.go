@@ -239,7 +239,6 @@ fun main() {
 	}
 }
 
-
 func TestValidateReturnTypeMismatch(t *testing.T) {
 	t.Parallel()
 	errs := validateSource(`
@@ -1255,6 +1254,44 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	cc, ok := gv.Init.(IRConstructorCall)
 	if !ok || cc.GoName != "stdlib.BindableDict" {
 		t.Errorf("global init: want stdlib.BindableDict ctor, got %T %v", gv.Init, gv.Init)
+	}
+}
+
+// resolveFieldType: accessing a trait method via field-access form (no
+// parens) used to silently fall through to IRInterfaceType, hiding the
+// bug. Now it raises ErrMethodAccessAsField with a "did you mean .X()?"
+// suggestion and returns IRError to suppress cascade.
+func TestLower_MethodAsField_RaisesError(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+fun handler() -> Result[Int, Error] { Ok(42) }
+fun foo() -> String {
+  match handler() {
+    Ok(_) => ""
+    Error(e) => e.message
+  }
+}
+`)
+	if !hasErrorCode(errs, ErrMethodAccessAsField) {
+		t.Fatalf("expected ErrMethodAccessAsField, got: %v", errs)
+	}
+}
+
+// resolveFieldType: accessing a name that is neither a field nor a method
+// on a resolved receiver type raises ErrUnknownMember with IRError.
+func TestLower_UnknownMember_RaisesError(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+fun handler() -> Result[Int, Error] { Ok(42) }
+fun foo() -> String {
+  match handler() {
+    Ok(_) => ""
+    Error(e) => e.zzz
+  }
+}
+`)
+	if !hasErrorCode(errs, ErrUnknownMember) {
+		t.Fatalf("expected ErrUnknownMember, got: %v", errs)
 	}
 }
 

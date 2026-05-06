@@ -51,7 +51,21 @@ type IROptionType struct {
 	Inner IRType
 }
 
-type IRInterfaceType struct{} // fallback: interface{}
+type IRInterfaceType struct{} // user-explicit Any (interface{})
+
+// IRError is the placeholder type for an expression whose type the lowerer
+// could not resolve. Distinct from IRInterfaceType (which represents user-
+// requested Any): IRError signals a resolution failure that has already
+// raised a compile error, but the lowerer kept building IR so partial-code
+// flows (LSP, cascading-error suppression) keep working. Hint optionally
+// carries the inferred type when a near-miss was found (e.g. a method seen
+// where a field was written) — diagnostic reporters and LSP hover may
+// consume Hint to surface richer info; downstream IR / unify treat IRError
+// as "broken, propagate without further error".
+type IRError struct {
+	Reason string
+	Hint   IRType
+}
 
 // IRTraitType is the Arca trait used as a type (trait object).
 // Emitted as a Go interface named Arca<Name>. Distinct from
@@ -82,6 +96,7 @@ func (IRMapType) irTypeNode()       {}
 func (IRResultType) irTypeNode()    {}
 func (IROptionType) irTypeNode()    {}
 func (IRInterfaceType) irTypeNode() {}
+func (IRError) irTypeNode()         {}
 func (IRTraitType) irTypeNode()     {}
 func (IRFnType) irTypeNode()        {}
 func (IRTypeVar) irTypeNode()       {}

@@ -35,6 +35,8 @@ const (
 	ErrLexUnexpectedChar
 	ErrLexUnterminatedString
 	ErrLexInvalidInterpolation
+	ErrUnknownMember
+	ErrMethodAccessAsField
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -167,6 +169,39 @@ type FieldAccessOnWrappedData struct {
 
 func (d FieldAccessOnWrappedData) Message() string {
 	return fmt.Sprintf("cannot access field '.%s' on %s: %s", d.Field, d.TypeName, d.Suggestion)
+}
+
+// UnknownMemberData reports a field/method access where neither a field
+// nor a method of that name exists on the receiver type. Distinct from
+// MethodAccessAsFieldData below — the latter signals a near-miss (a
+// method exists but `()` is missing).
+type UnknownMemberData struct {
+	Member   string
+	TypeName string
+}
+
+func (d UnknownMemberData) Message() string {
+	return fmt.Sprintf("no field or method '%s' on type %s", d.Member, d.TypeName)
+}
+
+// MethodAccessAsFieldData reports the silent-bug case where a user wrote
+// a field-access syntax but the named member is actually a method on the
+// receiver. Signature is the Arca-style display (`() -> String`).
+type MethodAccessAsFieldData struct {
+	Method    string
+	TypeName  string
+	Signature string
+}
+
+func (d MethodAccessAsFieldData) Message() string {
+	return fmt.Sprintf("`.%s` is a method on type %s%s; did you mean `.%s()`?", d.Method, d.TypeName, d.sigSuffix(), d.Method)
+}
+
+func (d MethodAccessAsFieldData) sigSuffix() string {
+	if d.Signature == "" {
+		return ""
+	}
+	return " (signature: " + d.Signature + ")"
 }
 
 type CannotInferTypeData struct {

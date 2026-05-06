@@ -146,6 +146,14 @@ func (s *InferScope) unify(a, b IRType) bool {
 	if _, ok := b.(IRInterfaceType); ok {
 		return true
 	}
+	// IRError unifies with anything to suppress cascade errors — the
+	// resolution failure has already been reported at its origin site.
+	if _, ok := a.(IRError); ok {
+		return true
+	}
+	if _, ok := b.(IRError); ok {
+		return true
+	}
 
 	switch at := a.(type) {
 	case IRNamedType:
@@ -3938,7 +3946,7 @@ func (l *Lowerer) lookupArcaMethodReturn(methods []FnDecl, method string) *goRet
 }
 
 // resolveFieldType resolves the type of a field access on a Go or Arca type.
-func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
+func (l *Lowerer) resolveFieldType(receiver IRExpr, field string, pos Pos) IRType {
 	// Try Go FFI type first. Go struct fields of type *T wrap to
 	// Option[Ref[T]] at the Arca boundary (same rule as return/param).
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
@@ -3950,6 +3958,9 @@ func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
 					return wrapPointerInOption(goTypeToIR(f.Type))
 				}
 			}
+			// Go FFI type resolved but no field — receiver-side method
+			// access via field-access form is left to Go's compiler (Go
+			// allows method-value expressions). Fall through to Any.
 		}
 	}
 
@@ -3965,10 +3976,70 @@ func (l *Lowerer) resolveFieldType(receiver IRExpr, field string) IRType {
 					}
 				}
 			}
+			// No field — check methods (silent-bug guard for `e.message`
+			// when message is a method).
+			if hint, sig, ok := l.lookupMethodAsField(td.Methods, field); ok {
+				l.addCompileError(ErrMethodAccessAsField, pos, MethodAccessAsFieldData{
+					Method: lowerFirst(field), TypeName: arcaTypeName, Signature: sig,
+				})
+				return IRError{Reason: fmt.Sprintf("method '%s' on %s called as field", field, arcaTypeName), Hint: hint}
+			}
+			l.addCompileError(ErrUnknownMember, pos, UnknownMemberData{Member: lowerFirst(field), TypeName: arcaTypeName})
+			return IRError{Reason: fmt.Sprintf("no field or method '%s' on %s", field, arcaTypeName)}
 		}
 	}
 
+	// Trait receivers: methods are the only members; same method-as-field
+	// guard but routed through the trait's method set.
+	if tt, ok := receiver.irType().(IRTraitType); ok {
+		if trait, ok := l.traits[tt.Name]; ok {
+			if hint, sig, ok := l.lookupMethodAsField(trait.Methods, field); ok {
+				l.addCompileError(ErrMethodAccessAsField, pos, MethodAccessAsFieldData{
+					Method: lowerFirst(field), TypeName: tt.Name, Signature: sig,
+				})
+				return IRError{Reason: fmt.Sprintf("method '%s' on trait %s called as field", field, tt.Name), Hint: hint}
+			}
+			l.addCompileError(ErrUnknownMember, pos, UnknownMemberData{Member: lowerFirst(field), TypeName: tt.Name})
+			return IRError{Reason: fmt.Sprintf("no member '%s' on trait %s", field, tt.Name)}
+		}
+	}
+
+	// Receiver type itself is unresolved or opaque (e.g. real interface{}):
+	// stay silent so partial / under-typed code keeps lowering for LSP.
 	return IRInterfaceType{}
+}
+
+// lookupMethodAsField scans an Arca method list for a name matching the
+// requested field (capitalized via lowerFieldAccess) and, on a hit, returns
+// (1) an IRFnType representing the method's signature for IRError.Hint and
+// (2) an Arca-style signature display string for the diagnostic.
+func (l *Lowerer) lookupMethodAsField(methods []FnDecl, field string) (IRType, string, bool) {
+	for _, m := range methods {
+		if capitalize(m.Name) != field && m.Name != field {
+			continue
+		}
+		paramTypes := make([]IRType, len(m.Params))
+		paramNames := make([]string, len(m.Params))
+		for i, p := range m.Params {
+			if p.Type != nil {
+				paramTypes[i] = l.lowerType(p.Type)
+			} else {
+				paramTypes[i] = IRInterfaceType{}
+			}
+			paramNames[i] = irTypeEmitStr(paramTypes[i])
+		}
+		var ret IRType
+		if m.ReturnType != nil {
+			ret = l.lowerType(m.ReturnType)
+		}
+		retStr := ""
+		if ret != nil {
+			retStr = " -> " + irTypeEmitStr(ret)
+		}
+		sig := "(" + strings.Join(paramNames, ", ") + ")" + retStr
+		return IRFnType{Params: paramTypes, Ret: ret}, sig, true
+	}
+	return nil, "", false
 }
 
 // resolveReceiverArcaType extracts the Arca type name from an IR expression.
@@ -4190,7 +4261,7 @@ func (l *Lowerer) lowerFieldAccess(e FieldAccess) IRExpr {
 			}
 		}
 	}
-	fieldType := l.resolveFieldType(receiver, capitalize(e.Field))
+	fieldType := l.resolveFieldType(receiver, capitalize(e.Field), e.exprPos())
 	return IRFieldAccess{
 		Expr:  receiver,
 		Field: capitalize(e.Field),
