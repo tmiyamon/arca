@@ -37,6 +37,7 @@ const (
 	ErrLexInvalidInterpolation
 	ErrUnknownMember
 	ErrMethodAccessAsField
+	ErrNonBindableTypeArg
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -182,6 +183,19 @@ type UnknownMemberData struct {
 
 func (d UnknownMemberData) Message() string {
 	return fmt.Sprintf("no field or method '%s' on type %s", d.Member, d.TypeName)
+}
+
+// NonBindableTypeArgData reports calling a Bindable-constrained stdlib
+// helper (Decode / BindJSON / QueryAs / QueryOneAs) with a type that
+// hasn't been declared with `derive Bindable`. The compiler can't inject
+// the dispatch dictionary without that derive.
+type NonBindableTypeArgData struct {
+	FnName   string
+	TypeName string
+}
+
+func (d NonBindableTypeArgData) Message() string {
+	return fmt.Sprintf("%s requires `derive Bindable` on type %s", d.FnName, d.TypeName)
 }
 
 // MethodAccessAsFieldData reports the silent-bug case where a user wrote

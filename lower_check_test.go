@@ -1257,6 +1257,32 @@ func TestLower_DeriveBindable_SynthesisesDispatch(t *testing.T) {
 	}
 }
 
+// Calling a Bindable-stdlib helper with a non-Bindable type argument
+// raises ErrNonBindableTypeArg with a clear message and short-circuits
+// to suppress cascading arg-count / type-mismatch noise from the
+// missing dictionary injection.
+func TestLower_BindableStdlib_NonBindableArg(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`
+import go "net/http"
+import stdlib
+
+type Plain (id: Int)
+
+fun handle(r: *http.Request) -> Result[Plain, Error] {
+  stdlib.BindJSON[Plain](r)
+}
+`)
+	if !hasErrorCode(errs, ErrNonBindableTypeArg) {
+		t.Fatalf("expected ErrNonBindableTypeArg, got: %v", errs)
+	}
+	// Cascade suppression: only the single Bindable-precondition error
+	// should fire; arg-count / type-mismatch follow-ons are skipped.
+	if len(errs) != 1 {
+		t.Errorf("expected 1 error, got %d: %v", len(errs), errs)
+	}
+}
+
 // resolveFieldType: accessing a trait method via field-access form (no
 // parens) used to silently fall through to IRInterfaceType, hiding the
 // bug. Now it raises ErrMethodAccessAsField with a "did you mean .X()?"

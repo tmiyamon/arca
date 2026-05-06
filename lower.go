@@ -958,30 +958,56 @@ var bindableStdlibFns = map[string]bool{
 	"stdlib.QueryOneAs": true,
 }
 
-// maybeInjectBindableStdlibArg returns the hidden dictionary IRIdent and
-// the synthesised Draft type arg when a Go FFI call targets one of the
-// `bindableStdlibFns` helpers and the user supplied a derive-Bindable type
-// as the first explicit type argument. Returns ok=false otherwise.
-func (l *Lowerer) maybeInjectBindableStdlibArg(goCallName string, e FnCall) (IRExpr, Type, bool) {
+// bindableInjectKind tells the call-site lowerer how to handle a
+// Bindable-stdlib helper call: nothing to do, inject the dict, or skip
+// further validation because the type-argument check already failed.
+type bindableInjectKind int
+
+const (
+	bindableInjectNone   bindableInjectKind = iota // not a Bindable stdlib call
+	bindableInjectOK                               // dict + draft type ready to inject
+	bindableInjectFailed                           // diagnostic already raised; suppress cascade
+)
+
+// maybeInjectBindableStdlibArg classifies a Go FFI call against the
+// `bindableStdlibFns` helper list. When the user supplies a type argument
+// declared with `derive Bindable`, the dispatch dictionary IRIdent and
+// the corresponding Draft type are returned for injection. When the user
+// supplies a type argument that is NOT bindable, ErrNonBindableTypeArg is
+// raised here and the caller is expected to short-circuit so the missing
+// dict doesn't surface as cascading arg-count / type-mismatch errors.
+func (l *Lowerer) maybeInjectBindableStdlibArg(goCallName string, e FnCall) (IRExpr, Type, bindableInjectKind) {
 	if !bindableStdlibFns[goCallName] || len(e.TypeArgs) < 1 {
-		return nil, nil, false
+		return nil, nil, bindableInjectNone
 	}
 	concrete, ok := e.TypeArgs[0].(NamedType)
 	if !ok {
-		return nil, nil, false
+		l.addCompileError(ErrNonBindableTypeArg, e.Pos, NonBindableTypeArgData{
+			FnName: goCallName, TypeName: irTypeDisplayStrFromAST(e.TypeArgs[0]),
+		})
+		return nil, nil, bindableInjectFailed
 	}
 	if !l.bindableTypes[concrete.Name] {
-		l.addCompileError(ErrUnsupportedFeature, e.Pos, UnsupportedFeatureData{
-			Feature: fmt.Sprintf("Bindable type argument %s", concrete.Name),
-			Context: "type must be declared with `derive Bindable`",
+		l.addCompileError(ErrNonBindableTypeArg, e.Pos, NonBindableTypeArgData{
+			FnName: goCallName, TypeName: concrete.Name,
 		})
-		return nil, nil, false
+		return nil, nil, bindableInjectFailed
 	}
 	dictArg := IRIdent{
 		GoName: "__" + concrete.Name + "Bindable",
 		Type:   IRNamedType{GoName: "stdlib.BindableDict", Params: []IRType{IRNamedType{GoName: concrete.Name}, IRNamedType{GoName: concrete.Name + "Draft"}}},
 	}
-	return dictArg, NamedType{Name: concrete.Name + "Draft"}, true
+	return dictArg, NamedType{Name: concrete.Name + "Draft"}, bindableInjectOK
+}
+
+// irTypeDisplayStrFromAST renders an AST Type for diagnostic messages.
+// Used by NonBindableTypeArgData when the type arg isn't a simple
+// NamedType (e.g., a complex generic instantiation).
+func irTypeDisplayStrFromAST(t Type) string {
+	if nt, ok := t.(NamedType); ok {
+		return nt.Name
+	}
+	return fmt.Sprintf("%v", t)
 }
 
 // substType walks an AST Type and substitutes any NamedType whose name is
@@ -3034,9 +3060,20 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 				// B3a: stdlib helpers taking `BindableDict[T, B]` as their
 				// hidden first arg get the dictionary instance + Draft type
 				// injected from the user's explicit type arg.
-				if dictArg, draftType, ok := l.maybeInjectBindableStdlibArg(goCallName, e); ok {
+				switch dictArg, draftType, kind := l.maybeInjectBindableStdlibArg(goCallName, e); kind {
+				case bindableInjectOK:
 					args = append([]IRExpr{dictArg}, args...)
 					typeArgs = append(typeArgs, draftType)
+				case bindableInjectFailed:
+					// Type-arg precondition reported; short-circuit to
+					// avoid cascading arg-count / type-mismatch errors
+					// from the now-incomplete call site.
+					return IRFnCall{
+						Fn:     IRIdent{GoName: goCallName},
+						Args:   args,
+						Type:   IRError{Reason: fmt.Sprintf("%s: type argument is not Bindable", goCallName)},
+						Source: SourceInfo{Pos: e.Pos},
+					}
 				}
 				ret := l.resolveGoCall(goCallName, args, e.Pos)
 				l.unifyExplicitTypeArgs(ret.TypeVars, ret.TypeParamOrder, typeArgs)

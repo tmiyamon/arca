@@ -423,9 +423,7 @@ func TestExplicitTypeArgsHMFlow(t *testing.T) {
 	source := `import go "fmt"
 import stdlib
 
-type User {
-    User(name: String)
-}
+type User (name: String) derive Bindable
 
 fun process(r: Result[User, Error]) -> String {
     match r {
@@ -440,7 +438,7 @@ fun main() {
 }
 `
 	// Hover on r — should be Result[User, Error]
-	got := getHoverInfo(source, "/tmp/hm_flow_test.arca", 16, 9)
+	got := getHoverInfo(source, "/tmp/hm_flow_test.arca", 14, 9)
 	t.Logf("hover on r: %q", got)
 	if !strings.Contains(got, "User") {
 		t.Errorf("expected r to be Result[User, Error], got %q", got)
