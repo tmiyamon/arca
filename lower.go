@@ -3111,7 +3111,7 @@ func (l *Lowerer) lowerFnCallWithHint(e FnCall, hint IRType) IRExpr {
 		methodName := l.resolveMethodName(fa.Field)
 		args := l.lowerCallArgs(e)
 		receiver := l.lowerExpr(fa.Expr)
-		ret := l.resolveMethodReturnType(receiver, fa.Field)
+		ret := l.resolveMethodReturnType(receiver, fa.Field, e.Pos)
 		// Check method argument count
 		l.checkMethodArgCount(receiver, fa.Field, len(e.Args), e.Pos)
 		return IRMethodCall{
@@ -3260,7 +3260,20 @@ func (l *Lowerer) resolveGoCall(goName string, args []IRExpr, pos Pos) goReturnI
 
 	info := l.typeResolver.ResolveFunc(goPkg.FullPath, funcName)
 	if info == nil {
-		return goReturnInfo{Type: IRInterfaceType{}}
+		// Detect camelCase Arca-style write of a PascalCase Go function so
+		// the diagnostic suggests the right form (`fmt.println` → `fmt.Println`).
+		// Returning the resolved type keeps cascade type-checking clean.
+		if pascal := capitalize(funcName); pascal != funcName {
+			if alt := l.typeResolver.ResolveFunc(goPkg.FullPath, pascal); alt != nil {
+				l.addCompileError(ErrGoFFINameConvention, pos, GoFFINameConventionData{
+					Given: funcName, Expected: pascal, Kind: "function", Receiver: pkgShort,
+				})
+				info = alt
+			}
+		}
+		if info == nil {
+			return goReturnInfo{Type: IRInterfaceType{}}
+		}
 	}
 
 	// Validate argument count
@@ -3917,7 +3930,7 @@ func buildOptionOkOrElseDesugar(receiver Expr, args []Expr, pos Pos) Expr {
 }
 
 // resolveMethodReturnType resolves the return type of a method call on a Go or Arca type.
-func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goReturnInfo {
+func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string, pos Pos) goReturnInfo {
 	// Trait object: receiver's static type is IRTraitType → look up in trait's method set.
 	if tt, ok := receiver.irType().(IRTraitType); ok {
 		if trait, ok := l.traits[tt.Name]; ok {
@@ -3927,12 +3940,25 @@ func (l *Lowerer) resolveMethodReturnType(receiver IRExpr, method string) goRetu
 		}
 	}
 
-	// Try Go FFI type first
+	// Try Go FFI type first. Go method names are PascalCase and Arca's de
+	// facto FFI convention writes them verbatim (`fmt.Println`, `sql.Open`,
+	// etc.); a camelCase form like `res.lastInsertId()` doesn't match any
+	// Go method, so the lookup misses, the return type falls to Any, and
+	// downstream type-mismatch diagnostics evaporate. Detect that case and
+	// surface ErrGoFFINameConvention with the PascalCase suggestion — and
+	// return the resolved type so cascade type-checking stays informed.
 	pkg, typ, ok := l.resolveReceiverGoType(receiver)
 	if ok {
-		info := l.typeResolver.ResolveMethod(pkg, typ, method)
-		if info != nil {
+		if info := l.typeResolver.ResolveMethod(pkg, typ, method); info != nil {
 			return l.goFuncReturnType(info)
+		}
+		if pascal := capitalize(method); pascal != method {
+			if info := l.typeResolver.ResolveMethod(pkg, typ, pascal); info != nil {
+				l.addCompileError(ErrGoFFINameConvention, pos, GoFFINameConventionData{
+					Given: method, Expected: pascal, Kind: "method", Receiver: typ,
+				})
+				return l.goFuncReturnType(info)
+			}
 		}
 	}
 

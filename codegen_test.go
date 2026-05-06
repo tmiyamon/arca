@@ -445,6 +445,44 @@ fun main() {
 			t.Errorf("expected ErrTypeMismatch, got: %s", err)
 		}
 	})
+
+	t.Run("camelCase_method_suggests_pascalCase", func(t *testing.T) {
+		t.Parallel()
+		// Go FFI methods are PascalCase; writing the Arca-style camelCase
+		// form used to silently fall to Any, hiding downstream errors.
+		// Now it raises ErrGoFFINameConvention with the PascalCase suggestion.
+		_, err := transpileSource(`
+import go "database/sql"
+
+fun foo(res: sql.Result) -> Result[Int, Error] {
+  let id = res.lastInsertId()?
+  Ok(0)
+}
+`)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !hasErrorCode(compileErrorsOf(err), ErrGoFFINameConvention) {
+			t.Errorf("expected ErrGoFFINameConvention, got: %s", err)
+		}
+	})
+
+	t.Run("camelCase_function_suggests_pascalCase", func(t *testing.T) {
+		t.Parallel()
+		_, err := transpileSource(`
+import go "fmt"
+
+fun main() {
+  fmt.println("hi")
+}
+`)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !hasErrorCode(compileErrorsOf(err), ErrGoFFINameConvention) {
+			t.Errorf("expected ErrGoFFINameConvention, got: %s", err)
+		}
+	})
 }
 
 // Go FFI functions returning multiple values are mapped to Arca wrapper types:

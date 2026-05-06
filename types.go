@@ -38,6 +38,7 @@ const (
 	ErrUnknownMember
 	ErrMethodAccessAsField
 	ErrNonBindableTypeArg
+	ErrGoFFINameConvention
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -183,6 +184,23 @@ type UnknownMemberData struct {
 
 func (d UnknownMemberData) Message() string {
 	return fmt.Sprintf("no field or method '%s' on type %s", d.Member, d.TypeName)
+}
+
+// GoFFINameConventionData reports calling a Go FFI method or function
+// using Arca's camelCase surface convention. Go uses PascalCase method
+// / function names and is case-sensitive, so the lower path can't find
+// the camelCase form; existing testdata writes Go FFI as PascalCase
+// (`fmt.Println`, `sql.Open`, `http.HandleFunc`). Diagnostic suggests
+// the PascalCase form so users can fix immediately.
+type GoFFINameConventionData struct {
+	Given    string
+	Expected string
+	Kind     string // "method" / "function"
+	Receiver string // type or package name for context
+}
+
+func (d GoFFINameConventionData) Message() string {
+	return fmt.Sprintf("Go FFI %s names are PascalCase; use `%s` instead of `%s`", d.Kind, d.Expected, d.Given)
 }
 
 // NonBindableTypeArgData reports calling a Bindable-constrained stdlib
