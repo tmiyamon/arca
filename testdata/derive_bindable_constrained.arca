@@ -1,0 +1,10 @@
+type Todo (
+  id: Int
+  body: String { max_length: 255 }
+) derive Bindable
+
+fun main() -> Result[Unit, Error] {
+  let d = Todo.draft()
+  let _ = d.freeze()?
+  Ok(())
+}

@@ -1178,8 +1178,11 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 				slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
 				args[i] = IRFieldValue{Value: IRFieldAccess{Expr: slot, Field: "Value"}}
 			}
+			// Constrained type → call the validating `New<Type>` constructor
+			// (matches the convention in lowerUserConstructorCall for direct
+			// user-written calls).
 			successValues = []IRExpr{IRConstructorCall{
-				GoName:        name,
+				GoName:        "New" + name,
 				Fields:        args,
 				GoMultiReturn: true,
 				Type:          hostType,
