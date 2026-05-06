@@ -16,11 +16,6 @@ func NewAge(v int) (Age, error) {
 	return Age(v), nil
 }
 
-func (v Age) ArcaValidate() error {
-	_, err := NewAge(int(v))
-	return err
-}
-
 type AdultAge int
 
 func NewAdultAge(v int) (AdultAge, error) {
@@ -31,11 +26,6 @@ func NewAdultAge(v int) (AdultAge, error) {
 		return 0, fmt.Errorf("must be <= 150")
 	}
 	return AdultAge(v), nil
-}
-
-func (v AdultAge) ArcaValidate() error {
-	_, err := NewAdultAge(int(v))
-	return err
 }
 
 func greet(age Age) string {

@@ -19,11 +19,6 @@ func NewTodo(id int, body string) (Todo, error) {
 	return Todo{Id: id, Body: body}, nil
 }
 
-func (v Todo) ArcaValidate() error {
-	_, err := NewTodo(v.Id, v.Body)
-	return err
-}
-
 type TodoDraft struct {
 	Id   stdlib.BindableSlot[int]
 	Body stdlib.BindableSlot[string]

@@ -147,7 +147,6 @@ func (em *Emitter) emitStructDecl(d IRStructDecl) {
 
 	if d.Validator != nil {
 		em.emitStructValidator(d)
-		em.emitValidateMethod(d)
 	}
 }
 
@@ -166,19 +165,6 @@ func (em *Emitter) emitStructValidator(d IRStructDecl) {
 			fields[i] = fmt.Sprintf("%s: %s", f.GoName, lowerFirst(f.GoName))
 		}
 		w.Return(fmt.Sprintf("%s{%s}, nil", d.GoName, strings.Join(fields, ", ")))
-	})
-}
-
-func (em *Emitter) emitValidateMethod(d IRStructDecl) {
-	w := em.w
-	fields := make([]string, len(d.Fields))
-	for i, f := range d.Fields {
-		fields[i] = "v." + f.GoName
-	}
-	w.Line("")
-	w.Method(fmt.Sprintf("v %s", d.GoName), "ArcaValidate", "", "error", func() {
-		w.Assign("_, err", fmt.Sprintf("New%s(%s)", d.GoName, strings.Join(fields, ", ")))
-		w.Return("err")
 	})
 }
 
@@ -228,12 +214,6 @@ func (em *Emitter) emitTypeAliasDecl(d IRTypeAliasDecl) {
 	w.Func("New"+d.GoName, fmt.Sprintf("v %s", d.GoBase), fmt.Sprintf("(%s, error)", d.GoName), func() {
 		em.emitValidatorAlias(d.Validator, d.GoName, zeroVal, d.GoBase)
 		w.Return(fmt.Sprintf("%s(v), nil", d.GoName))
-	})
-
-	w.Line("")
-	w.Method(fmt.Sprintf("v %s", d.GoName), "ArcaValidate", "", "error", func() {
-		w.Assign("_, err", fmt.Sprintf("New%s(%s(v))", d.GoName, d.GoBase))
-		w.Return("err")
 	})
 }
 
