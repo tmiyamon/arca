@@ -151,6 +151,9 @@ func fieldToSchema(f Field) map[string]interface{} {
 	switch nt.Name {
 	case "Int":
 		schema["type"] = "integer"
+	case "UInt":
+		schema["type"] = "integer"
+		schema["minimum"] = 0
 	case "Float":
 		schema["type"] = "number"
 	case "String":
@@ -241,6 +244,9 @@ func typeAliasToSchema(d TypeAliasDecl) map[string]interface{} {
 	switch nt.Name {
 	case "Int":
 		schema["type"] = "integer"
+	case "UInt":
+		schema["type"] = "integer"
+		schema["minimum"] = 0
 	case "Float":
 		schema["type"] = "number"
 	case "String":
@@ -285,6 +291,8 @@ func typeRefToSchema(t Type) map[string]interface{} {
 	switch nt.Name {
 	case "Int":
 		return map[string]interface{}{"type": "integer"}
+	case "UInt":
+		return map[string]interface{}{"type": "integer", "minimum": 0}
 	case "Float":
 		return map[string]interface{}{"type": "number"}
 	case "String":

@@ -2215,6 +2215,8 @@ func arcaDisplayName(goName string) string {
 		return "Unit"
 	case "int":
 		return "Int"
+	case "uint":
+		return "UInt"
 	case "float64":
 		return "Float"
 	case "string":
@@ -2277,7 +2279,7 @@ func (l *Lowerer) checkTypeExists(t Type) {
 // isKnownTypeName checks if a name is a known type in the lowerer context.
 func (l *Lowerer) isKnownTypeName(name string) bool {
 	switch name {
-	case "Unit", "Int", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "Self":
+	case "Unit", "Int", "UInt", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "Self":
 		return true
 	}
 	if strings.Contains(name, ".") {
@@ -2609,6 +2611,8 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		return IRNamedType{GoName: "struct{}"}
 	case "Int":
 		return IRNamedType{GoName: "int"}
+	case "UInt":
+		return IRNamedType{GoName: "uint"}
 	case "Float":
 		return IRNamedType{GoName: "float64"}
 	case "String":
@@ -3345,7 +3349,7 @@ func irTypeToGoString(t IRType) string {
 	switch tt := t.(type) {
 	case IRNamedType:
 		switch tt.GoName {
-		case "int", "float64", "string", "bool", "byte", "struct{}":
+		case "int", "uint", "float64", "string", "bool", "byte", "struct{}":
 			return tt.GoName
 		default:
 			return "" // user-defined or complex — skip check
@@ -6067,7 +6071,7 @@ func irZeroExpr(t IRType) IRExpr {
 	switch tt := t.(type) {
 	case IRNamedType:
 		switch tt.GoName {
-		case "int", "float64", "byte":
+		case "int", "uint", "float64", "byte":
 			return IRIntLit{Value: 0}
 		case "string":
 			return IRStringLit{Value: ""}

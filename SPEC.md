@@ -387,6 +387,7 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 |------|-------------|
 | Unit | No value (void) |
 | Int | 64-bit signed integer (Go `int`; 64-bit-only target) |
+| UInt | 64-bit unsigned integer (Go `uint`) |
 | Float | 64-bit floating point (Go `float64`) |
 | String | UTF-8 string |
 | Bool | True / False |

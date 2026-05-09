@@ -105,7 +105,7 @@ func isEnum(td TypeDecl) bool {
 
 func typeZeroValue(typeName string, goBase string) string {
 	switch goBase {
-	case "int", "float64":
+	case "int", "uint", "float64":
 		return "0"
 	case "string":
 		return `""`

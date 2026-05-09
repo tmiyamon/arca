@@ -4,6 +4,27 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric Slice B — `UInt` core type landed
+
+**Context:** The 2026-05-10 numeric-types decision adds `UInt = Go uint` alongside `Int` and `Float` to close the UInt64 representation gap surfaced by B4 — MySQL `BIGINT UNSIGNED`, hash output, file mode, and similar Go APIs have no Arca representation without it. Slice B is the foundational plumbing: every site that recognises `Int` as a primitive must recognise `UInt` symmetrically before constrained narrow types (`UInt8 = UInt{bits: 8}`) can land.
+
+**Decision:** Add `UInt` to every Int-handling site, mapping to Go `uint`.
+
+- `lowerNamedType` (`UInt` → `IRNamedType{GoName: "uint"}`)
+- `isKnownTypeName` allowlist
+- `arcaDisplayName` (`uint` → `UInt` for diagnostics)
+- `irTypeToGoString` allowlist (so FFI compatibility checks accept it)
+- `irZeroExpr` and `helpers.typeZeroValue` (default `0` for fields/returns)
+- OpenAPI schema in `typeAliasToSchema` and `typeRefToSchema` — emits `{"type": "integer", "minimum": 0}` so the unsigned constraint surfaces at the spec boundary.
+
+`unify` is unchanged: `IRNamedType` equality is `GoName`-based, so `Int + UInt` already fails to unify and surfaces as `ErrTypeMismatch`. The dedicated cross-base diagnostic ("UInt's max exceeds int64, no safe common base") is part of Slice E.
+
+Literal hint coercion (`let x: UInt = 5`) is not implemented — `IntLit` always lowers with `GoName: "int"` regardless of hint, matching the current `let x: Float = 5` behaviour. Slice E (D2 refined value-flow + range-aware widening) is the right place for this. For Slice B, UInt values flow via fn signatures, struct fields, arithmetic between UInts, and Go FFI returns of `uint`.
+
+**Status:** Landed 2026-05-10. ~30 LoC across 4 files plus `testdata/uint_basic.arca` covering struct field, method receiver, fn signature, and arithmetic. `go test ./...` passes; `go vet` clean. Slice C (`{bits: N}` storage hint) is the next foundational independent slice.
+
+---
+
 ## 2026-05-10: Numeric Slice A — 64-bit GOARCH enforcement landed
 
 **Context:** The 2026-05-10 numeric-types decision pins `Int` to `Go int` and requires the host platform to be 64-bit so that `Int` ≡ `Int{bits: 64}` is a true identity. Without enforcement, an Arca program built on GOARCH=386 silently produces a binary whose `Int` is 32-bit, breaking Layer 1 the moment any value crosses the SSOT (`int64` columns, JSON numbers, hash output). Subsequent slices (`bits: N` storage hint, `T(x)?` narrowing, `std.checked.*`) all assume the 64-bit identity, so the seal must land before them.

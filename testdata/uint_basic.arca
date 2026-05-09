@@ -1,0 +1,11 @@
+type Counter {
+  Counter(n: UInt)
+
+  fun total() -> UInt {
+    add(self.n, self.n)
+  }
+}
+
+fun add(a: UInt, b: UInt) -> UInt {
+  a + b
+}
