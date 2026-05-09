@@ -39,6 +39,7 @@ Source (.arca)
 | `lsp.go` | LSP server (diagnostics, hover) |
 | `types.go` | Shared type utilities (type comparison, constraint dimensions) |
 | `helpers.go` | Shared utilities (GoPackage struct for import path parsing) |
+| `target_arch.go` | 64-bit GOARCH allowlist + `//go:build` tag (SSOT for emit + CLI precheck) |
 | `main.go` | CLI (run, build, emit, init, fmt, health, lsp, version) |
 | `formatter.go` | Arca source formatter |
 | `openapi.go` | OpenAPI spec generation |

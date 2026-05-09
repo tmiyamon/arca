@@ -45,6 +45,8 @@ func (em *Emitter) Emit(prog IRProgram) string {
 	if pkg == "" {
 		pkg = "main"
 	}
+	w.Line("//go:build %s", goBuild64BitTag)
+	w.Line("")
 	w.Line("package %s", pkg)
 	w.Line("")
 

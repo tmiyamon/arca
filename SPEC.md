@@ -386,8 +386,8 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | Type | Description |
 |------|-------------|
 | Unit | No value (void) |
-| Int | Integer |
-| Float | Floating point |
+| Int | 64-bit signed integer (Go `int`; 64-bit-only target) |
+| Float | 64-bit floating point (Go `float64`) |
 | String | UTF-8 string |
 | Bool | True / False |
 | List[T] | Immutable list |
@@ -397,6 +397,10 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | Any | unknown-typed (maps to Go `interface{}`) |
 | (A, B, ...) | Tuple |
 | A -> B, (A, B) -> C | Function types |
+
+`Int` is fixed at 64 bits. Generated Go files carry a `//go:build` constraint
+that excludes 32-bit GOARCH (`386`, `arm`, `mips`, `mipsle`, etc.); `arca run`
+and `arca build` refuse to invoke the Go toolchain on a 32-bit target.
 
 ### Map
 

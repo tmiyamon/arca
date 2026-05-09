@@ -865,6 +865,10 @@ func fmtCmd(inputPath string) int {
 
 
 func runCmd(inputPath string) int {
+	if err := check64BitTarget(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	result, err := transpile(inputPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -897,6 +901,10 @@ func runCmd(inputPath string) int {
 }
 
 func buildCmd(inputPath string, outputPath string) int {
+	if err := check64BitTarget(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	result, err := transpile(inputPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

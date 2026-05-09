@@ -4,6 +4,23 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric Slice A — 64-bit GOARCH enforcement landed
+
+**Context:** The 2026-05-10 numeric-types decision pins `Int` to `Go int` and requires the host platform to be 64-bit so that `Int` ≡ `Int{bits: 64}` is a true identity. Without enforcement, an Arca program built on GOARCH=386 silently produces a binary whose `Int` is 32-bit, breaking Layer 1 the moment any value crosses the SSOT (`int64` columns, JSON numbers, hash output). Subsequent slices (`bits: N` storage hint, `T(x)?` narrowing, `std.checked.*`) all assume the 64-bit identity, so the seal must land before them.
+
+**Decision:** Two redundant guards.
+
+- Emit injects `//go:build amd64 || arm64 || ppc64 || ppc64le || mips64 || mips64le || riscv64 || s390x || loong64 || wasm` as the first line of every generated Go file (main + per-module). 32-bit targets see the file excluded; `go build` reports "no Go files in ..." rather than producing a Layer 1-violating binary.
+- `arca run` and `arca build` call `check64BitTarget()` before invoking the Go toolchain. The check honors `$GOARCH` (cross-compile override) and falls back to `runtime.GOARCH`. Failure prints `arca requires a 64-bit target: GOARCH=<arch> is not supported (Int is fixed to 64 bits)` with exit code 1 — a clearer signal than the toolchain's "no Go files" surface.
+
+The build-tag list and the runtime check share one source of truth (`target_arch.go`: `goBuild64BitTag` constant + `goarch64BitSet` map).
+
+`arca emit` does not precheck — it just prints Go to stdout. The build tag in the printed file is the seal; downstream `go build` will reject the file on a 32-bit target.
+
+**Status:** Landed 2026-05-10. ~100 LoC: `target_arch.go` (new), `emit.go` (one line in `Emit()`), `main.go` (precheck call in `runCmd` / `buildCmd`). All 56 testdata snapshots regenerated to include the build tag; `go test ./...` passes; `go vet` clean. Slice B (`UInt` core type) is the next foundational independent slice.
+
+---
+
 ## 2026-05-10: Numeric types — core + constrained type tower
 
 **Context:** B4 (examples/todo migration) hit `sql.Result.LastInsertId()` returning Go `int64` with no Arca representation — Arca modeled `Int` (= Go int) and `Float` (= float64) but nothing else from Go's full numeric tower (`int / int8/16/32/64 / uint / uint8/16/32/64 / float32/64 / byte / rune`). Quick fixes (Int64 primitive / cast syntax / stdlib helper / auto-narrow) sidestepped the policy gap. Full design discussion 2026-05-07 → 2026-05-10 covered concerns: Bytes, cast API, panic policy, arithmetic semantics, BigInt placement.
