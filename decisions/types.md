@@ -4,6 +4,26 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric types — core + constrained type tower
+
+**Context:** B4 (examples/todo migration) hit `sql.Result.LastInsertId()` returning Go `int64` with no Arca representation — Arca modeled `Int` (= Go int) and `Float` (= float64) but nothing else from Go's full numeric tower (`int / int8/16/32/64 / uint / uint8/16/32/64 / float32/64 / byte / rune`). Quick fixes (Int64 primitive / cast syntax / stdlib helper / auto-narrow) sidestepped the policy gap. Full design discussion 2026-05-07 → 2026-05-10 covered concerns: Bytes, cast API, panic policy, arithmetic semantics, BigInt placement.
+
+**Decision:** Three core types `Int / UInt / Float` plus a stdlib/numeric tower expressed as constrained types via `{bits: N}` opt-in storage hint.
+
+- **Core**: `Int = Go int` (64-bit-only enforced via `//go:build` + Arca CLI precheck — refuses GOARCH=386/arm/wasm32/mips/etc.). `UInt = Go uint` added to handle UInt64 representation gap; without it MySQL `BIGINT UNSIGNED`, hash output, and file mode have no representation. `Float = float64`.
+- **Tower**: `Int8 = Int{bits: 8}`, `UInt32 = UInt{bits: 32}`, `Float32 = Float{bits: 32}`, etc. — through existing constrained-type machinery, no new primitive category. `bits: N` is one constraint key alongside `min` / `max` / `pattern` / etc., but `bits` alone implies storage = N-bit and value range = N-bit natural; without `bits`, storage stays at base (preserves "Int default = Go int" cultural fit).
+- **D2 refined widening (range-aware)** extends to value flow positions (assignment, return, function arg, match arm) and arithmetic operands. When source range ⊆ target range, implicit widen (proven safe, no Result, no panic). Otherwise explicit `T(x)?` (Result-returning narrowing). Cross-base (`Int + UInt`) is a compile error — UInt's max exceeds int64, no safe common base.
+- **Cast API**: existing `T(x)?` constructor syntax extends uniformly across struct ctor (`User(id: 1)?`), constrained ctor (`Email("...")?`), and numeric narrowing (`Int8(intval)?`). Internal Go emit retains the `NewT` naming convention (compiler-only, user-invisible). No parallel `T.from(x)` API. Dispatch: source ⊆ T → returns T (no Result); source ⊄ T → returns Result. Bidirectional via type annotation for narrowing.
+- **Arithmetic on base types**: panics on overflow per Layer 1 violation detection policy (`decisions/foundations.md` 2026-05-10). Follows Rust 0560 RFC trend (default safe, opt-in unsafe). Silent wrap rejected, supported by production bug evidence: uint underflow leading to huge index, ID exhaustion, JS 2^53 precision loss across API boundaries. `std.checked.{add,sub,mul,div,mod,neg,wrapping*,saturating*}` prelude provides opt-in Result-returning safe arithmetic. Literal range checked statically (`let x: Int8 = 200` produces compile error).
+- **`std.bigint.BigInt`**: arbitrary-precision arithmetic, bridges Go's `math/big`. Third numeric layer alongside fast+panic (Int) and explicit Result (std.checked). Heap-allocated and slower; opt-in conversion via `BigInt(x: Int)`. No overflow possible.
+- **Bytes**: dedicated type rejected. `List[Byte]` (= Go `[]uint8` = `[]byte`) is sufficient. Binary blob operations (UTF-8 conversion, base64, hash) live as prelude/stdlib functions.
+
+Implementation slices A–G+I detailed in `design_numeric_types.md`. D+F+H bundled (numeric tower + cast + Bindable narrow validation) to preserve Layer 1 consistency — narrow types and Bindable-side narrowing land together so no intermediate state opens a silent overflow path.
+
+**Status:** Designed 2026-05-07, revised 2026-05-10. Memos updated 2026-05-10 (`design_numeric_types.md`, `design_panic_handling.md` 2026-05-10 entry, `design_two_layers.md` 2026-05-10 entry, `project_panic_audit_2026_05_02.md` 2026-05-10 update). Implementation pending (Phase 4: Slices A through I).
+
+---
+
 ## 2026-04-04: Variable shadowing in codegen
 
 **Context:** `let email = Email(email)?` inside a function with parameter `email` generated invalid Go — `email := __try_val1` re-declared the parameter in the same scope.
