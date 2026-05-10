@@ -555,11 +555,18 @@ Built-in constraints:
 
 | Type | Constraints |
 |------|-------------|
-| Int | `min`, `max` |
-| Float | `min`, `max` |
+| Int | `min`, `max`, `bits` (8 / 16 / 32 / 64) |
+| UInt | `min`, `max`, `bits` (8 / 16 / 32 / 64) |
+| Float | `min`, `max`, `bits` (32 / 64) |
 | String | `min_length`, `max_length`, `pattern` |
 | List | `min_length`, `max_length` |
 | All | `validate` (custom function) |
+
+`bits: N` is a storage hint, not a runtime check — the chosen Go type's range
+*is* the constraint. `Int{bits: 32}` emits as Go `int32`, `UInt{bits: 8}` as
+`uint8`, `Float{bits: 32}` as `float32`. Use it via type alias for naming
+(`type Int32 = Int{bits: 32}`) or inline at field positions
+(`Counter(small: Int{bits: 16})`). `bits` is rejected on non-numeric bases.
 
 ### Methods
 

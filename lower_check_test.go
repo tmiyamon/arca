@@ -1569,3 +1569,24 @@ impl Box: Bindable {
 		t.Fatalf("expected ErrUnsupportedFeature for manual impl Bindable, got: %v", errs)
 	}
 }
+
+// Slice C: `bits: N` storage hint accepts only widths supported by the base
+// numeric type (8 / 16 / 32 / 64 for Int / UInt; 32 / 64 for Float). Other
+// widths are rejected with ErrInvalidBitsConstraint.
+func TestLower_BitsInvalidWidth_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`type Bad = Int{bits: 7}`)
+	if !hasErrorCode(errs, ErrInvalidBitsConstraint) {
+		t.Fatalf("expected ErrInvalidBitsConstraint for Int{bits: 7}, got: %v", errs)
+	}
+}
+
+// Slice C: `bits` is meaningless on non-numeric bases — `String{bits: 32}`
+// has no storage interpretation and is rejected.
+func TestLower_BitsOnNonNumeric_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`type Bad = String{bits: 32}`)
+	if !hasErrorCode(errs, ErrInvalidBitsConstraint) {
+		t.Fatalf("expected ErrInvalidBitsConstraint for String{bits: 32}, got: %v", errs)
+	}
+}

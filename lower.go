@@ -1329,6 +1329,9 @@ func (l *Lowerer) lowerStructDecl(td TypeDecl) IRStructDecl {
 	ctor := td.Constructors[0]
 	fields := make([]IRFieldDecl, len(ctor.Fields))
 	for i, f := range ctor.Fields {
+		if nt, ok := f.Type.(NamedType); ok {
+			l.validateBitsConstraint(nt, nt.Pos)
+		}
 		tag := l.genStructTagFromRules(f.Name, td.Tags)
 		fields[i] = IRFieldDecl{
 			GoName: capitalize(f.Name),
@@ -1356,6 +1359,9 @@ func (l *Lowerer) lowerSumTypeDecl(td TypeDecl) IRSumTypeDecl {
 	for i, c := range td.Constructors {
 		fields := make([]IRFieldDecl, len(c.Fields))
 		for j, f := range c.Fields {
+			if nt, ok := f.Type.(NamedType); ok {
+				l.validateBitsConstraint(nt, nt.Pos)
+			}
 			fields[j] = IRFieldDecl{
 				GoName: capitalize(f.Name),
 				Type:   l.lowerType(f.Type),
@@ -1399,7 +1405,11 @@ func (l *Lowerer) lowerTypeAliasDecl(d TypeAliasDecl) IRTypeAliasDecl {
 	if !ok {
 		return IRTypeAliasDecl{GoName: d.Name, GoBase: "interface{}"}
 	}
-	goBase := irTypeEmitStr(l.lowerType(NamedType{Name: nt.Name, Params: nt.Params}))
+	l.validateBitsConstraint(nt, nt.Pos)
+	// Forward constraints so bits-aware numeric bases pick up int8 / uint32 /
+	// float32 / etc. Non-bits constraints are inert here and only flow into
+	// the validator below.
+	goBase := irTypeEmitStr(l.lowerType(NamedType{Name: nt.Name, Params: nt.Params, Constraints: nt.Constraints}))
 
 	var validator *IRValidator
 	if len(nt.Constraints) > 0 {
@@ -1437,6 +1447,9 @@ func (l *Lowerer) buildStructValidator(td TypeDecl) *IRValidator {
 		}
 		fieldVar := snakeToCamel(f.Name)
 		for _, c := range nt.Constraints {
+			if c.Key == "bits" {
+				continue // storage hint, not a runtime check
+			}
 			checks = append(checks, IRValidationCheck{
 				Kind:     c.Key,
 				Field:    fieldVar,
@@ -1457,6 +1470,9 @@ func (l *Lowerer) buildAliasValidator(typeName, goBase string, constraints []Con
 	zeroVal := typeZeroValue(typeName, goBase)
 	var checks []IRValidationCheck
 	for _, c := range constraints {
+		if c.Key == "bits" {
+			continue // storage hint, not a runtime check
+		}
 		if c.Key == "pattern" {
 			l.builtins["regexp"] = true
 		}
@@ -2605,15 +2621,119 @@ func (l *Lowerer) lowerType(t Type) IRType {
 	}
 }
 
+// bitsAllowedFor reports the valid `bits: N` widths for a numeric base type.
+// Returns nil for non-numeric bases. The widths follow Go's named integer /
+// float types so the storage hint maps to a real Go type without round-trip
+// loss (Int8 = int8, Float32 = float32, etc.).
+func bitsAllowedFor(base string) []int {
+	switch base {
+	case "Int", "UInt":
+		return []int{8, 16, 32, 64}
+	case "Float":
+		return []int{32, 64}
+	}
+	return nil
+}
+
+// bitsGoTypeFor maps (base, bits) to a Go type name when the combination is
+// valid. Returns "" for invalid combinations so callers can fall back to the
+// base's default Go type without emitting broken code.
+func bitsGoTypeFor(base string, bits int) string {
+	allowed := bitsAllowedFor(base)
+	for _, w := range allowed {
+		if w == bits {
+			switch base {
+			case "Int":
+				return fmt.Sprintf("int%d", bits)
+			case "UInt":
+				return fmt.Sprintf("uint%d", bits)
+			case "Float":
+				return fmt.Sprintf("float%d", bits)
+			}
+		}
+	}
+	return ""
+}
+
+// extractBitsConstraint pulls the `bits: N` value out of a constraint list.
+// Returns (value, pos, true) when present and the value is an IntLit; (0, _,
+// false) otherwise. Non-int values fall through to false so the caller's
+// non-bits path keeps working — a dedicated diagnostic is raised by
+// validateBitsConstraint when the form is wrong.
+func extractBitsConstraint(constraints []Constraint) (int, Pos, bool) {
+	for _, c := range constraints {
+		if c.Key != "bits" {
+			continue
+		}
+		if lit, ok := c.Value.(IntLit); ok {
+			return int(lit.Value), lit.Pos, true
+		}
+		return 0, c.Value.exprPos(), true
+	}
+	return 0, Pos{}, false
+}
+
+// validateBitsConstraint reports diagnostics for misuse of the `bits: N`
+// storage hint at a declaration site. Two failure modes: bits applied to a
+// non-numeric base (allowed = nil), and an out-of-range width on a numeric
+// base. Callers handle the result silently — invalid input still produces
+// some IR (the base's default Go type) so cascade errors don't multiply.
+func (l *Lowerer) validateBitsConstraint(nt NamedType, declPos Pos) {
+	bits, bitsPos, ok := extractBitsConstraint(nt.Constraints)
+	if !ok {
+		return
+	}
+	pos := bitsPos
+	if pos == (Pos{}) {
+		pos = declPos
+	}
+	allowed := bitsAllowedFor(nt.Name)
+	if allowed == nil {
+		l.addCompileError(ErrInvalidBitsConstraint, pos, InvalidBitsConstraintData{
+			Base:  nt.Name,
+			Value: bits,
+		})
+		return
+	}
+	if bitsGoTypeFor(nt.Name, bits) == "" {
+		l.addCompileError(ErrInvalidBitsConstraint, pos, InvalidBitsConstraintData{
+			Base:    nt.Name,
+			Value:   bits,
+			Allowed: allowed,
+		})
+	}
+}
+
+// numericGoTypeFromConstraints picks the Go type name for a numeric base when
+// a `bits: N` storage hint is present and valid; returns "" so the caller
+// falls back to the base default (`int`, `uint`, `float64`) when bits is
+// absent or invalid.
+func numericGoTypeFromConstraints(base string, constraints []Constraint) string {
+	bits, _, ok := extractBitsConstraint(constraints)
+	if !ok {
+		return ""
+	}
+	return bitsGoTypeFor(base, bits)
+}
+
 func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 	switch nt.Name {
 	case "Unit":
 		return IRNamedType{GoName: "struct{}"}
 	case "Int":
+		if goName := numericGoTypeFromConstraints("Int", nt.Constraints); goName != "" {
+			return IRNamedType{GoName: goName}
+		}
 		return IRNamedType{GoName: "int"}
 	case "UInt":
+		if goName := numericGoTypeFromConstraints("UInt", nt.Constraints); goName != "" {
+			return IRNamedType{GoName: goName}
+		}
 		return IRNamedType{GoName: "uint"}
 	case "Float":
+		if goName := numericGoTypeFromConstraints("Float", nt.Constraints); goName != "" {
+			return IRNamedType{GoName: goName}
+		}
 		return IRNamedType{GoName: "float64"}
 	case "String":
 		return IRNamedType{GoName: "string"}

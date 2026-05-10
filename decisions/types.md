@@ -4,6 +4,23 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric Slice C — `bits: N` storage hint landed
+
+**Context:** The 2026-05-10 numeric-types decision expresses the integer / float tower (`Int8` … `Int64`, `UInt8` … `UInt64`, `Float32`) as constrained types via a `bits: N` constraint key, sharing the existing `min` / `max` / `pattern` constraint machinery. Slice C is the foundational mechanism: every site that translates `Int{bits: 32}` to a Go type, and every diagnostic that catches misuse, must work before the stdlib numeric tower (Slice D+F+H) can land on top.
+
+**Decision:** Treat `bits` as a parser-level constraint key (no grammar change — `parseConstraints` is already key-agnostic) plus a lower-level type override.
+
+- `bitsAllowedFor(base)` lists valid widths per numeric base (`8 / 16 / 32 / 64` for `Int` / `UInt`; `32 / 64` for `Float`). `bitsGoTypeFor(base, bits)` returns the Go type name (`int32`, `uint8`, `float32`, …) or `""` on a mismatch.
+- `lowerNamedType` peeks at `nt.Constraints` for the three numeric branches and substitutes the bits-aware Go name when valid; falls back to the base default (`int` / `uint` / `float64`) otherwise. So `Int{bits: 32}` lowers to `IRNamedType{GoName: "int32"}` whether it appears as a type-alias body or inline at a struct field.
+- `lowerTypeAliasDecl` now forwards `nt.Constraints` into `lowerType` (previously stripped) so `type Int32 = Int{bits: 32}` emits `type Int32 int32`. `buildAliasValidator` and `buildStructValidator` skip the `bits` key — the storage type *is* the constraint, not a runtime check.
+- `validateBitsConstraint` runs at declaration sites (type-alias body, struct field, sum-variant field) and raises `ErrInvalidBitsConstraint` with `InvalidBitsConstraintData` for two failure modes: non-numeric base (allowed list empty → "bits constraint not supported on String; only Int / UInt / Float accept bits") and out-of-range width ("invalid bits value 7 for Int; allowed: 8, 16, 32, 64"). Validation is decl-only to avoid duplicate diagnostics across repeated lowerings of the same usage.
+
+`min` / `max` continue to compose with `bits` (`Int{bits: 8, min: 0}` works — bits picks `int8` storage, `min` adds a runtime check on the int8 value). The `bits` axis is one hard-coded constraint key alongside `min` / `max` / `pattern`; `design_constrained_axes.md` 2026-05-09 records the future axis-registry refactor.
+
+**Status:** Landed 2026-05-10. ~120 LoC across `lower.go` (helpers + `lowerNamedType` branches + decl-site validation), `types.go` (error code + data), and tests (`testdata/bits_storage.arca` + two `lower_check_test` cases). `go test ./...` passes; `go vet` clean. The stdlib numeric tower lands as part of Slice D+F+H bundle; for Slice C alone, user code can already declare its own bits-aware aliases.
+
+---
+
 ## 2026-05-10: Numeric Slice B — `UInt` core type landed
 
 **Context:** The 2026-05-10 numeric-types decision adds `UInt = Go uint` alongside `Int` and `Float` to close the UInt64 representation gap surfaced by B4 — MySQL `BIGINT UNSIGNED`, hash output, file mode, and similar Go APIs have no Arca representation without it. Slice B is the foundational plumbing: every site that recognises `Int` as a primitive must recognise `UInt` symmetrically before constrained narrow types (`UInt8 = UInt{bits: 8}`) can land.

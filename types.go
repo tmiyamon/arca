@@ -39,6 +39,7 @@ const (
 	ErrMethodAccessAsField
 	ErrNonBindableTypeArg
 	ErrGoFFINameConvention
+	ErrInvalidBitsConstraint
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -201,6 +202,27 @@ type GoFFINameConventionData struct {
 
 func (d GoFFINameConventionData) Message() string {
 	return fmt.Sprintf("Go FFI %s names are PascalCase; use `%s` instead of `%s`", d.Kind, d.Expected, d.Given)
+}
+
+// InvalidBitsConstraintData reports a misuse of the `bits: N` storage hint —
+// either a non-numeric base type (e.g. `String{bits: 32}`) or an out-of-range
+// width for a numeric base (e.g. `Int{bits: 7}`). Allowed is empty when the
+// base does not support `bits` at all; otherwise it lists the valid widths.
+type InvalidBitsConstraintData struct {
+	Base    string // "Int", "UInt", "Float", or the offending base name
+	Value   int    // the bits value as written (0 if missing or non-int)
+	Allowed []int  // valid bit widths for Base, or empty if bits is not allowed
+}
+
+func (d InvalidBitsConstraintData) Message() string {
+	if len(d.Allowed) == 0 {
+		return fmt.Sprintf("bits constraint not supported on %s; only Int / UInt / Float accept bits", d.Base)
+	}
+	parts := make([]string, len(d.Allowed))
+	for i, v := range d.Allowed {
+		parts[i] = fmt.Sprintf("%d", v)
+	}
+	return fmt.Sprintf("invalid bits value %d for %s; allowed: %s", d.Value, d.Base, strings.Join(parts, ", "))
 }
 
 // NonBindableTypeArgData reports calling a Bindable-constrained stdlib
