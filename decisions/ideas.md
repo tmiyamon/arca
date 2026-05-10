@@ -4,6 +4,25 @@ Future features and design sketches. Newest first.
 
 ---
 
+## 2026-05-10: Numeric trait as compiler intrinsic (Slice J)
+
+**Context:** Slice E5 shipped `stdlib.CheckedAddInt` / `CheckedSubInt` / … as a function bag (8 funcs × Int / UInt). The user surface — `stdlib.CheckedAddInt(a, b)?` — is verbose and per-type. A `Numeric` trait would let users write `a.checkedAdd(b)?` for any numeric type, mirroring Rust's `num_traits` and Haskell's `Num`. Discussion 2026-05-10 evaluated the trade-off: stdlib still needs per-type Go bodies (overflow check varies by width — `bits.Add64` is uint64-specific, signed needs sign-comparison), so a trait abstraction does not reduce stdlib LoC. The win is purely call-site syntax.
+
+**Decision (sketch):** Compiler intrinsic following Bindable's pattern.
+
+- `Numeric` is reserved as an intrinsic trait (like `Bindable`), not a user-declarable trait. Manual `impl T: Numeric` is rejected.
+- Compiler auto-implements for `Int` / `UInt` / `Float` and the 10 tower types (`Int8` … `Float64`); each method dispatches to a stdlib Go function (`CheckedAddInt` etc.). Same pattern as `derive Bindable`'s synthesised impl methods.
+- Generic constraint `[T: Numeric]` in user functions becomes acceptable. Today `lowerFnCommon` validates only `Bindable` as a generic constraint; widening to `Numeric` is a small extension point (see `intrinsicTraitNames` registry).
+- Phase 1 trait system forbids `Self` in trait sigs, so `fun checkedAdd(self, other: Self)` cannot be expressed yet. `Numeric` requires Phase 2 trait extension that lifts the `Self` restriction (or compiler-side substitution of `Self` per impl, which is what Bindable does internally).
+
+**Estimated cost:** ~300 LoC. Bindable's synthesis machinery is the template — `synthesizeBindableTypes` / `synthesizeBindableDispatch` show the shape. No new stdlib code beyond the existing 8 checked funcs.
+
+**Trigger:** real ergonomics demand. If `stdlib.CheckedAddInt(a, b)?` appears repeatedly in user code or `examples/todo` flows, the per-type call-site verbosity becomes the motivation.
+
+**Deferred:** until a real consumer surfaces. Slice E function-bag covers Layer 1 today; Slice J is ergonomics improvement.
+
+---
+
 ## 2026-05-02: Two-stage IR completion — Stage 2 IR mirrors Go structure, emit is a pretty-printer (design)
 
 **Context:** A "match on call expression" bug — `match sql.Open(...) { Ok(db) => ... }` emits broken Go like `sql.Open(...)_err == nil` — surfaced an underlying structural defect rather than a one-off oversight. `emitMatchResult` reads `subject := em.emitExpr(m.Subject)` and string-concatenates `subject + "_err"` to fabricate the discriminator name; the whole pattern works only when the subject happens to be an `IRIdent` whose split names were registered in `expandCtx.splits` by a preceding `IRLetStmt`. A survey of `emit.go` found 12 sites where emit is reconstructing dispatch / wrapping / type information that lower already knew but did not encode in IR:
