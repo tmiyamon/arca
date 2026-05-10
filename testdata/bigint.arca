@@ -1,0 +1,17 @@
+// Slice I: stdlib.BigInt — arbitrary-precision arithmetic. Heap-allocated;
+// use when Int's 64-bit range isn't enough (cryptographic ids, summing
+// large counts, currency in smallest units, etc.).
+
+import stdlib
+
+fun main() -> Result[Unit, Error] {
+  let a = stdlib.NewBigInt(1000000)
+  let b = stdlib.NewBigInt(1000000)
+  let product = a.Mul(b)
+  println(product.String())
+
+  let huge = stdlib.BigIntFromString("123456789012345678901234567890")?
+  println(huge.String())
+
+  Ok(Unit)
+}

@@ -266,6 +266,12 @@ func TestE2ENumericTower(t *testing.T) {
 	runE2E(t, "testdata/numeric_tower.arca", "out of range caught\n")
 }
 
+// Slice I: stdlib BigInt round-trips through Go math/big and survives
+// values well past int64 range.
+func TestE2EBigInt(t *testing.T) {
+	runE2E(t, "testdata/bigint.arca", "1000000000000\n123456789012345678901234567890\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 

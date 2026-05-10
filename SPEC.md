@@ -451,6 +451,24 @@ let q = stdlib.CheckedDivInt(a, 0)     // → Err(ErrDivByZero)
 Coverage: `CheckedAdd / Sub / Mul / Div` × `Int / UInt` (8 functions). Float
 checked variants land when there is a real consumer.
 
+For values that exceed `Int` / `UInt`'s 64-bit range entirely (cryptographic
+ids, large-counter sums, smallest-unit currency), `stdlib.BigInt` provides
+arbitrary-precision arithmetic via Go's `math/big`:
+
+```
+import stdlib
+
+let a = stdlib.NewBigInt(1000000)
+let b = a.Mul(a)                          // 10^12, still fits Int
+let huge = stdlib.BigIntFromString("123456789012345678901234567890")?
+println(huge.Mul(huge).String())          // arbitrary precision
+let narrow = huge.ToInt()                  // Result — Err on overflow
+```
+
+`BigInt` is heap-allocated and slower than `Int`; use it only when range
+forces the choice. Conversion to / from `Int` is explicit (`NewBigInt(v)`
+to widen, `b.ToInt()?` to narrow).
+
 ### Map
 
 ```

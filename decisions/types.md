@@ -4,6 +4,16 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric Slice I — `stdlib.BigInt` landed
+
+**Context:** `Int` panics on overflow (Slice E4) and `stdlib.CheckedAdd*` returns `Err` (Slice E5), but neither helps when the *values themselves* exceed int64 — cryptographic ids, summing large counts, currency in smallest units, etc. The 2026-05-10 numeric tower design positioned arbitrary-precision arithmetic as the third numeric layer and committed to a Go `math/big` bridge. Slice I delivers it.
+
+**Decision:** Single immutable `BigInt` type wrapping `*big.Int`. Operations always allocate a fresh result so the user sees no mutation; performance-conscious callers can drop down to direct `math/big` via FFI if a hot path demands in-place updates. Surface stays method-style to mirror `BindableSlot` etc.: `NewBigInt(v: Int)` factory, `BigIntFromString` for arbitrary input, `Add` / `Sub` / `Mul` / `Div` / `Mod` / `Neg` for arithmetic, `Eq` / `Lt` / `Gt` for comparison, `String` for display, `ToInt` for narrowing back. `Div` and `Mod` reject divisor zero with `ErrDivByZero`; `BigIntFromString` rejects malformed strings with `ErrBigIntInvalid`; `ToInt` rejects out-of-range values with `ErrBigIntRange`. `Le` / `Ge` are not on the surface — derivable as `!Gt` / `!Lt`.
+
+**Status:** Landed 2026-05-10. ~110 LoC: `stdlib/bigint.go` (BigInt + 11 methods + 2 factory funcs + 3 sentinel errors); `stdlib/bigint_test.go` (8 tests covering round-trip / overflow / div-by-zero / comparison / Neg+Mul chain); `testdata/bigint.arca` + .go demonstrating usage; `TestE2EBigInt` exercising the round-trip end-to-end. Numeric tower design now fully implemented except Slice G (B4 verification, user-side).
+
+---
+
 ## 2026-05-10: Numeric Slice E — literal coercion, cross-base, arithmetic panic, std.checked landed
 
 **Context:** With Slices A–D+F+H landed, narrow numeric tower types and `T(x)?` casts work, but two Layer 1 leaks remained at value-flow boundaries: (1) `let x: Int8 = 200` failed with a generic type-mismatch instead of an out-of-range diagnostic, and (2) `Int + UInt` passed Arca's lowerer because IRNamedType equality was satisfied at neither side, falling through to invalid Go (`int + uint`) caught only at `go vet`. A third gap was structural: `Int + Int` on the base types silently wrapped on overflow, since lowerBinaryExpr emitted plain Go `a + b`. Slice E plugs the three gaps and adds the opt-in Result-returning surface for arithmetic that should not panic.
