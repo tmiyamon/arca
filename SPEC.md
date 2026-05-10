@@ -429,6 +429,14 @@ Numeric literal hint coercion (`let x: Int8 = 100`) types the literal at
 the hint's Go type when the value fits; out-of-range literals fail at
 compile time (`let x: Int8 = 200` rejected with line:col diagnostic).
 
+Same-kind widening fires implicitly when the source range fits the
+target — `Int8 → Int` / `Int32 → Int64` / `UInt8 → UInt32` flow without
+a cast, and the compiler inserts the Go conversion (`int(int8val)`)
+behind the scenes. Asymmetric: narrowing (`Int → Int8`) still requires
+an explicit `Int8(...)?` cast. Cross-kind (signed↔unsigned, integer↔
+float) keeps requiring an explicit cast as well — the cross-base
+diagnostic catches the mistake before emit.
+
 `+ - *` on `Int` / `UInt` operands route through panic-checked emit
 helpers (`__addInt`, `__subUInt`, `__mulInt`, ...) — overflow / underflow
 trips a runtime panic so silent wrap is no longer a Layer 1 leak. Narrow

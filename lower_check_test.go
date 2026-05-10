@@ -1632,3 +1632,24 @@ func TestLower_CrossBaseComparison_Errors(t *testing.T) {
 		t.Fatalf("expected ErrCrossBaseArithmetic for Int < UInt, got: %v", errs)
 	}
 }
+
+// D2 refined widening: a same-kind narrower source (Int8) flows into a
+// wider target (Int) without an explicit cast. The lowerer wraps the
+// value in a Go conversion at emit, but no diagnostic should fire.
+func TestLower_NumericWideningCompatible_OK(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun f(a: Int8) -> Int { a }`)
+	if len(errs) != 0 {
+		t.Fatalf("Int8 → Int widen: expected no errors, got: %v", errs)
+	}
+}
+
+// D2 refined widening is asymmetric — narrowing (Int → Int8) still
+// requires an explicit `Int8(...)?` cast.
+func TestLower_NumericNarrowingRejected_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun f(a: Int) -> Int8 { a }`)
+	if !hasErrorCode(errs, ErrTypeMismatch) {
+		t.Fatalf("Int → Int8 narrow: expected ErrTypeMismatch, got: %v", errs)
+	}
+}

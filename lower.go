@@ -310,6 +310,16 @@ func (l *Lowerer) unify(a, b IRType, pos Pos) bool {
 	if l.errorTraitCompatible(a, b) {
 		return true
 	}
+	// D2 refined widening: source range ⊆ target range fires implicit
+	// widening at hint-driven sites. The structural unify above didn't
+	// match because Go treats `int` / `int64` / `int8` as distinct types
+	// even when ranges coincide; this branch lets `let x: Int =
+	// res.LastInsertId()?` flow through without an explicit `Int(...)?`
+	// cast. The Go conversion wrap that emit needs is inserted by
+	// `applyNumericWidening` at the lowerExprHint boundary.
+	if numericWideningCompatible(a, b) {
+		return true
+	}
 	l.addCompileError(ErrTypeMismatch, pos, TypeMismatchData{
 		Expected: irTypeDisplayStr(l.resolveDeep(b)),
 		Actual:   irTypeDisplayStr(l.resolveDeep(a)),
@@ -2983,6 +2993,59 @@ func numericRangeMaxStr(r numericRange) string {
 	return ""
 }
 
+// numericWideningCompatible reports whether source's static range ⊆ target's
+// static range, so an implicit widen at a hint-driven site is proven safe.
+// Asymmetric: only fires when source is contained, not the other direction.
+// Same-kind only — cross-base (signed↔unsigned) is rejected here so the
+// dedicated cross-base diagnostic (Slice E3) at the binary-op site catches
+// it; cross-int↔float likewise routes through explicit `T(x)?` casts.
+func numericWideningCompatible(source, target IRType) bool {
+	sr, sok := numericRangeOf(source)
+	tr, tok := numericRangeOf(target)
+	if !sok || !tok {
+		return false
+	}
+	if sr.Kind != tr.Kind {
+		return false
+	}
+	switch sr.Kind {
+	case "signed":
+		return sr.MinI >= tr.MinI && sr.MaxI <= tr.MaxI
+	case "unsigned":
+		return sr.MaxU <= tr.MaxU
+	case "float":
+		return sr.Bits <= tr.Bits
+	}
+	return false
+}
+
+// applyNumericWidening wraps a hint-driven result in a Go conversion when
+// the source range proves to fit the target range. The wrap is just an
+// IRFnCall whose Fn is the target's Go type name (`int(int64val)` →
+// `int(...)`). When source and target have the same Go name (no widening
+// needed) or widening doesn't apply, the result passes through unchanged.
+func applyNumericWidening(result IRExpr, hint IRType) IRExpr {
+	if hint == nil {
+		return result
+	}
+	hintNamed, ok := hint.(IRNamedType)
+	if !ok {
+		return result
+	}
+	resultNamed, _ := result.irType().(IRNamedType)
+	if resultNamed.GoName == hintNamed.GoName {
+		return result
+	}
+	if !numericWideningCompatible(result.irType(), hint) {
+		return result
+	}
+	return IRFnCall{
+		Fn:   IRIdent{GoName: hintNamed.GoName},
+		Args: []IRExpr{result},
+		Type: hint,
+	}
+}
+
 // intLitFitsRange reports whether a signed-int literal value fits the given
 // numeric range. Floats accept any int literal (precision loss is allowed
 // per the design's "Int → Float silent Ok" rule).
@@ -3210,6 +3273,12 @@ func (l *Lowerer) lowerExprHint(expr Expr, hint IRType) IRExpr {
 	if hint != nil && result != nil {
 		result = l.autoSomeLift(result, hint)
 		l.checkTypeHint(result, hint, expr)
+		// D2 refined widening: when the source numeric range ⊆ the hint
+		// range, wrap the result in a Go conversion so emit produces
+		// `int(int64val)` instead of mismatched-type code. The unify path
+		// in `checkTypeHint` already accepts the widening; this is the
+		// emit-side fixup.
+		result = applyNumericWidening(result, hint)
 	}
 	return result
 }

@@ -1,0 +1,14 @@
+// D2 refined widening: same-kind narrower source flows into a wider
+// target hint without an explicit cast. The compiler inserts a Go
+// conversion (`int(int8val)`, `int64(int32val)`, ...) at the call site.
+
+fun fromInt8(a: Int8) -> Int { a }
+fun fromInt16(a: Int16) -> Int64 { a }
+fun fromUInt8(a: UInt8) -> UInt { a }
+fun fromUInt32(a: UInt32) -> UInt64 { a }
+
+type Counter (id: Int64, body: String)
+
+fun makeCounter(id: Int32, body: String) -> Counter {
+  Counter(id, body)
+}

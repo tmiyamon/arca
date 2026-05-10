@@ -4,6 +4,20 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-10: Numeric D2 refined widening landed
+
+**Context:** Slice E shipped literal hint coercion + cross-base diagnostic + arithmetic panic + `std.checked` but explicitly deferred D2 refined value-flow widening (`let x: Int = int8val` auto-conversion). The user flagged this as missing the B4 motivating case — `let id: Int = res.LastInsertId()?` produces `int64` from Go FFI which Arca treats as `Int64`, and assigning to `Int` (= Go `int`) failed with a generic type-mismatch even though the ranges coincide on a 64-bit target. Forcing user-side `Int(...)?` ceremony for what the design promised as implicit defeats the numeric tower's ergonomic intent.
+
+**Decision:** Two coordinated additions sharing the existing range registry from Slice E1.
+
+- **`numericWideningCompatible(source, target)`** — same-kind only (signed × signed, unsigned × unsigned, float × float); reports whether `source.range ⊆ target.range`. Cross-kind returns false so the dedicated cross-base diagnostic still fires at binary-op sites and explicit `T(x)?` casts remain the path between integer sign-classes / between integer and float.
+- **`Lowerer.unify`** appends the new compat check after the structural / constraint / trait branches. unify success no longer requires structural identity for numeric types — the proven-safe widening direction is admissible.
+- **`applyNumericWidening(result, hint)`** wraps the lowered result in an `IRFnCall{Fn: IRIdent{GoName: hint.GoName}, Args: [result]}` so emit produces `int(int8val)` / `int64(int32val)` / etc. The wrap fires only at the `lowerExprHint` boundary — every hint-driven site (let bind, fn arg, struct ctor, return) sees it automatically.
+
+**Status:** Landed 2026-05-10. ~80 LoC: `lower.go` (`numericWideningCompatible` + `applyNumericWidening` + unify branch + lowerExprHint wrap), `lower_check_test.go` (2 tests covering both directions), `testdata/widening.arca` + .go demonstrating the conversion shape. examples/todo/main.arca (the B4 source) compiles cleanly without manual cast — `NewTodo(int(id), todo.Body, ...)` materialises automatically. Float-Int auto-widening (`Int → Float`) remains explicit for now; the design memo notes "Int → Float silent Ok" but the same-kind constraint here keeps the change minimal and the explicit `Float(...)?` cast still works.
+
+---
+
 ## 2026-05-10: Numeric Slice I — `stdlib.BigInt` landed
 
 **Context:** `Int` panics on overflow (Slice E4) and `stdlib.CheckedAdd*` returns `Err` (Slice E5), but neither helps when the *values themselves* exceed int64 — cryptographic ids, summing large counts, currency in smallest units, etc. The 2026-05-10 numeric tower design positioned arbitrary-precision arithmetic as the third numeric layer and committed to a Go `math/big` bridge. Slice I delivers it.
