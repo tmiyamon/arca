@@ -13,7 +13,7 @@ func parseAndDouble(s string) (int, error) {
 		return 0, __err1
 	}
 	n := __val1
-	return n * 2, nil
+	return __mulInt(n, 2), nil
 }
 
 func main() {
@@ -39,4 +39,12 @@ func (e __goError) Error() string {
 
 func (e __goError) Unwrap() error {
 	return e.inner
+}
+
+func __mulInt(a, b int) int {
+	p := a * b
+	if a != 0 && p/a != b {
+		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
+	}
+	return p
 }

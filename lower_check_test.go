@@ -1590,3 +1590,45 @@ func TestLower_BitsOnNonNumeric_Errors(t *testing.T) {
 		t.Fatalf("expected ErrInvalidBitsConstraint for String{bits: 32}, got: %v", errs)
 	}
 }
+
+// Slice E2: an integer literal hint-typed to a narrow tower type is
+// statically checked. `let x: Int8 = 200` overflows int8 (-128..127) and
+// must surface before any runtime path runs.
+func TestLower_LiteralOverflowsNarrowHint_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun main() { let x: Int8 = 200 }`)
+	if !hasErrorCode(errs, ErrLiteralOutOfRange) {
+		t.Fatalf("expected ErrLiteralOutOfRange for Int8 = 200, got: %v", errs)
+	}
+}
+
+// Slice E2: a negative literal hint-typed to an unsigned narrow type also
+// surfaces statically. `let x: UInt8 = -1` is impossible.
+func TestLower_NegativeLiteralOnUnsignedHint_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun main() { let x: UInt8 = -1 }`)
+	if !hasErrorCode(errs, ErrLiteralOutOfRange) {
+		t.Fatalf("expected ErrLiteralOutOfRange for UInt8 = -1, got: %v", errs)
+	}
+}
+
+// Slice E3: arithmetic mixing signed and unsigned operands has no safe
+// common base — UInt's max exceeds int64. The user must convert one side
+// via `Int(uintval)?` or `UInt(intval)?` explicitly.
+func TestLower_CrossBaseArithmetic_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun f(a: Int, b: UInt) -> Int { a + b }`)
+	if !hasErrorCode(errs, ErrCrossBaseArithmetic) {
+		t.Fatalf("expected ErrCrossBaseArithmetic for Int + UInt, got: %v", errs)
+	}
+}
+
+// Slice E3: cross-base also catches comparisons. Go would silently fail
+// to compile, but we want a Arca-level diagnostic before that.
+func TestLower_CrossBaseComparison_Errors(t *testing.T) {
+	t.Parallel()
+	errs := validateSource(`fun f(a: Int, b: UInt) -> Bool { a < b }`)
+	if !hasErrorCode(errs, ErrCrossBaseArithmetic) {
+		t.Fatalf("expected ErrCrossBaseArithmetic for Int < UInt, got: %v", errs)
+	}
+}

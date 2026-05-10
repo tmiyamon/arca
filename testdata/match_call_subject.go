@@ -11,7 +11,7 @@ func double(s string) (int, error) {
 	__match1, __match1_err := strconv.Atoi(s)
 	if __match1_err == nil {
 		n := __match1
-		return n + n, nil
+		return __addInt(n, n), nil
 	} else {
 		e := __goError{inner: __match1_err}
 		return 0, e
@@ -34,4 +34,12 @@ func (e __goError) Error() string {
 
 func (e __goError) Unwrap() error {
 	return e.inner
+}
+
+func __addInt(a, b int) int {
+	s := a + b
+	if (a >= 0) == (b >= 0) && (a >= 0) != (s >= 0) {
+		panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))
+	}
+	return s
 }

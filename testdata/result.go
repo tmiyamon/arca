@@ -13,10 +13,18 @@ func parseAndDouble(s string) (int, error) {
 		return 0, __err1
 	}
 	n := __val1
-	return n + n, nil
+	return __addInt(n, n), nil
 }
 
 func main() {
 	fmt.Println(parseAndDouble("21"))
 	fmt.Println(parseAndDouble("abc"))
+}
+
+func __addInt(a, b int) int {
+	s := a + b
+	if (a >= 0) == (b >= 0) && (a >= 0) != (s >= 0) {
+		panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))
+	}
+	return s
 }

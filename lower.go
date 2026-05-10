@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 )
@@ -929,6 +930,10 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	// for range checks and math.IsInf for the float32 narrowing guard.
 	if l.needsMathImport() && !l.hasImport("math") {
 		imports = append(imports, IRImport{Path: "math"})
+	}
+	// Slice E4: __addUInt / __mulUInt use math/bits for overflow detection.
+	if (l.builtins["__addUInt"] || l.builtins["__mulUInt"]) && !l.hasImport("math/bits") {
+		imports = append(imports, IRImport{Path: "math/bits"})
 	}
 
 	return IRProgram{
@@ -2850,6 +2855,152 @@ func narrowFieldBuiltinKey(validatorFn string) string {
 	return ""
 }
 
+// numericRange describes the value range of a built-in numeric Go primitive.
+// Either MinI/MaxI (signed) or MaxU (unsigned, min always 0) carries the
+// bounds; floats carry only Bits since their range is implicit. Built-in
+// types only — user-defined narrows (`type Score = Int{min, max}`) flow
+// through their own `NewScore` validator and don't go through this table.
+type numericRange struct {
+	Kind string // "signed", "unsigned", "float"
+	MinI int64  // signed
+	MaxI int64
+	MaxU uint64 // unsigned (Min always 0)
+	Bits int    // 32 or 64 for float
+}
+
+// numericRangeOf returns the static range of a numeric Go type, or
+// (_, false) for non-numeric / unknown types. The lookup is keyed by the
+// resolved Go type name so it works after lowerNamedType has run.
+func numericRangeOf(t IRType) (numericRange, bool) {
+	nt, ok := t.(IRNamedType)
+	if !ok {
+		return numericRange{}, false
+	}
+	switch nt.GoName {
+	case "int8":
+		return numericRange{Kind: "signed", MinI: math.MinInt8, MaxI: math.MaxInt8}, true
+	case "int16":
+		return numericRange{Kind: "signed", MinI: math.MinInt16, MaxI: math.MaxInt16}, true
+	case "int32":
+		return numericRange{Kind: "signed", MinI: math.MinInt32, MaxI: math.MaxInt32}, true
+	case "int64", "int":
+		return numericRange{Kind: "signed", MinI: math.MinInt64, MaxI: math.MaxInt64}, true
+	case "uint8":
+		return numericRange{Kind: "unsigned", MaxU: math.MaxUint8}, true
+	case "uint16":
+		return numericRange{Kind: "unsigned", MaxU: math.MaxUint16}, true
+	case "uint32":
+		return numericRange{Kind: "unsigned", MaxU: math.MaxUint32}, true
+	case "uint64", "uint":
+		return numericRange{Kind: "unsigned", MaxU: math.MaxUint64}, true
+	case "float32":
+		return numericRange{Kind: "float", Bits: 32}, true
+	case "float64":
+		return numericRange{Kind: "float", Bits: 64}, true
+	}
+	return numericRange{}, false
+}
+
+// widenIntegerToBase ensures a numeric expression is in its base Go width
+// (int / uint) so the panic-checked arithmetic helpers see a fixed signature.
+// Narrow operands get a Go conversion wrap (`int(int8val)` / `uint(uint16val)`);
+// already-base operands pass through unchanged. Float passes through (the
+// arithmetic-panic path skips floats — Inf is in spec).
+func widenIntegerToBase(expr IRExpr) IRExpr {
+	r, ok := numericRangeOf(expr.irType())
+	if !ok {
+		return expr
+	}
+	switch r.Kind {
+	case "signed":
+		if nt, _ := expr.irType().(IRNamedType); nt.GoName == "int" {
+			return expr
+		}
+		return IRFnCall{
+			Fn:   IRIdent{GoName: "int"},
+			Args: []IRExpr{expr},
+			Type: IRNamedType{GoName: "int"},
+		}
+	case "unsigned":
+		if nt, _ := expr.irType().(IRNamedType); nt.GoName == "uint" {
+			return expr
+		}
+		return IRFnCall{
+			Fn:   IRIdent{GoName: "uint"},
+			Args: []IRExpr{expr},
+			Type: IRNamedType{GoName: "uint"},
+		}
+	}
+	return expr
+}
+
+// arithmeticHelper picks the panic-checked helper name for a (kind, op)
+// pair. Returns "" for ops / kinds outside Slice E4's scope so the caller
+// falls through to the plain `IRBinaryExpr` emit.
+func arithmeticHelper(kind, op string) string {
+	switch kind {
+	case "signed":
+		switch op {
+		case "+":
+			return "__addInt"
+		case "-":
+			return "__subInt"
+		case "*":
+			return "__mulInt"
+		}
+	case "unsigned":
+		switch op {
+		case "+":
+			return "__addUInt"
+		case "-":
+			return "__subUInt"
+		case "*":
+			return "__mulUInt"
+		}
+	}
+	return ""
+}
+
+// numericRangeMinStr / numericRangeMaxStr render a range bound as a decimal
+// string for diagnostics. Floats omit bounds (Inf is in-spec).
+func numericRangeMinStr(r numericRange) string {
+	switch r.Kind {
+	case "signed":
+		return fmt.Sprintf("%d", r.MinI)
+	case "unsigned":
+		return "0"
+	}
+	return ""
+}
+
+func numericRangeMaxStr(r numericRange) string {
+	switch r.Kind {
+	case "signed":
+		return fmt.Sprintf("%d", r.MaxI)
+	case "unsigned":
+		return fmt.Sprintf("%d", r.MaxU)
+	}
+	return ""
+}
+
+// intLitFitsRange reports whether a signed-int literal value fits the given
+// numeric range. Floats accept any int literal (precision loss is allowed
+// per the design's "Int → Float silent Ok" rule).
+func intLitFitsRange(value int64, r numericRange) bool {
+	switch r.Kind {
+	case "signed":
+		return value >= r.MinI && value <= r.MaxI
+	case "unsigned":
+		if value < 0 {
+			return false
+		}
+		return uint64(value) <= r.MaxU
+	case "float":
+		return true
+	}
+	return false
+}
+
 // numericTowerInfo describes the Slice F cast `T(x)?` for a tower or base
 // numeric type. GoType is the target Go primitive (`int8`, `uint32`, …).
 // SourceGoType is the wide Go type the validator accepts; the call site emits
@@ -3101,9 +3252,34 @@ func (l *Lowerer) autoSomeLift(result IRExpr, hint IRType) IRExpr {
 func (l *Lowerer) dispatchLowerExpr(expr Expr, hint IRType) IRExpr {
 	switch e := expr.(type) {
 	case IntLit:
-		return IRIntLit{Value: e.Value, Type: IRNamedType{GoName: "int"}}
+		// Hint-driven literal coercion: when the surrounding context types
+		// the literal as a narrow numeric, retype the IRIntLit to that Go
+		// type and statically reject out-of-range values. Without a hint —
+		// or with a hint that isn't a numeric primitive — fall through to
+		// the default `int` typing so existing flows are unaffected.
+		litType := IRNamedType{GoName: "int"}
+		if r, ok := numericRangeOf(hint); ok {
+			if hintNamed, _ := hint.(IRNamedType); hintNamed.GoName != "" {
+				if !intLitFitsRange(e.Value, r) {
+					l.addCompileError(ErrLiteralOutOfRange, e.Pos, LiteralOutOfRangeData{
+						Type:    arcaDisplayName(hintNamed.GoName),
+						Literal: fmt.Sprintf("%d", e.Value),
+						Min:     numericRangeMinStr(r),
+						Max:     numericRangeMaxStr(r),
+					})
+				}
+				litType = hintNamed
+			}
+		}
+		return IRIntLit{Value: e.Value, Type: litType}
 	case FloatLit:
-		return IRFloatLit{Value: e.Value, Type: IRNamedType{GoName: "float64"}}
+		litType := IRNamedType{GoName: "float64"}
+		if r, ok := numericRangeOf(hint); ok && r.Kind == "float" {
+			if hintNamed, _ := hint.(IRNamedType); hintNamed.GoName != "" {
+				litType = hintNamed
+			}
+		}
+		return IRFloatLit{Value: e.Value, Type: litType}
 	case StringLit:
 		return IRStringLit{Value: e.Value, Type: IRNamedType{GoName: "string"}, Multiline: e.Multiline}
 	case BoolLit:
@@ -5290,6 +5466,53 @@ func (l *Lowerer) lowerMapLitHint(ml MapLit, hint IRType) IRExpr {
 func (l *Lowerer) lowerBinaryExpr(be BinaryExpr) IRExpr {
 	left := l.lowerExpr(be.Left)
 	right := l.lowerExpr(be.Right)
+	// Slice E3: signed↔unsigned operand mismatch surfaces as a dedicated
+	// diagnostic before reaching emit. UInt's max exceeds int64, so no
+	// safe common base exists and the user must convert one side via the
+	// `T(x)?` cast. Operations between two signed (or two unsigned) types
+	// stay on the Lowerer.unify path and continue to widen / narrow as
+	// before.
+	switch be.Op {
+	case "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=":
+		lr, lok := numericRangeOf(left.irType())
+		rr, rok := numericRangeOf(right.irType())
+		if lok && rok && lr.Kind != rr.Kind {
+			signed := lr.Kind == "signed" || rr.Kind == "signed"
+			unsigned := lr.Kind == "unsigned" || rr.Kind == "unsigned"
+			if signed && unsigned {
+				pos := be.Pos
+				if pos == (Pos{}) {
+					pos = be.Left.exprPos()
+				}
+				l.addCompileError(ErrCrossBaseArithmetic, pos, CrossBaseArithmeticData{
+					Op:        be.Op,
+					LeftType:  arcaDisplayName(irTypeEmitStr(left.irType())),
+					RightType: arcaDisplayName(irTypeEmitStr(right.irType())),
+				})
+			}
+		}
+		// Slice E4: replace `+ - *` on integer operands with a panic-checked
+		// helper so silent overflow is no longer a Layer 1 leak. Narrow
+		// operands widen to base (int / uint) before the helper sees them;
+		// the result is base-typed so subsequent narrowing (`Int8(result)?`)
+		// is explicit. Floats and `/ %` skip — div-by-zero already panics in
+		// Go natively, and Float overflow → Inf is in-spec.
+		if lok && rok && lr.Kind == rr.Kind && lr.Kind != "float" {
+			if helper := arithmeticHelper(lr.Kind, be.Op); helper != "" {
+				l.builtins[helper] = true
+				l.builtins["fmt"] = true
+				baseGo := "int"
+				if lr.Kind == "unsigned" {
+					baseGo = "uint"
+				}
+				return IRFnCall{
+					Fn:   IRIdent{GoName: helper},
+					Args: []IRExpr{widenIntegerToBase(left), widenIntegerToBase(right)},
+					Type: IRNamedType{GoName: baseGo},
+				}
+			}
+		}
+	}
 	var typ IRType
 	switch be.Op {
 	case "==", "!=", "<", ">", "<=", ">=", "&&", "||":

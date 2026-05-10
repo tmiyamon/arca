@@ -972,6 +972,72 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		w.Line("")
 	}
 
+	// Slice E4: panic-checked integer arithmetic. Triggered by
+	// `__addInt` / `__subInt` / `__mulInt` (signed) and `__addUInt` /
+	// `__subUInt` / `__mulUInt` (unsigned) builtin keys. Uses math/bits
+	// for unsigned overflow detection (carry / hi != 0); signed branches
+	// use sign-comparison or divide-back since Go's stdlib doesn't expose
+	// signed overflow primitives.
+	if set["__addInt"] {
+		w.Func("__addInt", "a, b int", "int", func() {
+			w.Assign("s", "a + b")
+			w.If("(a >= 0) == (b >= 0) && (a >= 0) != (s >= 0)", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))`)
+			})
+			w.Return("s")
+		})
+		w.Line("")
+	}
+	if set["__subInt"] {
+		w.Func("__subInt", "a, b int", "int", func() {
+			w.Assign("d", "a - b")
+			w.If("(a >= 0) != (b >= 0) && (a >= 0) != (d >= 0)", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: subtraction overflow %d - %d", a, b))`)
+			})
+			w.Return("d")
+		})
+		w.Line("")
+	}
+	if set["__mulInt"] {
+		w.Func("__mulInt", "a, b int", "int", func() {
+			w.Assign("p", "a * b")
+			w.If("a != 0 && p/a != b", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))`)
+			})
+			w.Return("p")
+		})
+		w.Line("")
+	}
+	if set["__addUInt"] {
+		w.Func("__addUInt", "a, b uint", "uint", func() {
+			w.Stmt("s, carry := bits.Add64(uint64(a), uint64(b), 0)")
+			w.If("carry != 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("UInt: addition overflow %d + %d", a, b))`)
+			})
+			w.Return("uint(s)")
+		})
+		w.Line("")
+	}
+	if set["__subUInt"] {
+		w.Func("__subUInt", "a, b uint", "uint", func() {
+			w.If("b > a", func() {
+				w.Stmt(`panic(fmt.Sprintf("UInt: subtraction underflow %d - %d", a, b))`)
+			})
+			w.Return("a - b")
+		})
+		w.Line("")
+	}
+	if set["__mulUInt"] {
+		w.Func("__mulUInt", "a, b uint", "uint", func() {
+			w.Stmt("hi, lo := bits.Mul64(uint64(a), uint64(b))")
+			w.If("hi != 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("UInt: multiplication overflow %d * %d", a, b))`)
+			})
+			w.Return("uint(lo)")
+		})
+		w.Line("")
+	}
+
 	// Numeric tower validators (Slice F). Each `T(x)?` cast lowers to one of
 	// these so emit stays mechanical. The signed and unsigned tower branches
 	// take int64 / uint64; the float branches take float64. For widths where

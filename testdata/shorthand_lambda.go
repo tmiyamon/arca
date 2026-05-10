@@ -9,13 +9,13 @@ import (
 func main() {
 	nums := []int{1, 2, 3, 4, 5}
 	doubled := Map_(nums, func(x int) int {
-		return x * 2
+		return __mulInt(x, 2)
 	})
 	positives := Filter_(nums, func(x int) bool {
 		return x > 0
 	})
 	sum := Fold_(nums, 0, func(acc int, x int) int {
-		return acc + x
+		return __addInt(acc, x)
 	})
 	fmt.Println(doubled)
 	fmt.Println(positives)
@@ -46,4 +46,20 @@ func Fold_[T any, U any](list []T, init U, f func(U, T) U) U {
 		acc = f(acc, v)
 	}
 	return acc
+}
+
+func __addInt(a, b int) int {
+	s := a + b
+	if (a >= 0) == (b >= 0) && (a >= 0) != (s >= 0) {
+		panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))
+	}
+	return s
+}
+
+func __mulInt(a, b int) int {
+	p := a * b
+	if a != 0 && p/a != b {
+		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
+	}
+	return p
 }

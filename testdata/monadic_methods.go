@@ -9,7 +9,7 @@ import (
 )
 
 func double(x int) int {
-	return x * 2
+	return __mulInt(x, 2)
 }
 
 func isPositive(x int) (int, error) {
@@ -95,4 +95,12 @@ func __optFrom[T any](v T, ok bool) *T {
 		return &v
 	}
 	return nil
+}
+
+func __mulInt(a, b int) int {
+	p := a * b
+	if a != 0 && p/a != b {
+		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
+	}
+	return p
 }

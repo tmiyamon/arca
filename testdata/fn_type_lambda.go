@@ -12,11 +12,27 @@ func apply(f func(int) int, x int) int {
 
 func main() {
 	r1 := apply(func(n int) int {
-		return n + 1
+		return __addInt(n, 1)
 	}, 41)
 	var double func(int) int = func(n int) int {
-		return n * 2
+		return __mulInt(n, 2)
 	}
 	fmt.Println(r1)
 	fmt.Println(double(21))
+}
+
+func __addInt(a, b int) int {
+	s := a + b
+	if (a >= 0) == (b >= 0) && (a >= 0) != (s >= 0) {
+		panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))
+	}
+	return s
+}
+
+func __mulInt(a, b int) int {
+	p := a * b
+	if a != 0 && p/a != b {
+		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
+	}
+	return p
 }

@@ -40,6 +40,8 @@ const (
 	ErrNonBindableTypeArg
 	ErrGoFFINameConvention
 	ErrInvalidBitsConstraint
+	ErrLiteralOutOfRange
+	ErrCrossBaseArithmetic
 )
 
 // ErrorData is implemented by all structured error data types.
@@ -223,6 +225,41 @@ func (d InvalidBitsConstraintData) Message() string {
 		parts[i] = fmt.Sprintf("%d", v)
 	}
 	return fmt.Sprintf("invalid bits value %d for %s; allowed: %s", d.Value, d.Base, strings.Join(parts, ", "))
+}
+
+// CrossBaseArithmeticData reports a binary arithmetic operation between
+// signed and unsigned numeric types. UInt's max exceeds int64, so there is
+// no safe common base — the user must convert one side explicitly via
+// `Int(uintval)?` or `UInt(intval)?`.
+type CrossBaseArithmeticData struct {
+	Op       string
+	LeftType string // Arca display name of left operand type
+	RightType string
+}
+
+func (d CrossBaseArithmeticData) Message() string {
+	return fmt.Sprintf("cannot %s a %s and a %s; convert one side explicitly via %s(...)? or %s(...)?", d.Op, d.LeftType, d.RightType, d.LeftType, d.RightType)
+}
+
+// LiteralOutOfRangeData reports a numeric literal that does not fit the
+// hint type at the use site. The compiler statically catches obvious cases
+// (`let x: Int8 = 200`) so they don't reach `T(x)?` runtime narrowing.
+type LiteralOutOfRangeData struct {
+	Type    string // Arca type display ("Int8", "UInt32", …)
+	Literal string // the literal as a string (decimal for ints, %g for floats)
+	Min     string // formatted lower bound (empty when not applicable)
+	Max     string // formatted upper bound
+}
+
+func (d LiteralOutOfRangeData) Message() string {
+	switch {
+	case d.Min != "" && d.Max != "":
+		return fmt.Sprintf("literal %s out of range for %s; allowed: %s..%s", d.Literal, d.Type, d.Min, d.Max)
+	case d.Max != "":
+		return fmt.Sprintf("literal %s out of range for %s; allowed: 0..%s", d.Literal, d.Type, d.Max)
+	default:
+		return fmt.Sprintf("literal %s out of range for %s", d.Literal, d.Type)
+	}
 }
 
 // NonBindableTypeArgData reports calling a Bindable-constrained stdlib

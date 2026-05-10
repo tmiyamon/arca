@@ -2,6 +2,11 @@
 
 package main
 
+import (
+	"fmt"
+	"math/bits"
+)
+
 type Counter struct {
 	N uint
 }
@@ -11,5 +16,13 @@ func (c Counter) total() uint {
 }
 
 func add(a uint, b uint) uint {
-	return a + b
+	return __addUInt(a, b)
+}
+
+func __addUInt(a, b uint) uint {
+	s, carry := bits.Add64(uint64(a), uint64(b), 0)
+	if carry != 0 {
+		panic(fmt.Sprintf("UInt: addition overflow %d + %d", a, b))
+	}
+	return uint(s)
 }

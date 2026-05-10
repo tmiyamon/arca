@@ -20,7 +20,7 @@ func callArgTry(s string) (int, error) {
 	if __try1_err != nil {
 		return 0, __try1_err
 	}
-	return __try1 * 2, nil
+	return __mulInt(__try1, 2), nil
 }
 
 func multipleTry(a string, b string) (int, error) {
@@ -32,7 +32,7 @@ func multipleTry(a string, b string) (int, error) {
 	if __try2_err != nil {
 		return 0, __try2_err
 	}
-	return __try1 + __try2, nil
+	return __addInt(__try1, __try2), nil
 }
 
 func letNestedTry(s string) (int, error) {
@@ -40,7 +40,7 @@ func letNestedTry(s string) (int, error) {
 	if __try1_err != nil {
 		return 0, __try1_err
 	}
-	x := __try1 + 1
+	x := __addInt(__try1, 1)
 	return x, nil
 }
 
@@ -49,4 +49,20 @@ func main() {
 	fmt.Println(callArgTry("8"))
 	fmt.Println(multipleTry("3", "4"))
 	fmt.Println(letNestedTry("9"))
+}
+
+func __addInt(a, b int) int {
+	s := a + b
+	if (a >= 0) == (b >= 0) && (a >= 0) != (s >= 0) {
+		panic(fmt.Sprintf("Int: addition overflow %d + %d", a, b))
+	}
+	return s
+}
+
+func __mulInt(a, b int) int {
+	p := a * b
+	if a != 0 && p/a != b {
+		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
+	}
+	return p
 }

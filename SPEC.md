@@ -425,6 +425,32 @@ the Go boundary; the validator's range check still seals Layer 1, but the
 diagnostic for an out-of-range source kind is less specific until the cross-
 base diagnostic lands.
 
+Numeric literal hint coercion (`let x: Int8 = 100`) types the literal at
+the hint's Go type when the value fits; out-of-range literals fail at
+compile time (`let x: Int8 = 200` rejected with line:col diagnostic).
+
+`+ - *` on `Int` / `UInt` operands route through panic-checked emit
+helpers (`__addInt`, `__subUInt`, `__mulInt`, ...) — overflow / underflow
+trips a runtime panic so silent wrap is no longer a Layer 1 leak. Narrow
+operands widen to base before the helper sees them; the result is base-
+typed (`Int8 + Int8 → Int`) so subsequent narrowing is explicit via the
+`T(x)?` cast. Float arithmetic stays plain (Inf is in IEEE 754 spec).
+Mixing `Int` and `UInt` in a single arithmetic or comparison op surfaces
+as a compile error directing the user to `Int(...)?` or `UInt(...)?`.
+
+For arithmetic that should bubble up errors instead of panic, `stdlib`
+provides Result-returning checked variants:
+
+```
+import stdlib
+
+let r = stdlib.CheckedAddInt(a, b)?    // (int, error) — overflow → Err
+let q = stdlib.CheckedDivInt(a, 0)     // → Err(ErrDivByZero)
+```
+
+Coverage: `CheckedAdd / Sub / Mul / Div` × `Int / UInt` (8 functions). Float
+checked variants land when there is a real consumer.
+
 ### Map
 
 ```
