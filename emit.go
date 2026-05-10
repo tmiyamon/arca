@@ -971,6 +971,122 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		})
 		w.Line("")
 	}
+
+	// Numeric tower validators (Slice F). Each `T(x)?` cast lowers to one of
+	// these so emit stays mechanical. The signed and unsigned tower branches
+	// take int64 / uint64; the float branches take float64. For widths where
+	// the validator is an identity (Int = int = int64 on 64-bit, Float64 =
+	// float64), the body is a trivial conversion that never errors —
+	// Slice E will optimise the proven-safe wraps away.
+	em.emitNarrowSignedValidator(set, "Int8", "int8", "math.MinInt8", "math.MaxInt8")
+	em.emitNarrowSignedValidator(set, "Int16", "int16", "math.MinInt16", "math.MaxInt16")
+	em.emitNarrowSignedValidator(set, "Int32", "int32", "math.MinInt32", "math.MaxInt32")
+	em.emitNarrowSignedValidator(set, "Int64", "int64", "", "")
+	em.emitNarrowSignedValidator(set, "Int", "int", "", "")
+	em.emitNarrowUnsignedValidator(set, "UInt8", "uint8", "math.MaxUint8")
+	em.emitNarrowUnsignedValidator(set, "UInt16", "uint16", "math.MaxUint16")
+	em.emitNarrowUnsignedValidator(set, "UInt32", "uint32", "math.MaxUint32")
+	em.emitNarrowUnsignedValidator(set, "UInt64", "uint64", "")
+	em.emitNarrowUnsignedValidator(set, "UInt", "uint", "")
+	em.emitNarrowFloat32Validator(set)
+	em.emitNarrowFloatIdentity(set, "Float64", "float64")
+	em.emitNarrowFloatIdentity(set, "Float", "float64")
+}
+
+// emitNarrowSignedValidator emits `func New<Name>(v int64) (<goType>, error)`
+// when `narrow_<lower>` is set in builtins. Empty min/max means identity (no
+// range check needed because the source and target widths match).
+func (em *Emitter) emitNarrowSignedValidator(set map[string]bool, name, goType, minConst, maxConst string) {
+	key := narrowBuiltinKey(name)
+	if !set[key] {
+		return
+	}
+	w := em.w
+	w.Func("New"+name, "v int64", "("+goType+", error)", func() {
+		if minConst != "" && maxConst != "" {
+			w.If("v < "+minConst+" || v > "+maxConst, func() {
+				w.Return(fmt.Sprintf(`0, fmt.Errorf("%s: value %%d out of range [%%d, %%d]", v, int64(%s), int64(%s))`, name, minConst, maxConst))
+			})
+		}
+		if goType == "int64" {
+			w.Return("v, nil")
+		} else {
+			w.Return(goType + "(v), nil")
+		}
+	})
+	w.Line("")
+}
+
+// emitNarrowUnsignedValidator emits `func New<Name>(v uint64) (<goType>, error)`.
+// Empty maxConst means identity.
+func (em *Emitter) emitNarrowUnsignedValidator(set map[string]bool, name, goType, maxConst string) {
+	key := narrowBuiltinKey(name)
+	if !set[key] {
+		return
+	}
+	w := em.w
+	w.Func("New"+name, "v uint64", "("+goType+", error)", func() {
+		if maxConst != "" {
+			w.If("v > "+maxConst, func() {
+				w.Return(fmt.Sprintf(`0, fmt.Errorf("%s: value %%d out of range [0, %%d]", v, uint64(%s))`, name, maxConst))
+			})
+		}
+		if goType == "uint64" {
+			w.Return("v, nil")
+		} else {
+			w.Return(goType + "(v), nil")
+		}
+	})
+	w.Line("")
+}
+
+// emitNarrowFloat32Validator emits the float64 → float32 narrowing check.
+// Inf check covers values whose magnitude exceeds float32's representable
+// range; NaN passes through (NaN is a valid float32 value).
+func (em *Emitter) emitNarrowFloat32Validator(set map[string]bool) {
+	if !set["narrow_float32"] {
+		return
+	}
+	w := em.w
+	w.Func("NewFloat32", "v float64", "(float32, error)", func() {
+		w.Assign("f", "float32(v)")
+		w.If("math.IsInf(float64(f), 0) && !math.IsInf(v, 0)", func() {
+			w.Return(`0, fmt.Errorf("Float32: value %g out of range", v)`)
+		})
+		w.Return("f, nil")
+	})
+	w.Line("")
+}
+
+// emitNarrowFloatIdentity emits the no-op float validators (`NewFloat`,
+// `NewFloat64`). Both targets equal float64; the wrap exists only to keep
+// the `T(x)?` syntax uniform across the tower.
+func (em *Emitter) emitNarrowFloatIdentity(set map[string]bool, name, goType string) {
+	key := narrowBuiltinKey(name)
+	if !set[key] {
+		return
+	}
+	w := em.w
+	w.Func("New"+name, "v float64", "("+goType+", error)", func() {
+		w.Return("v, nil")
+	})
+	w.Line("")
+}
+
+// narrowBuiltinKey mirrors the keys lowerUserConstructorCall sets on
+// l.builtins for tower casts (Int → "narrow_int_base", Int8 → "narrow_int8",
+// Float → "narrow_float_base", etc.). Mapping kept here so validator emit
+// stays beside the gating logic.
+func narrowBuiltinKey(name string) string {
+	switch name {
+	case "Int":
+		return "narrow_int_base"
+	case "UInt":
+		return "narrow_uint_base"
+	case "Float":
+		return "narrow_float_base"
+	}
+	return "narrow_" + strings.ToLower(name)
 }
 
 // --- Type Rendering ---

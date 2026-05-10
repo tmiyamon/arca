@@ -925,6 +925,11 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	if l.builtins["errors"] && !l.hasImport("errors") {
 		imports = append(imports, IRImport{Path: "errors"})
 	}
+	// Numeric tower validators reference math.MinInt8 / math.MaxUint16 / etc.
+	// for range checks and math.IsInf for the float32 narrowing guard.
+	if l.needsMathImport() && !l.hasImport("math") {
+		imports = append(imports, IRImport{Path: "math"})
+	}
 
 	return IRProgram{
 		Package:  pkgName,
@@ -934,6 +939,22 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 		Funcs:    funcs,
 		Builtins: builtinNames,
 	}
+}
+
+// needsMathImport reports whether any emitted narrow validator references
+// the math package. Identity validators (Int / Int64 / UInt / UInt64 /
+// Float / Float64) don't, so a program using only those doesn't pull math.
+func (l *Lowerer) needsMathImport() bool {
+	for _, key := range []string{
+		"narrow_int8", "narrow_int16", "narrow_int32",
+		"narrow_uint8", "narrow_uint16", "narrow_uint32",
+		"narrow_float32",
+	} {
+		if l.builtins[key] {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *Lowerer) hasImport(pkg string) bool {
@@ -1112,9 +1133,17 @@ func (l *Lowerer) synthesizeBindableTypes() []IRTypeDecl {
 		ctor := td.Constructors[0]
 		fields := make([]IRFieldDecl, len(ctor.Fields))
 		for i, f := range ctor.Fields {
+			fieldType := l.lowerType(f.Type)
+			slotInner := fieldType
+			// Slice H: widen narrow numeric fields so SQL Scan (int64
+			// drivers) and JSON Unmarshal deliver values loss-lessly into
+			// the slot. Freeze re-narrows via the per-type validator.
+			if wide, _, isNarrow := narrowFieldInfo(fieldType); isNarrow {
+				slotInner = IRNamedType{GoName: wide}
+			}
 			fields[i] = IRFieldDecl{
 				GoName: capitalize(f.Name),
-				Type:   IRNamedType{GoName: "stdlib.BindableSlot", Params: []IRType{l.lowerType(f.Type)}},
+				Type:   IRNamedType{GoName: "stdlib.BindableSlot", Params: []IRType{slotInner}},
 				Tag:    l.genStructTagFromRules(f.Name, td.Tags),
 			}
 		}
@@ -1205,12 +1234,56 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 			})
 		}
 
+		// Slice H: for narrow numeric fields the Draft slot holds a wide
+		// value (int64 / uint64 / float64). Re-narrow each via its `New<T>`
+		// validator before reaching the host constructor — same path the
+		// user's `Int32(_)?` cast takes, so SQL Scan / JSON UnmarshalJSON
+		// out-of-range values surface as a Freeze error.
+		fieldExprs := make([]IRExpr, len(ctor.Fields))
+		for i, f := range ctor.Fields {
+			slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
+			slotValue := IRFieldAccess{Expr: slot, Field: "Value"}
+			fieldType := l.lowerType(f.Type)
+			_, validatorFn, isNarrow := narrowFieldInfo(fieldType)
+			if !isNarrow {
+				fieldExprs[i] = slotValue
+				continue
+			}
+			narrowVar := fmt.Sprintf("__narrow%d", i)
+			narrowErr := fmt.Sprintf("__narrowErr%d", i)
+			stmts = append(stmts, GoMultiAssign{
+				Names: []string{narrowVar, narrowErr},
+				Value: IRFnCall{
+					Fn:   IRIdent{GoName: validatorFn},
+					Args: []IRExpr{slotValue},
+				},
+			})
+			stmts = append(stmts, GoIfElse{
+				Cond: IRBinaryExpr{
+					Op:    "!=",
+					Left:  IRIdent{GoName: narrowErr, Type: errorType},
+					Right: IRIdent{GoName: "nil"},
+					Type:  boolType,
+				},
+				Then: GoBlock{Stmts: []IRStmt{
+					GoReturn{Values: []IRExpr{
+						IRConstructorCall{GoName: name, Type: hostType},
+						IRIdent{GoName: narrowErr, Type: errorType},
+					}},
+				}},
+			})
+			if key := narrowFieldBuiltinKey(validatorFn); key != "" {
+				l.builtins[key] = true
+				l.builtins["fmt"] = true
+			}
+			fieldExprs[i] = IRIdent{GoName: narrowVar, Type: fieldType}
+		}
+
 		var successValues []IRExpr
 		if l.hasConstraints(td) {
 			args := make([]IRFieldValue, len(ctor.Fields))
-			for i, f := range ctor.Fields {
-				slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
-				args[i] = IRFieldValue{Value: IRFieldAccess{Expr: slot, Field: "Value"}}
+			for i := range ctor.Fields {
+				args[i] = IRFieldValue{Value: fieldExprs[i]}
 			}
 			// Constrained type → call the validating `New<Type>` constructor
 			// (matches the convention in lowerUserConstructorCall for direct
@@ -1224,10 +1297,9 @@ func (l *Lowerer) synthesizeBindableDispatch() ([]IRFn, []IRGlobalVar) {
 		} else {
 			fields := make([]IRFieldValue, len(ctor.Fields))
 			for i, f := range ctor.Fields {
-				slot := IRFieldAccess{Expr: draftIdent, Field: capitalize(f.Name)}
 				fields[i] = IRFieldValue{
 					GoName: capitalize(f.Name),
-					Value:  IRFieldAccess{Expr: slot, Field: "Value"},
+					Value:  fieldExprs[i],
 				}
 			}
 			successValues = []IRExpr{
@@ -2231,10 +2303,28 @@ func arcaDisplayName(goName string) string {
 		return "Unit"
 	case "int":
 		return "Int"
+	case "int8":
+		return "Int8"
+	case "int16":
+		return "Int16"
+	case "int32":
+		return "Int32"
+	case "int64":
+		return "Int64"
 	case "uint":
 		return "UInt"
+	case "uint8":
+		return "UInt8"
+	case "uint16":
+		return "UInt16"
+	case "uint32":
+		return "UInt32"
+	case "uint64":
+		return "UInt64"
 	case "float64":
 		return "Float"
+	case "float32":
+		return "Float32"
 	case "string":
 		return "String"
 	case "bool":
@@ -2295,7 +2385,10 @@ func (l *Lowerer) checkTypeExists(t Type) {
 // isKnownTypeName checks if a name is a known type in the lowerer context.
 func (l *Lowerer) isKnownTypeName(name string) bool {
 	switch name {
-	case "Unit", "Int", "UInt", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "Self":
+	case "Unit", "Int", "UInt", "Float", "String", "Bool", "List", "Map", "Option", "Result", "Ref", "Any", "Self",
+		"Int8", "Int16", "Int32", "Int64",
+		"UInt8", "UInt16", "UInt32", "UInt64",
+		"Float32", "Float64":
 		return true
 	}
 	if strings.Contains(name, ".") {
@@ -2704,6 +2797,108 @@ func (l *Lowerer) validateBitsConstraint(nt NamedType, declPos Pos) {
 	}
 }
 
+// narrowFieldInfo describes how a narrow numeric Go type should be widened
+// when it appears as a Bindable host field. Returns (wideGoType,
+// validatorFn, true) for narrow tower types (`int8` → "int64" / "NewInt8")
+// and (_, _, false) otherwise. Slice H widens the BindableSlot's inner type
+// so SQL Scan and JSON Unmarshal receive loss-less values; Freeze then
+// re-narrows via the validator (the same one Slice F's `T(x)?` generates).
+func narrowFieldInfo(t IRType) (string, string, bool) {
+	nt, ok := t.(IRNamedType)
+	if !ok {
+		return "", "", false
+	}
+	switch nt.GoName {
+	case "int8":
+		return "int64", "NewInt8", true
+	case "int16":
+		return "int64", "NewInt16", true
+	case "int32":
+		return "int64", "NewInt32", true
+	case "uint8":
+		return "uint64", "NewUInt8", true
+	case "uint16":
+		return "uint64", "NewUInt16", true
+	case "uint32":
+		return "uint64", "NewUInt32", true
+	case "float32":
+		return "float64", "NewFloat32", true
+	}
+	return "", "", false
+}
+
+// narrowFieldBuiltinKey maps a narrow validator function name back to its
+// `l.builtins` gating key so synthesizeBindableDispatch can request emission
+// of the same `New<Type>` validator Slice F's `T(x)?` cast uses.
+func narrowFieldBuiltinKey(validatorFn string) string {
+	switch validatorFn {
+	case "NewInt8":
+		return "narrow_int8"
+	case "NewInt16":
+		return "narrow_int16"
+	case "NewInt32":
+		return "narrow_int32"
+	case "NewUInt8":
+		return "narrow_uint8"
+	case "NewUInt16":
+		return "narrow_uint16"
+	case "NewUInt32":
+		return "narrow_uint32"
+	case "NewFloat32":
+		return "narrow_float32"
+	}
+	return ""
+}
+
+// numericTowerInfo describes the Slice F cast `T(x)?` for a tower or base
+// numeric type. GoType is the target Go primitive (`int8`, `uint32`, …).
+// SourceGoType is the wide Go type the validator accepts; the call site emits
+// a Go conversion (`int64(x)`, `uint64(x)`, `float64(x)`) before invoking the
+// validator. BuiltinKey gates emit of the validator function.
+type numericTowerInfo struct {
+	GoType        string
+	SourceGoType  string
+	BuiltinKey    string
+	GoConstructor string // emit-side function name (`NewInt8`, `NewFloat32`, …)
+}
+
+// numericTowerCast resolves an Arca name to its tower-cast metadata. Covers
+// the 10-name narrow tower (Int8 … Float32) plus the 3 base names (Int /
+// UInt / Float) where `T(x)?` acts as an identity-with-error-shape so user
+// code can sit on a single `T(x)?` syntax until Slice E's value-flow widening
+// removes the redundant wrap.
+func numericTowerCast(name string) (numericTowerInfo, bool) {
+	switch name {
+	case "Int8":
+		return numericTowerInfo{"int8", "int64", "narrow_int8", "NewInt8"}, true
+	case "Int16":
+		return numericTowerInfo{"int16", "int64", "narrow_int16", "NewInt16"}, true
+	case "Int32":
+		return numericTowerInfo{"int32", "int64", "narrow_int32", "NewInt32"}, true
+	case "Int64":
+		return numericTowerInfo{"int64", "int64", "narrow_int64", "NewInt64"}, true
+	case "UInt8":
+		return numericTowerInfo{"uint8", "uint64", "narrow_uint8", "NewUInt8"}, true
+	case "UInt16":
+		return numericTowerInfo{"uint16", "uint64", "narrow_uint16", "NewUInt16"}, true
+	case "UInt32":
+		return numericTowerInfo{"uint32", "uint64", "narrow_uint32", "NewUInt32"}, true
+	case "UInt64":
+		return numericTowerInfo{"uint64", "uint64", "narrow_uint64", "NewUInt64"}, true
+	case "Float32":
+		return numericTowerInfo{"float32", "float64", "narrow_float32", "NewFloat32"}, true
+	case "Float64":
+		return numericTowerInfo{"float64", "float64", "narrow_float64", "NewFloat64"}, true
+	case "Int":
+		return numericTowerInfo{"int", "int64", "narrow_int_base", "NewInt"}, true
+	case "UInt":
+		return numericTowerInfo{"uint", "uint64", "narrow_uint_base", "NewUInt"}, true
+	case "Float":
+		return numericTowerInfo{"float64", "float64", "narrow_float_base", "NewFloat"}, true
+	}
+	return numericTowerInfo{}, false
+}
+
 // numericGoTypeFromConstraints picks the Go type name for a numeric base when
 // a `bits: N` storage hint is present and valid; returns "" so the caller
 // falls back to the base default (`int`, `uint`, `float64`) when bits is
@@ -2734,6 +2929,30 @@ func (l *Lowerer) lowerNamedType(nt NamedType) IRType {
 		if goName := numericGoTypeFromConstraints("Float", nt.Constraints); goName != "" {
 			return IRNamedType{GoName: goName}
 		}
+		return IRNamedType{GoName: "float64"}
+	// Numeric tower as built-in primitives mirroring `Int{bits: N}` etc.
+	// Each maps directly to the corresponding Go type so a user-defined
+	// `type MyByte = UInt{bits: 8}` and the built-in `UInt8` collapse to
+	// the same `uint8` in emit.
+	case "Int8":
+		return IRNamedType{GoName: "int8"}
+	case "Int16":
+		return IRNamedType{GoName: "int16"}
+	case "Int32":
+		return IRNamedType{GoName: "int32"}
+	case "Int64":
+		return IRNamedType{GoName: "int64"}
+	case "UInt8":
+		return IRNamedType{GoName: "uint8"}
+	case "UInt16":
+		return IRNamedType{GoName: "uint16"}
+	case "UInt32":
+		return IRNamedType{GoName: "uint32"}
+	case "UInt64":
+		return IRNamedType{GoName: "uint64"}
+	case "Float32":
+		return IRNamedType{GoName: "float32"}
+	case "Float64":
 		return IRNamedType{GoName: "float64"}
 	case "String":
 		return IRNamedType{GoName: "string"}
@@ -3469,7 +3688,10 @@ func irTypeToGoString(t IRType) string {
 	switch tt := t.(type) {
 	case IRNamedType:
 		switch tt.GoName {
-		case "int", "uint", "float64", "string", "bool", "byte", "struct{}":
+		case "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64",
+			"float32", "float64",
+			"string", "bool", "byte", "struct{}":
 			return tt.GoName
 		default:
 			return "" // user-defined or complex — skip check
@@ -4696,6 +4918,44 @@ func (l *Lowerer) lowerUserConstructorCall(cc ConstructorCall) IRExpr {
 			TypeArgs: typeArgs,
 			Type:     IRNamedType{GoName: typeName},
 			Source:   SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: typeName},
+		}
+	}
+
+	// Numeric tower cast: `Int8(v)? / UInt32(v)? / Float32(v)? / …` plus the
+	// three base identity casts (`Int(v)?`, `UInt(v)?`, `Float(v)?`).
+	// Validator emit lives in `emitBuiltins` keyed by `info.BuiltinKey`.
+	if info, ok := numericTowerCast(cc.Name); ok {
+		if len(cc.Fields) != 1 {
+			l.addCompileError(ErrWrongArgCount, cc.Pos, WrongArgCountData{
+				Func: cc.Name, Expected: 1, Actual: len(cc.Fields),
+			})
+		}
+		var arg IRExpr
+		if len(cc.Fields) >= 1 {
+			arg = l.lowerExpr(cc.Fields[0].Value)
+		}
+		// Wrap in a Go conversion so the validator's signature is fixed
+		// regardless of source numeric type. Cross-base sources (e.g. UInt
+		// passed to `Int8(_)?`) bit-reinterpret here; the validator's range
+		// check catches the resulting out-of-range value, so Layer 1 stays
+		// sealed even when the source-kind is mismatched. Slice E adds a
+		// dedicated cross-base diagnostic.
+		castedArg := IRFnCall{
+			Fn:   IRIdent{GoName: info.SourceGoType},
+			Args: []IRExpr{arg},
+			Type: IRNamedType{GoName: info.SourceGoType},
+		}
+		l.builtins[info.BuiltinKey] = true
+		l.builtins["fmt"] = true
+		return IRConstructorCall{
+			GoName:        info.GoConstructor,
+			Fields:        []IRFieldValue{{Value: castedArg}},
+			GoMultiReturn: true,
+			Type: IRResultType{
+				Ok:  IRNamedType{GoName: info.GoType},
+				Err: IRNamedType{GoName: "error"},
+			},
+			Source: SourceInfo{Pos: cc.Pos, Name: cc.Name, TypeName: cc.Name},
 		}
 	}
 
@@ -6191,7 +6451,9 @@ func irZeroExpr(t IRType) IRExpr {
 	switch tt := t.(type) {
 	case IRNamedType:
 		switch tt.GoName {
-		case "int", "uint", "float64", "byte":
+		case "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64",
+			"float32", "float64", "byte":
 			return IRIntLit{Value: 0}
 		case "string":
 			return IRStringLit{Value: ""}

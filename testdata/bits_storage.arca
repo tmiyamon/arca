@@ -1,16 +1,9 @@
-type Int8 = Int{bits: 8}
-type Int16 = Int{bits: 16}
-type Int32 = Int{bits: 32}
-type Int64 = Int{bits: 64}
+// User-defined narrow alias via `bits` constraint, distinct from the
+// built-in tower type names. Combines with min/max to add a runtime check
+// on top of the storage hint.
+type Percent = UInt{bits: 8, max: 100}
 
-type UInt8 = UInt{bits: 8}
-type UInt16 = UInt{bits: 16}
-type UInt32 = UInt{bits: 32}
-type UInt64 = UInt{bits: 64}
-
-type Float32 = Float{bits: 32}
-type Float64 = Float{bits: 64}
-
-type Counter {
-  Counter(small: Int{bits: 16}, big: UInt32)
+// Inline `bits` at struct field positions (also distinct names).
+type Sample {
+  Sample(small: Int{bits: 16}, ratio: Float{bits: 32})
 }

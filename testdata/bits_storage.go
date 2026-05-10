@@ -2,27 +2,20 @@
 
 package main
 
-type Int8 int8
+import (
+	"fmt"
+)
 
-type Int16 int16
+type Percent uint8
 
-type Int32 int32
+func NewPercent(v uint8) (Percent, error) {
+	if v > 100 {
+		return 0, fmt.Errorf("must be <= 100")
+	}
+	return Percent(v), nil
+}
 
-type Int64 int64
-
-type UInt8 uint8
-
-type UInt16 uint16
-
-type UInt32 uint32
-
-type UInt64 uint64
-
-type Float32 float32
-
-type Float64 float64
-
-type Counter struct {
+type Sample struct {
 	Small int16
-	Big   UInt32
+	Ratio float32
 }

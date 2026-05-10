@@ -389,6 +389,9 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 | Int | 64-bit signed integer (Go `int`; 64-bit-only target) |
 | UInt | 64-bit unsigned integer (Go `uint`) |
 | Float | 64-bit floating point (Go `float64`) |
+| Int8 / Int16 / Int32 / Int64 | Narrow signed integers (Go `int8` … `int64`) |
+| UInt8 / UInt16 / UInt32 / UInt64 | Narrow unsigned integers (Go `uint8` … `uint64`) |
+| Float32 / Float64 | Narrow floats (Go `float32` / `float64`) |
 | String | UTF-8 string |
 | Bool | True / False |
 | List[T] | Immutable list |
@@ -402,6 +405,25 @@ Function signatures require explicit types (Rust/Kotlin style). Inference operat
 `Int` is fixed at 64 bits. Generated Go files carry a `//go:build` constraint
 that excludes 32-bit GOARCH (`386`, `arm`, `mips`, `mipsle`, etc.); `arca run`
 and `arca build` refuse to invoke the Go toolchain on a 32-bit target.
+
+The narrow tower (`Int8` … `Int64`, `UInt8` … `UInt64`, `Float32` / `Float64`)
+maps directly to the corresponding Go primitive. Conversions go through the
+`T(x)?` constructor syntax shared with constrained types and structs:
+
+```
+let i: Int = 100
+let i8 = Int8(i)?            // Ok(int8(100))
+let r = Int8(200)            // Result[Int8, Error] — out of range
+let u32 = UInt32(20)?        // explicit narrowing to uint32
+let f32 = Float32(3.14)?     // float64 → float32, errors when out of range
+```
+
+`T(x)?` always returns `Result[T, Error]` for narrow targets; future range-
+aware widening will skip the wrap when the source range proves to fit.
+Cross-base casts (`Int(uintval)?` etc.) work but currently bit-reinterpret at
+the Go boundary; the validator's range check still seals Layer 1, but the
+diagnostic for an out-of-range source kind is less specific until the cross-
+base diagnostic lands.
 
 ### Map
 

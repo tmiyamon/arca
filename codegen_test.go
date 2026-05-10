@@ -260,6 +260,12 @@ func TestE2EFnTypeLambda(t *testing.T) {
 	runE2E(t, "testdata/fn_type_lambda.arca", "42\n42\n")
 }
 
+// Slice D+F: tower types resolve to Go primitives, T(x)? casts the source
+// into Result[T, Error] with a runtime range check.
+func TestE2ENumericTower(t *testing.T) {
+	runE2E(t, "testdata/numeric_tower.arca", "out of range caught\n")
+}
+
 func TestGoFFITypeCheck(t *testing.T) {
 	t.Parallel()
 

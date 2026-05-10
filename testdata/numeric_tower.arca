@@ -1,0 +1,24 @@
+// Tower types as built-in primitives. Available without import; each
+// resolves to the corresponding Go type via lowerNamedType.
+type Sample {
+  Sample(
+    a: Int8,
+    b: UInt32,
+    c: Float32,
+    d: Int64,
+  )
+}
+
+// `T(x)?` cast lowers to NewT(int64(x)) / NewT(uint64(x)) / NewT(float64(x))
+// and returns Result[T, Error]. Range-checked at runtime.
+fun main() -> Result[Unit, Error] {
+  let _ = Int8(100)?
+  let _ = UInt32(20)?
+  let _ = Float32(3.14)?
+  let r = Int8(200)
+  match r {
+    Ok(_) => println("unexpected ok")
+    Error(_) => println("out of range caught")
+  }
+  Ok(Unit)
+}

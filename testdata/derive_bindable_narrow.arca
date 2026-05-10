@@ -1,0 +1,16 @@
+// Slice H: Bindable host with narrow numeric fields. Draft slots widen
+// to int64 / uint64 / float64 so SQL Scan + JSON UnmarshalJSON deliver
+// values loss-lessly; Freeze re-narrows via the Slice F validators
+// (NewInt32 / NewUInt8 / NewFloat32) and surfaces out-of-range as a
+// freeze error.
+type Sample (
+  id: Int32
+  count: UInt8
+  ratio: Float32
+) derive Bindable
+
+fun main() -> Result[Unit, Error] {
+  let d = Sample.draft()
+  let _ = d.freeze()?
+  Ok(Unit)
+}
