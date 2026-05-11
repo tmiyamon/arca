@@ -999,12 +999,27 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		w.Line("")
 	}
 	if set["__mulInt"] {
+		// Division-free overflow check via bits.Mul64 on absolute values.
+		// `uint64(-a)` works correctly for a == math.MinInt — two's-complement
+		// negation wraps to the bit pattern 0x8000…00, which is exactly the
+		// absolute value when reinterpreted as uint64.
 		w.Func("__mulInt", "a, b int", "int", func() {
-			w.Assign("p", "a * b")
-			w.If("a != 0 && p/a != b", func() {
+			w.Stmt("var ua, ub uint64")
+			w.IfElse("a < 0",
+				func() { w.Stmt("ua = uint64(-a)") },
+				func() { w.Stmt("ua = uint64(a)") })
+			w.IfElse("b < 0",
+				func() { w.Stmt("ub = uint64(-b)") },
+				func() { w.Stmt("ub = uint64(b)") })
+			w.Stmt("hi, lo := bits.Mul64(ua, ub)")
+			w.Stmt("limit := uint64(1<<63 - 1)")
+			w.If("(a < 0) != (b < 0)", func() {
+				w.Stmt("limit = 1 << 63")
+			})
+			w.If("hi != 0 || lo > limit", func() {
 				w.Stmt(`panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))`)
 			})
-			w.Return("p")
+			w.Return("a * b")
 		})
 		w.Line("")
 	}

@@ -4,6 +4,18 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-11: `__mulInt` division-free overflow check
+
+**Context:** Slice E4 emitted `__mulInt` with `if a != 0 && p/a != b` for signed multiplication overflow. A bench (`arithmetic_panic_bench_test.go`) measured **15x slowdown** vs native (0.57 ns → 8.66 ns/op) and **11.5x on mul-dominated kernels** — far worse than every other panic-checked op (1.7–2.7x). Root cause: integer division on x86 costs ~25–30 cycles vs 1 cycle for native mul, and the `a != 0` short-circuit doesn't help once `a` is nonzero (the common case).
+
+**Decision: Rewrite `__mulInt` using `bits.Mul64` on absolute values.** Take `uint64(-a)` / `uint64(-b)` (two's-complement wraparound gives the correct bit pattern for `MinInt`), `bits.Mul64` to get a 128-bit unsigned result, then compare against the sign-aware limit (`MaxInt64` if signs agree, `1<<63` if signs differ — i.e. allow `MinInt` exactly). No division. Edge cases verified against 12 cases including `MinInt * -1`, `MinInt * 1`, `MaxInt32 * MaxInt32`, etc. `math/bits` was already imported when `__addUInt` / `__mulUInt` were live; the import gate in `lower.go` extended to include `__mulInt`.
+
+Post-change measurements: **MulInt 15.1x → 3.2x**, **MixedKernel 11.5x → 3.8x**. All panic-checked ops now sit in the 1.7–3.8x cost-of-safety band — no outliers, no `unsafe` opt-out needed at this layer.
+
+**Status:** Done. 11 testdata snapshots regenerated; `arithmetic_panic_bench_test.go` carries the helper copies + bench harness for future re-measurement.
+
+---
+
 ## 2026-05-10: Numeric D2 refined widening landed
 
 **Context:** Slice E shipped literal hint coercion + cross-base diagnostic + arithmetic panic + `std.checked` but explicitly deferred D2 refined value-flow widening (`let x: Int = int8val` auto-conversion). The user flagged this as missing the B4 motivating case — `let id: Int = res.LastInsertId()?` produces `int64` from Go FFI which Arca treats as `Int64`, and assigning to `Int` (= Go `int`) failed with a generic type-mismatch even though the ranges coincide on a 64-bit target. Forcing user-side `Int(...)?` ceremony for what the design promised as implicit defeats the numeric tower's ergonomic intent.

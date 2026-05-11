@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"math/bits"
 	"os"
 	"strconv"
 )
@@ -82,9 +83,24 @@ func __optFrom[T any](v T, ok bool) *T {
 }
 
 func __mulInt(a, b int) int {
-	p := a * b
-	if a != 0 && p/a != b {
+	var ua, ub uint64
+	if a < 0 {
+		ua = uint64(-a)
+	} else {
+		ua = uint64(a)
+	}
+	if b < 0 {
+		ub = uint64(-b)
+	} else {
+		ub = uint64(b)
+	}
+	hi, lo := bits.Mul64(ua, ub)
+	limit := uint64(1<<63 - 1)
+	if (a < 0) != (b < 0) {
+		limit = 1 << 63
+	}
+	if hi != 0 || lo > limit {
 		panic(fmt.Sprintf("Int: multiplication overflow %d * %d", a, b))
 	}
-	return p
+	return a * b
 }

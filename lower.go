@@ -941,8 +941,9 @@ func (l *Lowerer) Lower(prog *Program, pkgName string, pubOnly bool) IRProgram {
 	if l.needsMathImport() && !l.hasImport("math") {
 		imports = append(imports, IRImport{Path: "math"})
 	}
-	// Slice E4: __addUInt / __mulUInt use math/bits for overflow detection.
-	if (l.builtins["__addUInt"] || l.builtins["__mulUInt"]) && !l.hasImport("math/bits") {
+	// Slice E4: __addUInt / __mulUInt / __mulInt use math/bits for overflow
+	// detection (mulInt uses Mul64 on the absolute values to avoid division).
+	if (l.builtins["__addUInt"] || l.builtins["__mulUInt"] || l.builtins["__mulInt"]) && !l.hasImport("math/bits") {
 		imports = append(imports, IRImport{Path: "math/bits"})
 	}
 
