@@ -83,3 +83,26 @@ func TestCheckedDivUInt_DivByZero(t *testing.T) {
 		t.Fatalf("10 / 0 (uint): want ErrDivByZero, got %v", err)
 	}
 }
+
+func TestCheckedModInt_ModByZero(t *testing.T) {
+	t.Parallel()
+	if _, err := CheckedModInt(10, 0); !errors.Is(err, ErrDivByZero) {
+		t.Fatalf("10 %% 0: want ErrDivByZero, got %v", err)
+	}
+	// MinInt % -1 is mathematically 0; no overflow case to seal.
+	v, err := CheckedModInt(math.MinInt, -1)
+	if err != nil || v != 0 {
+		t.Fatalf("MinInt %% -1: want 0, got %d (err=%v)", v, err)
+	}
+	v, err = CheckedModInt(17, 5)
+	if err != nil || v != 2 {
+		t.Fatalf("17 %% 5: want 2, got %d (err=%v)", v, err)
+	}
+}
+
+func TestCheckedModUInt_ModByZero(t *testing.T) {
+	t.Parallel()
+	if _, err := CheckedModUInt(10, 0); !errors.Is(err, ErrDivByZero) {
+		t.Fatalf("10 %% 0 (uint): want ErrDivByZero, got %v", err)
+	}
+}

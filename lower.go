@@ -2948,6 +2948,13 @@ func widenIntegerToBase(expr IRExpr) IRExpr {
 // arithmeticHelper picks the panic-checked helper name for a (kind, op)
 // pair. Returns "" for ops / kinds outside Slice E4's scope so the caller
 // falls through to the plain `IRBinaryExpr` emit.
+//
+// `/` and `%` are routed here too even though Go panics natively on
+// division by zero: Go's signed `MinInt / -1` silently wraps to MinInt
+// (the result is "deterministically defined" per Go spec), so the
+// arithmetic-overflow seal that `+ - *` get via __mulInt etc. would
+// otherwise have a quiet hole on signed div. The mod helpers only seal
+// b == 0 (MinInt % -1 is mathematically 0 and Go agrees).
 func arithmeticHelper(kind, op string) string {
 	switch kind {
 	case "signed":
@@ -2958,6 +2965,10 @@ func arithmeticHelper(kind, op string) string {
 			return "__subInt"
 		case "*":
 			return "__mulInt"
+		case "/":
+			return "__divInt"
+		case "%":
+			return "__modInt"
 		}
 	case "unsigned":
 		switch op {
@@ -2967,6 +2978,10 @@ func arithmeticHelper(kind, op string) string {
 			return "__subUInt"
 		case "*":
 			return "__mulUInt"
+		case "/":
+			return "__divUInt"
+		case "%":
+			return "__modUInt"
 		}
 	}
 	return ""
@@ -5561,12 +5576,12 @@ func (l *Lowerer) lowerBinaryExpr(be BinaryExpr) IRExpr {
 				})
 			}
 		}
-		// Slice E4: replace `+ - *` on integer operands with a panic-checked
-		// helper so silent overflow is no longer a Layer 1 leak. Narrow
-		// operands widen to base (int / uint) before the helper sees them;
-		// the result is base-typed so subsequent narrowing (`Int8(result)?`)
-		// is explicit. Floats and `/ %` skip — div-by-zero already panics in
-		// Go natively, and Float overflow → Inf is in-spec.
+		// Slice E4: replace `+ - * / %` on integer operands with panic-checked
+		// helpers so silent overflow / div-by-zero are no longer Layer 1
+		// leaks. Narrow operands widen to base (int / uint) before the helper
+		// sees them; the result is base-typed so subsequent narrowing
+		// (`Int8(result)?`) is explicit. Floats skip — overflow → Inf is
+		// in-spec under IEEE 754.
 		if lok && rok && lr.Kind == rr.Kind && lr.Kind != "float" {
 			if helper := arithmeticHelper(lr.Kind, be.Op); helper != "" {
 				l.builtins[helper] = true

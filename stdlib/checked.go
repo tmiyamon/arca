@@ -84,3 +84,20 @@ func CheckedDivUInt(a, b uint) (uint, error) {
 	}
 	return a / b, nil
 }
+
+// CheckedModInt / CheckedModUInt reject b == 0. MinInt % -1 is mathematically
+// 0 (MinInt = -1 * |MinInt|) so unlike CheckedDivInt, there's no signed-
+// overflow case to seal here.
+func CheckedModInt(a, b int) (int, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("%w: Int %d %% 0", ErrDivByZero, a)
+	}
+	return a % b, nil
+}
+
+func CheckedModUInt(a, b uint) (uint, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("%w: UInt %d %% 0", ErrDivByZero, a)
+	}
+	return a % b, nil
+}

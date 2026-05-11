@@ -2,12 +2,16 @@
 // surrounding context's narrow type when the value fits.
 //
 // Slice E4: arithmetic on Int / UInt routes through panic-checked
-// helpers (`__addInt`, `__subUInt`, `__mulInt`, ...). Float arithmetic
-// stays plain (Inf is in spec, no panic).
+// helpers (`__addInt`, `__subUInt`, `__mulInt`, `__divInt`, `__modInt`,
+// ...). Float arithmetic stays plain (Inf is in spec, no panic).
 
 fun safeAdd(a: Int, b: Int) -> Int { a + b }
 fun safeSub(a: UInt, b: UInt) -> UInt { a - b }
 fun safeMul(a: Int, b: Int) -> Int { a * b }
+fun safeDiv(a: Int, b: Int) -> Int { a / b }
+fun safeMod(a: Int, b: Int) -> Int { a % b }
+fun safeDivU(a: UInt, b: UInt) -> UInt { a / b }
+fun safeModU(a: UInt, b: UInt) -> UInt { a % b }
 
 fun mixFloat(a: Float, b: Float) -> Float { a + b }
 

@@ -1053,6 +1053,52 @@ func (em *Emitter) emitBuiltins(builtins []string) {
 		w.Line("")
 	}
 
+	// __divInt seals two Layer 1 leaks Go's native `/` leaves: division by
+	// zero (where Go does panic but with a generic message) and signed
+	// overflow `MinInt / -1` (where Go *does not* panic and silently returns
+	// MinInt — the Go spec defines this as deterministic wrap). `-1 << 63`
+	// is `math.MinInt` on the enforced 64-bit GOARCH; using the literal
+	// avoids pulling math just for one constant.
+	if set["__divInt"] {
+		w.Func("__divInt", "a, b int", "int", func() {
+			w.If("b == 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: division by zero %d / 0", a))`)
+			})
+			w.If("a == (-1 << 63) && b == -1", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: division overflow %d / %d", a, b))`)
+			})
+			w.Return("a / b")
+		})
+		w.Line("")
+	}
+	if set["__modInt"] {
+		w.Func("__modInt", "a, b int", "int", func() {
+			w.If("b == 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("Int: modulo by zero %d %% 0", a))`)
+			})
+			w.Return("a % b")
+		})
+		w.Line("")
+	}
+	if set["__divUInt"] {
+		w.Func("__divUInt", "a, b uint", "uint", func() {
+			w.If("b == 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("UInt: division by zero %d / 0", a))`)
+			})
+			w.Return("a / b")
+		})
+		w.Line("")
+	}
+	if set["__modUInt"] {
+		w.Func("__modUInt", "a, b uint", "uint", func() {
+			w.If("b == 0", func() {
+				w.Stmt(`panic(fmt.Sprintf("UInt: modulo by zero %d %% 0", a))`)
+			})
+			w.Return("a % b")
+		})
+		w.Line("")
+	}
+
 	// Numeric tower validators (Slice F). Each `T(x)?` cast lowers to one of
 	// these so emit stays mechanical. The signed and unsigned tower branches
 	// take int64 / uint64; the float branches take float64. For widths where

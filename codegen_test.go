@@ -66,6 +66,39 @@ func runE2E(t *testing.T, arcaFile string, expected string) {
 	}
 }
 
+// runPanicE2E transpiles an inline source, runs it, and asserts the run
+// exits non-zero with `wantPanic` somewhere in the combined output. Used
+// for Layer 1 panic-emit verification (arithmetic helpers, etc).
+func runPanicE2E(t *testing.T, source, wantPanic string) {
+	t.Helper()
+	t.Parallel()
+
+	result, err := transpileSource(source)
+	if err != nil {
+		t.Fatalf("transpile error: %v", err)
+	}
+
+	dir, err := os.MkdirTemp("", "arca-panic-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(result.goCode), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "run", goFile)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected panic, got clean exit:\n%s", output)
+	}
+	if !strings.Contains(string(output), wantPanic) {
+		t.Errorf("panic message mismatch\nwant substring: %q\ngot:\n%s", wantPanic, output)
+	}
+}
+
 func TestCodegen(t *testing.T) {
 	t.Parallel()
 	entries, err := filepath.Glob("testdata/*.arca")
@@ -204,6 +237,52 @@ func TestE2ETryExpr(t *testing.T) {
 
 func TestE2ETryChain(t *testing.T) {
 	runE2E(t, "testdata/try_chain.arca", "6\n7\n4\n")
+}
+
+func TestPanicDivByZero(t *testing.T) {
+	runPanicE2E(t, `
+fun main() {
+  let a = 10
+  let b = 0
+  println(a / b)
+}
+`, "Int: division by zero")
+}
+
+func TestPanicSignedDivOverflow(t *testing.T) {
+	// MinInt / -1 silently wraps in plain Go (Go spec defines it as
+	// deterministic) — Slice B's __divInt seals the hole. Constructed
+	// without an overflow literal: -2^62 * 2 = MinInt is in-range and
+	// goes through __mulInt without panic.
+	runPanicE2E(t, `
+fun main() {
+  let half: Int = -4611686018427387904
+  let two: Int = 2
+  let minInt = half * two
+  let b: Int = -1
+  println(minInt / b)
+}
+`, "Int: division overflow")
+}
+
+func TestPanicModByZero(t *testing.T) {
+	runPanicE2E(t, `
+fun main() {
+  let a = 10
+  let b = 0
+  println(a % b)
+}
+`, "Int: modulo by zero")
+}
+
+func TestPanicUIntDivByZero(t *testing.T) {
+	runPanicE2E(t, `
+fun main() {
+  let a: UInt = 10
+  let b: UInt = 0
+  println(a / b)
+}
+`, "UInt: division by zero")
 }
 
 func TestE2EShadowing(t *testing.T) {

@@ -438,11 +438,13 @@ an explicit `Int8(...)?` cast. Cross-kind (signed↔unsigned, integer↔
 float) keeps requiring an explicit cast as well — the cross-base
 diagnostic catches the mistake before emit.
 
-`+ - *` on `Int` / `UInt` operands route through panic-checked emit
-helpers (`__addInt`, `__subUInt`, `__mulInt`, ...) — overflow / underflow
-trips a runtime panic so silent wrap is no longer a Layer 1 leak. Narrow
-operands widen to base before the helper sees them; the result is base-
-typed (`Int8 + Int8 → Int`) so subsequent narrowing is explicit via the
+`+ - * / %` on `Int` / `UInt` operands route through panic-checked emit
+helpers (`__addInt`, `__subUInt`, `__mulInt`, `__divInt`, `__modInt`, ...)
+— overflow / division by zero / signed `MinInt / -1` trips a runtime panic
+so silent wrap is no longer a Layer 1 leak. (Go's native `/` on `MinInt /
+-1` silently wraps to `MinInt`; the helper catches it.) Narrow operands
+widen to base before the helper sees them; the result is base-typed
+(`Int8 + Int8 → Int`) so subsequent narrowing is explicit via the
 `T(x)?` cast. Float arithmetic stays plain (Inf is in IEEE 754 spec).
 Mixing `Int` and `UInt` in a single arithmetic or comparison op surfaces
 as a compile error directing the user to `Int(...)?` or `UInt(...)?`.
@@ -455,10 +457,11 @@ import stdlib
 
 let r = stdlib.CheckedAddInt(a, b)?    // (int, error) — overflow → Err
 let q = stdlib.CheckedDivInt(a, 0)     // → Err(ErrDivByZero)
+let m = stdlib.CheckedModInt(a, 0)     // → Err(ErrDivByZero)
 ```
 
-Coverage: `CheckedAdd / Sub / Mul / Div` × `Int / UInt` (8 functions). Float
-checked variants land when there is a real consumer.
+Coverage: `CheckedAdd / Sub / Mul / Div / Mod` × `Int / UInt` (10
+functions). Float checked variants land when there is a real consumer.
 
 For values that exceed `Int` / `UInt`'s 64-bit range entirely (cryptographic
 ids, large-counter sums, smallest-unit currency), `stdlib.BigInt` provides

@@ -4,6 +4,20 @@ Newest first within this topic.
 
 ---
 
+## 2026-05-12: Seal `/` and `%` Layer 1 holes (Slice B)
+
+**Context:** Slice E4 routed `+ - *` on Int/UInt through panic-checked helpers (`__addInt` etc.) but explicitly skipped `/` and `%`, with the rationale "Go's native div-by-zero panic is enough." A direct check (`go run` on `math.MinInt / -1` with `defer recover`) showed Go's signed `MinInt / -1` **silently wraps to MinInt** with no panic — the Go spec defines this as deterministic, not a runtime error. That's a real Layer 1 silent-overflow hole, parallel to the addition/multiplication overflows that `__addInt` / `__mulInt` were created to seal. Slice E5's stdlib also shipped `CheckedDivInt`/`CheckedDivUInt` but no `CheckedMod*`.
+
+**Decision: Route `/` and `%` on Int/UInt through `__divInt` / `__modInt` / `__divUInt` / `__modUInt` panic helpers, and add the missing `CheckedMod*` stdlib variants.** `arithmeticHelper(kind, op)` table extended with the 4 new entries; `lowerBinaryExpr`'s comment updated to drop the "/ % skip" carve-out. Helper bodies: `__divInt` checks `b == 0` then `a == MinInt && b == -1` (overflow), then native `a / b`. `__modInt` checks `b == 0` only — `MinInt % -1` is mathematically 0 and Go agrees, no overflow case. UInt variants check `b == 0` only. `-1 << 63` literal sidesteps a `math` import for one constant. Stdlib gains `CheckedModInt` / `CheckedModUInt` reusing the existing `ErrDivByZero` sentinel.
+
+`runPanicE2E` helper added so e2e tests can assert "program exits non-zero with substring X" — used for 4 new tests covering div/mod by zero and the MinInt-overflow case (constructed via `-2^62 * 2` to avoid an overflow literal). `arithmetic_panic.arca` extended with `safeDiv` / `safeMod` for snapshot coverage of the new emit paths.
+
+**Note:** This fix only routes when both operands resolve to a numeric `IRNamedType` via `numericRangeOf`. FFI-typed scalars like `math.MinInt` lower to `IRInterfaceType{}` and bypass the helper — a pre-existing routing gap that also affects `+ - *` and is not addressed here.
+
+**Status:** Done. Slice B closes the numeric tower's last Layer 1 hole. Slice E5's "Float / `/ %` は scope 外" comment in `design_numeric_types.md` is now stale — see memory entry update.
+
+---
+
 ## 2026-05-11: `__mulInt` division-free overflow check
 
 **Context:** Slice E4 emitted `__mulInt` with `if a != 0 && p/a != b` for signed multiplication overflow. A bench (`arithmetic_panic_bench_test.go`) measured **15x slowdown** vs native (0.57 ns → 8.66 ns/op) and **11.5x on mul-dominated kernels** — far worse than every other panic-checked op (1.7–2.7x). Root cause: integer division on x86 costs ~25–30 cycles vs 1 cycle for native mul, and the `a != 0` short-circuit doesn't help once `a` is nonzero (the common case).
