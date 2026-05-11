@@ -4,6 +4,18 @@ IR pipeline, lowering, codegen. Newest first.
 
 ---
 
+## 2026-05-11: `?` postfix chain — `f()?.method()` / `f()?.field` / `f()?[i]`
+
+**Context:** 2026-05-02 moved `?` into `parseUnaryExpr`'s postfix loop so it binds tighter than binary operators, but the loop only re-iterated on more `?` tokens. After consuming `?`, a trailing `.field` / `.method(args)` / `[idx]` was left unparsed and surfaced as `expected expression, got .`. In examples/todo the natural `sql.Open(path)?.okOr(AppError.DBInitError(None))` form was unwritable — users had to bind to a `let` first, defeating the point of having both `?` and `.okOr` in one chain.
+
+**Decision: Extract `parsePostfixChain(expr, startTok)` as the single SSOT for trailing postfix operators and call it from both `parsePrimaryExpr` (after a leading ident) and `parseUnaryExpr` (after each `?`).** The helper handles `(args)`, `.field`, `[T](args)` (call with type args, distinguished by next-token `TkUpperIdent` lookahead with restore-on-failure), and `[idx]`. It's a verbatim lift of the TkIdent branch's loop — no behavior change for primary expressions. The `?` loop now wraps in `__try` then re-enters the chain, so `f()?.bar()?.baz` and `f()??` are both natural fixed-points. No IR or emit change — the parser produces the same `FieldAccess` / `FnCall` / `IndexAccess` nodes around `__try(call)` that lower already handles.
+
+The `TkUpperIdent` branch retained its smaller standalone `.field[(args)]` loop (used by `Constructor.method()`-shape parses); migrating it onto the helper would broaden behavior for `Foo.bar()[0]` and is out of scope.
+
+**Status:** Done. `testdata/try_chain.{arca,go}` exercises `?.method()` / `?.field` / `?.okOr(err)?` with `TestE2ETryChain` verifying runtime. examples/todo's `createDB` rewritten to `sql.Open(...)?.okOr(AppError.DBInitError(None))`.
+
+---
+
 ## 2026-05-02: `?` in expression position via `IRTryExpr` + Stage 2 hoist
 
 **Context:** `?` only worked at statement level — `let x = expr?` and bare `expr?` were intercepted in `lowerStmt` and routed to `IRTryLetStmt`. Inside any other expression (`match expr? { … }`, `f(g()?)`, `Ok(g()? + 1)`) the `__try` fell through `lowerFnCallWithHint` to a silent unwrap, producing the inner expression with its original Result type intact and a downstream type-mismatch error rather than the expected error-propagation. The user's `match sql.Open(…)? { Some(db) => … None => … }` form failed with "match subject has no Option type" for exactly this reason. The parser was independently broken: `?` was consumed in `parseExprPrec` after the binary-precedence loop, so `f()? * 2` failed with "expected expression, got *".

@@ -1138,6 +1138,97 @@ func (p *Parser) parseExprPrec(minPrec int) (Expr, error) {
 	return expr, nil
 }
 
+// parsePostfixChain consumes trailing postfix operators on an already-parsed
+// expression: `(args)`, `.field`, `[T](args)` (call with type args), and
+// `[idx]` (index access). Called from parsePrimaryExpr (after a leading
+// ident) and from parseUnaryExpr after each `?` so chains like
+// `f()?.method()?.field` parse naturally.
+//
+// startTok is used only for NodePos on synthesized FnCall / IndexAccess
+// nodes — callers pass the token the chain's left-hand expression
+// originated from (the leading ident, or the `?` for post-try chains).
+func (p *Parser) parsePostfixChain(expr Expr, startTok Token) (Expr, error) {
+	for {
+		switch p.peek().Kind {
+		case TkLParen:
+			p.advance()
+			var args []Expr
+			for p.peek().Kind != TkRParen {
+				arg, err := p.parseExpr()
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, arg)
+				if p.peek().Kind == TkComma {
+					p.advance()
+				}
+			}
+			p.advance()
+			expr = FnCall{NodePos: AtTok(startTok), Fn: expr, Args: args}
+		case TkDot:
+			p.advance()
+			field := p.advance()
+			if field.Kind != TkIdent && field.Kind != TkUpperIdent {
+				return nil, p.errExpected(field, "field name", field.String())
+			}
+			expr = FieldAccess{Expr: expr, Field: field.Lit}
+		case TkLBracket:
+			// Distinguish type args `f[T](x)` from index access `a[i]`.
+			// Type args: `[` followed by an UpperIdent. Otherwise index access.
+			if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkUpperIdent {
+				savedPos := p.pos
+				p.advance() // skip '['
+				var typeArgs []Type
+				for p.peek().Kind != TkRBracket {
+					t, err := p.parseType()
+					if err != nil {
+						p.pos = savedPos
+						goto parseIndex
+					}
+					typeArgs = append(typeArgs, t)
+					if p.peek().Kind == TkComma {
+						p.advance()
+					}
+				}
+				p.advance() // skip ']'
+				if p.peek().Kind != TkLParen {
+					p.pos = savedPos
+					goto parseIndex
+				}
+				p.advance() // skip '('
+				var args []Expr
+				for p.peek().Kind != TkRParen {
+					arg, err := p.parseExpr()
+					if err != nil {
+						return nil, err
+					}
+					args = append(args, arg)
+					if p.peek().Kind == TkComma {
+						p.advance()
+					}
+				}
+				p.advance() // skip ')'
+				expr = FnCall{NodePos: AtTok(startTok), Fn: expr, Args: args, TypeArgs: typeArgs}
+				continue
+			}
+		parseIndex:
+			p.advance() // skip '['
+			index, err := p.parseExpr()
+			if err != nil {
+				return nil, err
+			}
+			if p.peek().Kind != TkRBracket {
+				peek := p.peek()
+				return nil, p.errExpected(peek, "']'", peek.String())
+			}
+			p.advance()
+			expr = IndexAccess{NodePos: AtTok(startTok), Expr: expr, Index: index}
+		default:
+			return expr, nil
+		}
+	}
+}
+
 func (p *Parser) parseUnaryExpr() (Expr, error) {
 	// Unary minus: -expr
 	if p.peek().Kind == TkMinus {
@@ -1170,11 +1261,18 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 		return nil, err
 	}
 	// Postfix `?` binds tighter than binary operators so `f()? * 2` parses
-	// as `(f()?) * 2`. The loop handles chains like `f()??` (unwrap twice).
+	// as `(f()?) * 2`. After consuming a `?`, we re-enter the postfix chain
+	// so `f()?.method()?.field` and `f()??` both work.
 	for p.peek().Kind == TkQuestion {
-		pos := AtTok(p.peek())
+		qTok := p.peek()
+		pos := AtTok(qTok)
 		p.advance()
 		expr = FnCall{NodePos: pos, Fn: Ident{Name: "__try", NodePos: pos}, Args: []Expr{expr}}
+		var err error
+		expr, err = p.parsePostfixChain(expr, qTok)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return expr, nil
 }
@@ -1285,86 +1383,7 @@ func (p *Parser) parsePrimaryExpr() (Expr, error) {
 			}, nil
 		}
 		expr := Expr(Ident{Name: tok.Lit, NodePos: AtTok(tok)})
-		for {
-			if p.peek().Kind == TkLParen {
-				p.advance()
-				var args []Expr
-				for p.peek().Kind != TkRParen {
-					arg, err := p.parseExpr()
-					if err != nil {
-						return nil, err
-					}
-					args = append(args, arg)
-					if p.peek().Kind == TkComma {
-						p.advance()
-					}
-				}
-				p.advance()
-				expr = FnCall{NodePos: AtTok(tok), Fn: expr, Args: args}
-			} else if p.peek().Kind == TkDot {
-				p.advance()
-				field := p.advance()
-				if field.Kind != TkIdent && field.Kind != TkUpperIdent {
-					return nil, p.errExpected(field, "field name", field.String())
-				}
-				expr = FieldAccess{Expr: expr, Field: field.Lit}
-			} else if p.peek().Kind == TkLBracket {
-				// Distinguish type args `f[T](x)` from index access `a[i]`.
-				// Type args: `[` followed by an UpperIdent. Otherwise index access.
-				if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == TkUpperIdent {
-					// Try parsing as type arguments followed by a call
-					savedPos := p.pos
-					p.advance() // skip '['
-					var typeArgs []Type
-					for p.peek().Kind != TkRBracket {
-						t, err := p.parseType()
-						if err != nil {
-							p.pos = savedPos
-							goto parseIndex
-						}
-						typeArgs = append(typeArgs, t)
-						if p.peek().Kind == TkComma {
-							p.advance()
-						}
-					}
-					p.advance() // skip ']'
-					if p.peek().Kind != TkLParen {
-						p.pos = savedPos
-						goto parseIndex
-					}
-					p.advance() // skip '('
-					var args []Expr
-					for p.peek().Kind != TkRParen {
-						arg, err := p.parseExpr()
-						if err != nil {
-							return nil, err
-						}
-						args = append(args, arg)
-						if p.peek().Kind == TkComma {
-							p.advance()
-						}
-					}
-					p.advance() // skip ')'
-					expr = FnCall{NodePos: AtTok(tok), Fn: expr, Args: args, TypeArgs: typeArgs}
-					continue
-				}
-			parseIndex:
-				p.advance()
-				index, err := p.parseExpr()
-				if err != nil {
-					return nil, err
-				}
-				if p.peek().Kind != TkRBracket {
-					peek := p.peek()
-					return nil, p.errExpected(peek, "']'", peek.String())
-				}
-				p.advance()
-				expr = IndexAccess{NodePos: AtTok(tok), Expr: expr, Index: index}
-			} else {
-				break
-			}
-		}
-		return expr, nil
+		return p.parsePostfixChain(expr, tok)
 
 	case TkLBrace:
 		// Disambiguate block expression from map literal.

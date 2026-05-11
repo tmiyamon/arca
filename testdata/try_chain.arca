@@ -1,0 +1,26 @@
+import go "strconv"
+
+type Box (val: Int) {
+  fun double() -> Int { self.val * 2 }
+}
+
+fun boxFor(n: Int) -> Result[Box, Error] {
+  if n > 0 { Ok(Box(n)) } else { Error(strconv.ErrRange) }
+}
+
+fun maybe(n: Int) -> Result[Option[Int], Error] {
+  if n > 0 { Ok(Some(n)) } else { Error(strconv.ErrRange) }
+}
+
+fun main() -> Result[Unit, Error] {
+  let a = boxFor(3)?.double()
+  println(a)
+
+  let b = boxFor(7)?.val
+  println(b)
+
+  let c = maybe(4)?.okOr(strconv.ErrRange)?
+  println(c)
+
+  Ok(())
+}

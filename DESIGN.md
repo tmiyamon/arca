@@ -198,6 +198,9 @@ Adding a new lambda-accepting surface is a signature, not a parser or lowerer br
   - HM inference: fresh type var for Ok type, unified with final expression
 - `try` is not a keyword — only `try {` triggers recognition. `let try = 42` is valid.
 - `?` has the downside that the error point is at end of line, easy to miss.
+- After `?`, the postfix chain (`.field`, `.method(args)`, `[idx]`, `[T](args)`) continues on the unwrapped value. `parsePostfixChain` is the single SSOT — `parsePrimaryExpr` (after an ident) and `parseUnaryExpr` (after each `?`) both call it. So `f()?.bar()?.baz` parses naturally without per-callsite rewriting in lower.
+
+
 
 ### Monadic methods (Result/Option)
 

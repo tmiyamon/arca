@@ -37,10 +37,7 @@ type App (
   }
 
   static fun createDB() -> Result[Ref[sql.DB], Error] {
-    match sql.Open("sqlite3", "./todo.db")? {
-      Some(db) => Ok(db)
-      None => Error(AppError.DBInitError(None))
-    }
+    sql.Open("sqlite3", "./todo.db")?.okOr(AppError.DBInitError(None))
   }
 
   fun finish() {
@@ -53,29 +50,33 @@ type Todo (
   body: String { max_length: 255 }
   startedAt: Option[time.Time]
   finishedAt: Option[time.Time]
-) {
-  tags { json } 
+) derive Bindable {
+  tags { json, db(snake) } 
 }
+
+type TodoCreate (
+  body: String { max_length: 255 }
+) derive Bindable
 
 fun getTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
   match stdlib.QueryAs[Todo](app.db, "select * from todos order by id") {
     Ok(todos) => c.JSON(http.StatusOK, {"todos": todos})
-    Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
+    Error(e) => c.JSON(http.StatusBadRequest, {"error": e.message()})
   }
 }
 
 fun postTodo(app: App, c: Ref[echo.Context]) -> Result[Unit, Error] {
   match createTodo(app, c) {
     Ok(todo) => c.JSON(http.StatusOK, todo)
-    Error(e) => c.JSON(http.StatusBadRequest, {"error": e})
+    Error(e) => c.JSON(http.StatusBadRequest, {"error": e.message()})
   }
 }
 
 fun createTodo(app: App, c: Ref[echo.Context]) -> Result[Todo, Error] {
-  let todo = Todo(0, "", None, None)?
-  c.Bind(&todo)?
-  app.db.Exec("insert into todos (body) values (?)", todo.body)?
-  Ok(todo)
+  let todo = stdlib.BindJSON[TodoCreate](c.Request())?
+  let res = app.db.Exec("insert into todos (body) values (?)", todo.body)?
+  let id = res.LastInsertId()?
+  Todo(id, todo.body, None, None)
 }
 
 fun main() -> Result[Unit, Error] {
@@ -88,7 +89,6 @@ fun main() -> Result[Unit, Error] {
   e.POST("/", c => postTodo(app, c))
 
   e.Start(":8080")?
-  print("started")
   Ok(())
 }
 
