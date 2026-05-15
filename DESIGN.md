@@ -15,6 +15,40 @@ Two properties follow from the goal, not the other way around:
 
 This document records language design decisions, their rationale, and trade-offs.
 
+## Expression Ladder
+
+When the same invariant can be expressed in more than one place, Arca
+prefers the **strongest** mechanism the situation supports. Strong means
+"earlier-binding, more compile-time, fewer reachable invalid states."
+
+Ordering, strong to weak:
+
+1. **Structure** — make invalid state unrepresentable. Sum types for
+   disjoint alternatives (`type Result {Ok | Error}`), newtypes for
+   distinct categories, exhaustive `match` for closed sets. The invariant
+   is enforced by the AST itself; no validation code runs.
+2. **Strong types** — constrained types (`Int{min: 0, max: 100}`,
+   `String{max_length: 255}`, `NonEmpty[T]`). The constraint validates
+   once at construction and the type carries the proof forward. No
+   downstream re-check.
+3. **Result values** — `Result[T, E]` at boundaries where failure is
+   real and recoverable. The `?` operator propagates without ceremony;
+   the compile error if the caller ignores `Err` makes the failure visible.
+4. **Panic-checked operations** — last-resort safety net for Layer 1
+   violations (arithmetic overflow, OOB, divide-by-zero, unreachable
+   match). Panic is fail-fast, not for recovery — its job is to make
+   silent corruption impossible.
+
+When a feature request lands, the question is which rung applies, and
+whether a lower rung is being chosen by accident. "Add a runtime
+validator" is rung 3 or 4; if a constrained type fits, climb to rung 2.
+"Catch this exception" is rung 3; if the variants can be enumerated,
+climb to rung 1.
+
+This ordering is why Arca rejects refinement types and contracts
+(rung-2 work being duplicated at rung 4) and embraces `derive Bindable`
+(rung-1 work being made declarative).
+
 ## Naming Conventions
 
 - **Arca source**: `camelCase` for functions, variables, fields
@@ -259,12 +293,52 @@ Formatted by `formatError()` in main.go. Checker errors carry `Pos` (line/col) a
 
 ## Things Intentionally Not Included
 
-- **No ad-hoc polymorphism** (type classes/traits) — same as Go. May revisit if needed for io.Reader/io.Writer
-- **No macros** — simplicity over metaprogramming
-- **No exceptions** — Result type for error handling
-- **No null** — Option type instead
-- **No mutable variables** — fully immutable
-- **No side effect tracking** — pragmatic, Go FFI makes it impractical
+A standing rejection list. Each item recurs as a "wouldn't this be nice"
+temptation; recording the reason here once makes future re-litigation
+cheap. New rejections append; landed-after-rejection items move out.
+
+- **No mutable variables** — full immutability. Reasoning at one place
+  per value, not "what touched it where." Trivial pass-by-value
+  semantics for the LLM and the reader.
+- **No null** — `Option[T]` instead. The Go FFI's `*T` is auto-wrapped
+  into `Option[Ref[T]]` at the boundary; user code never sees a bare nil.
+- **No exceptions** — `Result[T, E]` for recoverable errors, `?` for
+  propagation, panic only for Layer 1 violations (overflow, OOB,
+  divide-by-zero, unreachable). No `try / catch` syntax.
+- **No macros / reflection** — every behaviour generator must be either
+  built-in (`derive Bindable`, prelude) or pure Arca code. Reasons:
+  (1) hidden behaviour breaks LLM ability to predict semantics from
+  source; (2) macro hygiene + interop with the Go compiler is too costly
+  per use case. `derive` is the escape valve, kept narrow (Bindable
+  today; future entries require explicit decision-log entries).
+- **No effect system** — Go FFI calls cannot be effect-tracked without
+  annotating all of `database/sql` / `net/http` / etc. The cost-benefit
+  collapses the moment FFI surface is real. Result-typing + `?` already
+  surface the fail modes the user cares about (errors, missing values).
+- **No contracts (`requires` / `ensures` / pre/post conditions)** —
+  constrained types (`Int{min: 0, max: 100}`) cover the "valid value
+  ranges" use case at construction time; Result covers boundary
+  failures. Adding a third validation surface produces three places
+  where the same invariant is half-stated.
+- **No refinement types** — same overlap with constrained types. Full
+  refinement (SMT-backed range tracking through arbitrary expressions)
+  is a research project; constrained types give the 80% at no
+  inference cost.
+- **No multi-target (WASM / JS / native)** — Go target is the entire
+  point. Multi-target dilutes FFI design, doubles every emit decision,
+  and breaks the SSOT story (the canonical model is a Go struct).
+- **No syntactic rebrand** — once `let` / `match` / `derive` / `?` are
+  in user code, breaking them costs every future user a migration.
+  Syntax can grow; it doesn't get renamed.
+- **No ad-hoc polymorphism overloading** — function names dispatch by
+  name only. Methods on different types may share a name (`map` on
+  `Result` and `Option`); free functions may not. Same reasoning as
+  immutability: the LLM and reader should read code without resolving
+  N candidates.
+
+Items that left this list:
+- *Traits / type classes* — landed as Phase 1 (`trait` + separate
+  `impl`, dynamic dispatch only). 2026-04-22.
 
 ## Constrained Types
 
